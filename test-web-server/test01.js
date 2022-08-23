@@ -4,7 +4,7 @@
 //  <script type="module" src="./test01.js"></script>
 
 // import {jest} from '@jest/globals';
-import {SB_libraryVersion, ab2str, str2ab, base64ToArrayBuffer, arrayBufferToBase64, getRandomValues} from './browser.mjs';
+import {SB_libraryVersion, ab2str, str2ab, base64ToArrayBuffer, arrayBufferToBase64, getRandomValues, MessageBus} from './browser.mjs';
 
 let z = document.getElementById("testResults");
 z.innerHTML += "Checking version of library: " + SB_libraryVersion() + "\n";
@@ -60,6 +60,7 @@ if (true)
 {
   let i = 0;
   let z = document.getElementById('test01a');
+  z.innerHTML += 'starting test ...<br\>';
   for (const e of z1) {
     z.innerHTML += `String is '${e}'<br\>`;
     const buffer = str2ab(e);
@@ -71,6 +72,7 @@ if (true)
 if (true)
 {
   let z = document.getElementById('test01b');
+  z.innerHTML += 'starting test ...<br\>';
   for (var i = 0; i < 20; i++) {
     let random_length = new Uint8Array(4);
     getRandomValues(random_length);
@@ -83,6 +85,7 @@ if (true)
 if (true)
 {
   let z = document.getElementById('test02');
+  z.innerHTML += 'starting test ...<br\>';
   for (const s0 of z2) {
     let s1 = str2ab(s0);
     let s2 = ab2str(s1);
@@ -99,6 +102,7 @@ if (true)
 if (true)
 {
   let z = document.getElementById('test02b');
+  z.innerHTML += 'starting test ...<br\>';
   for (var i = 0; i < 20; i++) {
     let random_length = new Uint8Array(4);
     getRandomValues(random_length);
@@ -115,6 +119,26 @@ if (true)
       console.log(array);
       test_fail ++;
     }
+  }
+}
+
+if (true)
+{
+  let z = document.getElementById('test03');
+  let b = new MessageBus();
+  let called_1 = false; 
+  z.innerHTML += 'starting test ...<br\>';
+  console.log("inside testing messagebus");
+  function hello_1() {
+    z.innerHTML += `First handler properly called<br\>`;
+    called_1 = true;
+  }
+  b.subscribe("1", hello_1);
+  b.publish("1");
+  if (called_1) {
+    test_pass ++;
+  } else {
+    test_fail ++;
   }
 }
 
