@@ -1,6 +1,6 @@
 {
   "name": "snackabra",
-  "version": "0.5.b1",
+  "version": "0.5.1",
   "description": "Snackabra JS Library",
   "main": "index.mjs",
   "scripts": {
