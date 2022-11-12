@@ -427,7 +427,8 @@ declare class SBMessage {
     ready: Promise<SBMessage>;
     channel: Channel;
     contents: SBMessageContents;
-    constructor(channel: Channel, body?: string);
+    constructor(channel: Channel, body?: string, image?: string);
+    setImageMetadata(imageMetaData: ImageMetaData): Promise<unknown>;
     /**
      * SBMessage.send()
      *

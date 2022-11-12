@@ -1235,11 +1235,11 @@ class SBMessage {
     channel;
     contents;
     /* SBMessage */
-    constructor(channel, body = '') {
+    constructor(channel, body = '', image = '') {
         // console.log("creating SBMessage on channel:")
         // console.log(channel)
         this.channel = channel;
-        this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: '', imageMetaData: {} };
+        this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: image, imageMetaData: {} };
         this.contents.sender_pubKey = this.channel.exportable_pubKey;
         this.ready = new Promise((resolve) => {
             channel.ready.then(() => {
@@ -1259,6 +1259,17 @@ class SBMessage {
                     // this.contents.isVerfied = isVerfied?.success ? true : false
                     resolve(this);
                 });
+            });
+        });
+    }
+    setImageMetadata(imageMetaData) {
+        return new Promise((resolve) => {
+            const signKey = this.channel.keys.channelSignKey;
+            const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(imageMetaData));
+            Promise.all([imageMetadata_sign]).then((values) => {
+                this.contents.imageMetadata_sign = values[0];
+                this.contents.imageMetaData = imageMetaData;
+                resolve(this);
             });
         });
     }
@@ -2097,6 +2108,7 @@ class StorageApi {
                 if (!h)
                     reject('invalid');
                 h.verification.then((verificationToken) => {
+                    console.log(verificationToken, h);
                     fetch(this.server + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
                         .then((response) => {
                         if (!response.ok)
@@ -2206,6 +2218,7 @@ class StorageApi {
     async retrieveDataFromMessage(message, controlMessages) {
         const imageMetaData = typeof message.imageMetaData === 'string' ? jsonParseWrapper(message.imageMetaData, 'L1893') : message.imageMetaData;
         const image_id = imageMetaData.previewId;
+        console.log(image_id, message, controlMessages);
         const control_msg = controlMessages.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id === image_id);
         if (!control_msg)
             return { 'error': 'Failed to fetch data - missing control message for that image' };
@@ -2222,6 +2235,7 @@ class StorageApi {
         //   console.error('(Image error: ' + img.error + ')');
         //   throw new Error('Failed to fetch data - authentication or formatting error');
         // }
+        console.log(control_msg);
         const obj = {
             version: '1', type: 'p',
             id: control_msg.id, key: imageMetaData.previewKey,

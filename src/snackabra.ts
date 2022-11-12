@@ -1594,11 +1594,11 @@ class SBMessage {
   contents: SBMessageContents
 
   /* SBMessage */
-  constructor(channel: Channel, body: string = '') {
+  constructor(channel: Channel, body: string = '', image: string = '') {
     // console.log("creating SBMessage on channel:")
     // console.log(channel)
     this.channel = channel
-    this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: '', imageMetaData: {} }
+    this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: image, imageMetaData: {} }
     this.contents.sender_pubKey = this.channel.exportable_pubKey!
 
     this.ready = new Promise<SBMessage>((resolve) => {
@@ -1622,6 +1622,17 @@ class SBMessage {
     })
   }
 
+  setImageMetadata(imageMetaData: ImageMetaData){
+    return new Promise((resolve)=>{
+      const signKey = this.channel.keys.channelSignKey
+      const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(imageMetaData))
+      Promise.all([imageMetadata_sign]).then((values) => {
+        this.contents.imageMetadata_sign = values[0]
+        this.contents.imageMetaData = imageMetaData;
+        resolve(this)
+      })
+    })
+  }
   /**
    * SBMessage.send()
    *
@@ -2505,6 +2516,7 @@ class StorageApi {
       try {
         if (!h) reject('invalid')
         h.verification.then((verificationToken) => {
+          console.log(verificationToken, h)
           fetch(this.server + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
             .then((response: Response) => {
               if (!response.ok) reject(new Error('Network response was not OK'))
@@ -2613,6 +2625,7 @@ class StorageApi {
   async retrieveDataFromMessage(message: Dictionary, controlMessages: Array<Dictionary>) {
     const imageMetaData = typeof message.imageMetaData === 'string' ? jsonParseWrapper(message.imageMetaData, 'L1893') : message.imageMetaData
     const image_id = imageMetaData.previewId
+    console.log(image_id,message,controlMessages)
     const control_msg = controlMessages.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id === image_id)
     if (!control_msg) return { 'error': 'Failed to fetch data - missing control message for that image' }
 
@@ -2629,7 +2642,7 @@ class StorageApi {
     //   console.error('(Image error: ' + img.error + ')');
     //   throw new Error('Failed to fetch data - authentication or formatting error');
     // }
-
+    console.log(control_msg)
     const obj: SBObjectHandle = {
       version: '1', type: 'p',
       id: control_msg.id!, key: imageMetaData!.previewKey,
