@@ -8,3 +8,4 @@ dist/
 .#*
 __tests__/cov_profile
 temp/
+.vscode/

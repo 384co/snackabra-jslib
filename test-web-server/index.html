@@ -7,12 +7,40 @@
 </head>
 <body>
 
+    <h1>SB Testsuite</h1>
+
+    <p>2022/Nov: refactoring so tests are run interactively off buttons on this page</p>
+
+    <h2>Basic Channel Tests</h2>
+
+    <button id="createChannel">Create a Channel</button><br/>
+
+    <p><i>When the above channel is set up, you can send more messages here:</i></p>
+    
+    <button id="anotherMessage">Send a Messagel</button><br/>
+
+    <p><i>... and then fetch old messages:</i></p>
+    
+    <button id="getOldMessages">Get Old Messages</button><br/>
+
+    <br/><hr/>
+
+    <p id="test06a">Testing Channel class log: <br/><br/> </p>
+
+
+
+
+
+    <br/><br/><br/><br/>
+<hr/>
+
+<h2>(Older stuff ... being refactored ... </h1>
+
 <p>Note: if you want to test SB functions at the console command line, try:<br /><br />
     <tt> let sb = await import('./snackabra.js');</tt><br />
-    <tt> sb.SB_libraryVersion();</tt><br />
 </p>
 
-<h1 id="results">Results: ...</h1>
+<h2 id="results">Results: ...</h1>
 
 <p>(Above should be filled with a string showing pass and fail count upon completion.
     For any failed tests, check browser console for possible more information.)</p>
