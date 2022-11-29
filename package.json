@@ -1,6 +1,6 @@
 {
     "name": "snackabra",
-    "version": "0.4.38",
+    "version": "0.4.39",
     "description": "Snackabra Core Libraries",
     "type": "module",
     "main": "index.mjs",
