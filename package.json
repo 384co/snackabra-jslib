@@ -1,6 +1,6 @@
 {
   "name": "snackabra",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Snackabra Core Library ('jslib')",
   "main": "dist/snackabra.min.js",
   "types": "dist/snackabra.d.ts",
