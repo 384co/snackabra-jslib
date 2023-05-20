@@ -30,35 +30,30 @@ yarn start
 
 ## Usage in browsers
 
-From a local copy:
+Directly in your html:
 
 ```html
-  <script type="module" src="snackabra.min.js"></script>
-```
-
-Or from npm package:
-
-```html
-  <!-- This gets latest version: -->
+  <!-- this will bring the minified version to "SB" -->
   <script type="module" src="https://unpkg.com/snackabra"></script>
-```
 
-Dynamic import of latest version from unpkg:
-
-```html
-  <h2>Test Results</h2>
-  <p id='testResults'></p>
+  <!-- or dynamic import -->
   <script>
     import('https://unpkg.com/snackabra').then((sb) => {
-      let z = document.getElementById("testResults");
-      z.innerHTML += `Test: ${sb.str2ab('hello')}`;
+      // do something with sb ...
     });
-  </script>
 ```
 
 You can also access the loaded functions globally, e.g. ``window.SB.str2ab('hello')``.
 
+From a local copy:
+
+```html
+  <script type="module" src="snackabra.js"></script>
+```
+
 ## Usage in Node
+
+This is dated, we do not prioritize node. Deno is the future.
 
 Install:
 
