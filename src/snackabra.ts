@@ -463,7 +463,7 @@ export class MessageBus {
  */
 function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   // console.log("SBFetch()"); console.log(input); console.log(init);
-  if (navigator.onLine === false) console.info("Note: you are offline, according to the browser") /* return Promise.reject(new Error("you are offline")) */
+  // if (navigator.onLine === false) console.info("Note: you are offline, according to the browser") /* return Promise.reject(new Error("you are offline")) */
   if (init) return fetch(input, init)
   else return fetch(input, { method: 'GET' /*, credentials: 'include' */ })
 }
