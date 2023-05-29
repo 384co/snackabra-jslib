@@ -4,6 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+const version = '1.0.x';
 const SBKnownServers = [
     {
         channel_server: 'https://channel.384co.workers.dev',
@@ -901,36 +902,6 @@ function ExceptionReject(target, _propertyKey, descriptor) {
     }
 }
 const sbCrypto = new SBCrypto();
-let availableReadServers = new Promise((resolve, _reject) => {
-    const servers = ['http://localhost:3841', 'http://localhost:4000'];
-    Promise.all(servers.map(async (server) => {
-        try {
-            const methods = (await SBFetch(server + '/api/version'));
-            const methodsJson = await methods.json();
-            return { server, canRead: methodsJson.read, canWrite: methodsJson.write };
-        }
-        catch {
-            return { server, canRead: false, canWrite: false };
-        }
-    })).then((capabilities) => {
-        let readServers = capabilities.filter(c => c.canRead).map(c => c.server);
-        readServers.push('https://shard.3.8.4.land');
-        readServers.push('https://storage.384co.workers.dev');
-        console.warn("NOTE: ignore any 'ERR_CONNECTION_REFUSED' errors immediately above, they were expected\n"
-            + "(they are due to a limitation in your browser, making it impossible to silently verify connections)\n");
-        resolve(readServers);
-    });
-});
-const sbSetup = new Promise(async (resolve, _reject) => {
-    await availableReadServers;
-    resolve(availableReadServers);
-});
-sbSetup.then((v) => {
-    console.log("sbSetup() - success:");
-    console.log(v);
-}).catch((e) => {
-    console.error(`sbSetup() - failed to fetch version: ${e}`);
-});
 class SB384 {
     ready;
     sb384Ready;
@@ -2253,13 +2224,19 @@ class Snackabra {
         return sbCrypto;
     }
 }
-export { Channel, ChannelApi, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64 };
+export { Channel, ChannelApi, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version };
 export var SB = {
     Snackabra: Snackabra,
     SBMessage: SBMessage,
     Channel: Channel,
     SBCrypto: SBCrypto,
     SB384: SB384,
-    arrayBufferToBase64: arrayBufferToBase64
+    arrayBufferToBase64: arrayBufferToBase64,
+    sbCrypto: sbCrypto,
+    version: version
 };
+if (!globalThis.SB)
+    globalThis.SB = SB;
+console.log("************ SNACKABRA jslib loaded **************");
+console.log(globalThis.SB.version);
 //# sourceMappingURL=snackabra.js.map

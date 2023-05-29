@@ -1,3 +1,4 @@
+declare const version = "1.0.x";
 export interface SBChannelHandle {
     channelId: SBChannelId;
     key: JsonWebKey;
@@ -200,6 +201,7 @@ declare class SBCrypto {
 }
 declare const SB_MESSAGE_SYMBOL: unique symbol;
 declare const SB_OBJECT_HANDLE_SYMBOL: unique symbol;
+declare const sbCrypto: SBCrypto;
 declare class SB384 {
     #private;
     ready: Promise<SB384>;
@@ -340,7 +342,7 @@ declare class Snackabra {
     get crypto(): SBCrypto;
 }
 export type { ChannelData, ChannelKeyStrings };
-export { Channel, ChannelApi, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64 };
+export { Channel, ChannelApi, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version };
 export declare var SB: {
     Snackabra: typeof Snackabra;
     SBMessage: typeof SBMessage;
@@ -348,5 +350,7 @@ export declare var SB: {
     SBCrypto: typeof SBCrypto;
     SB384: typeof SB384;
     arrayBufferToBase64: typeof arrayBufferToBase64;
+    sbCrypto: SBCrypto;
+    version: string;
 };
 //# sourceMappingURL=snackabra.d.ts.map

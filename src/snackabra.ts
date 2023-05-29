@@ -21,6 +21,8 @@
 
 */
 
+const version = '1.0.x'
+
 /******************************************************************************************************/
 //#region Interfaces - Types
 
@@ -1841,53 +1843,53 @@ function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecorat
 // this is the global crypto object
 const sbCrypto = new SBCrypto();
 
-let availableReadServers = new Promise<Array<string>>((resolve, _reject) => {
-  const servers = [ 'http://localhost:3841', 'http://localhost:4000' ]
-  Promise.all(servers.map(async (server) => {
-    try {
-      const methods = (await SBFetch(server + '/api/version'));
-      const methodsJson = await methods.json();
-      return { server, canRead: methodsJson.read, canWrite: methodsJson.write };
-    } catch {
-      return { server, canRead: false, canWrite: false };
-    }
-  })).then((capabilities) => {
-    let readServers = capabilities.filter(c => c.canRead).map(c => c.server);
-    readServers.push('https://shard.3.8.4.land');
-    readServers.push('https://storage.384co.workers.dev'); 
-    console.warn("NOTE: ignore any 'ERR_CONNECTION_REFUSED' errors immediately above, they were expected\n"
-    + "(they are due to a limitation in your browser, making it impossible to silently verify connections)\n")
-    resolve(readServers);
-  });
-});
+// let availableReadServers = new Promise<Array<string>>((resolve, _reject) => {
+//   const servers = [ 'http://localhost:3841', 'http://localhost:4000' ]
+//   Promise.all(servers.map(async (server) => {
+//     try {
+//       const methods = (await SBFetch(server + '/api/version'));
+//       const methodsJson = await methods.json();
+//       return { server, canRead: methodsJson.read, canWrite: methodsJson.write };
+//     } catch {
+//       return { server, canRead: false, canWrite: false };
+//     }
+//   })).then((capabilities) => {
+//     let readServers = capabilities.filter(c => c.canRead).map(c => c.server);
+//     readServers.push('https://shard.3.8.4.land');
+//     readServers.push('https://storage.384co.workers.dev'); 
+//     console.warn("NOTE: ignore any 'ERR_CONNECTION_REFUSED' errors immediately above, they were expected\n"
+//     + "(they are due to a limitation in your browser, making it impossible to silently verify connections)\n")
+//     resolve(readServers);
+//   });
+// });
 
-const sbSetup = new Promise(async (resolve, _reject) => {
-  await availableReadServers;
-  resolve(availableReadServers)
+// const sbSetup = new Promise(async (resolve, _reject) => {
+//   await availableReadServers;
+//   resolve(availableReadServers)
 
-  // try {
-  //   const version = await SBFetch('http://localhost:3841/api/version')
-  //   console.log('sbSetup() - version:')
-  //   // let's list all headers:
-  //   for (let h of (version.headers as any).entries()) {
-  //     console.log(h)
-  //   }
-  //   version.json().then((v) => {
-  //     console.log(v)
-  //     resolve(v)
-  //   })
-  // } catch (e) {
-  //   console.error(`sbSetup() - failed to fetch version: ${e}`)
-  //   reject(e)
-  // }
-});
+//   // try {
+//   //   const version = await SBFetch('http://localhost:3841/api/version')
+//   //   console.log('sbSetup() - version:')
+//   //   // let's list all headers:
+//   //   for (let h of (version.headers as any).entries()) {
+//   //     console.log(h)
+//   //   }
+//   //   version.json().then((v) => {
+//   //     console.log(v)
+//   //     resolve(v)
+//   //   })
+//   // } catch (e) {
+//   //   console.error(`sbSetup() - failed to fetch version: ${e}`)
+//   //   reject(e)
+//   // }
+// });
 
-sbSetup.then((v) => {
-  console.log("sbSetup() - success:")
-  console.log(v)
-}).catch((e) => {
-  console.error(`sbSetup() - failed to fetch version: ${e}`)
-})
+// sbSetup.then((v) => {
+//   console.log("sbSetup() - success:")
+//   console.log(v)
+// }).catch((e) => {
+//   console.error(`sbSetup() - failed to fetch version: ${e}`)
+// })
 
 //#endregion - SETUP and STARTUP stuff
 
@@ -3759,7 +3761,9 @@ export {
   Snackabra,
   SBCrypto,
   SB384,
-  arrayBufferToBase64
+  arrayBufferToBase64,
+  sbCrypto,
+  version
 };
 
 export var SB = {
@@ -3768,6 +3772,13 @@ export var SB = {
   Channel: Channel,
   SBCrypto: SBCrypto,
   SB384: SB384,
-  arrayBufferToBase64: arrayBufferToBase64
+  arrayBufferToBase64: arrayBufferToBase64,
+  sbCrypto: sbCrypto,
+  version: version
 };
+
+if (!(globalThis as any).SB)
+  (globalThis as any).SB = SB;
+console.log("************ SNACKABRA jslib loaded **************")
+console.log((globalThis as any).SB.version)
 //#endregion - exporting stuff
