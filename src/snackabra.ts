@@ -22,7 +22,8 @@
 */
 
 /******************************************************************************************************/
-//#region Interfaces
+//#region Interfaces - Types
+
 /**
  * Interfaces
  */
@@ -386,9 +387,82 @@ interface ChannelEncryptedMessage {
 
 export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encypted'
 
-//#endregion
+interface SBMessageContents {
+  sender_pubKey?: JsonWebKey,
+  sender_username?: string,
+  encrypted: boolean,
+  isVerfied: boolean,
+  contents: string,
+  sign: string,
+  image: string,
+  image_sign?: string,
+  imageMetadata_sign?: string,
+  imageMetaData?: ImageMetaData,
+}
 
+// these map to conventions and are different namespaces
+// currently: 'full', 'preview', and 'block'. there's an (old)
+// bug in current servers that they don't like reads unless
+// it's of type 'p', but we'll fix that soon ...
 
+export type SBObjectType = 'f' | 'p' | 'b' | 't'
+
+// this exists as both interface and class, but the class
+// is mostly used internally, and the interface is what
+// you'll use to communicate with the API
+export interface SBObjectHandle {
+  [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
+  version?: '1',
+  type: SBObjectType,
+  // for long-term storage you only need these:
+  id: string, key: string,
+  id32?: Base62Encoded, key32?: Base62Encoded, // optional: array32 format of key
+  // and currently you also need to keep track of this,
+  // but you can start sharing / communicating the
+  // object before it's resolved: among other things it
+  // serves as a 'write-through' verification
+  verification: Promise<string> | string,
+  // you'll need these in case you want to track an object
+  // across future (storage) servers, but as long as you
+  // are within the same SB servers you can request them.
+  iv?: Uint8Array | string,
+  salt?: Uint8Array | string,
+  // the following are optional and not tracked by
+  // shard servers etc, but facilitates app usage
+  fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
+  dateAndTime?: string, // optional: time of shard creation
+  shardServer?: string, // optionally direct a shard to a specific server (especially for reads)
+  fileType?: string, // optional: file type (mime)
+  lastModified?: number, // optional: last modified time (of underlying file, if any)
+  actualSize?: number, // optional: actual size of underlying file, if any
+  savedSize?: number, // optional: size of shard (may be different from actualSize)
+}
+
+// export interface SBObjectMetadata {
+//   [SB_OBJECT_HANDLE_SYMBOL]: boolean,
+//   version: '1', type: SBObjectType,
+//   // for long-term storage you only need these:
+//   id: string, key: string,
+//   paddedBuffer: ArrayBuffer
+//   // you'll need these in case you want to track an object
+//   // across future (storage) servers, but as long as you
+//   // are within the same SB servers you can request them.
+//   iv: Uint8Array,
+//   salt: Uint8Array
+// }
+
+export interface SBObjectMetadata {
+  [SB_OBJECT_HANDLE_SYMBOL]: boolean;
+  version: '1';
+  type: SBObjectType;
+  id: string;
+  key: string;
+  paddedBuffer: ArrayBuffer;
+  iv: Uint8Array;
+  salt: Uint8Array;
+}
+
+//#endregion - Interfaces - Types
 
 /******************************************************************************************************/
 //#region - MessageBus class
@@ -565,9 +639,6 @@ async function newChannelData(keys?: JsonWebKey): Promise<{ channelData: Channel
 
 /******************************************************************************************************/
 //#region - SBCryptoUtils - crypto and translation stuff used by SBCrypto etc
-/******************************************************************************************************/
-
-// TODO: should probably move into SBCrypto
 
 /**
  * Fills buffer with random data
@@ -1208,8 +1279,8 @@ export function decodeB64Url(input: string) {
 
 //#endregion - SBCryptoUtils
 
-/******************************************************************************************************
-   ******************************************************************************************************/
+/******************************************************************************************************/
+//#region - SBCrypto Class - this is instantiated into 'sbCrypto' global
 
 /**
  * SBCrypto
@@ -1634,11 +1705,9 @@ class SBCrypto {  /*************************************************************
   }
 
 } /* SBCrypto */
-
-const sbCrypto = new SBCrypto();
+//#endregion - SBCrypto Class
 
 /******************************************************************************************************/
-
 //#region Decorators
 
 // Decorator
@@ -1683,6 +1752,26 @@ function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext *
       _sb_assert(retValue != null, `${propertyKey} getter accessed in object type ${obj} but returns NULL (fatal)`)
       return retValue
     }
+  }
+}
+
+const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle'] as const
+type SB_CLASS_TYPES = typeof SB_CLASS_ARRAY[number]
+type SB_CLASSES = SBMessage | SBObjectHandle
+
+const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage')
+const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle')
+
+function isSBClass(s: any): boolean {
+  return typeof s === 'string' && SB_CLASS_ARRAY.includes(s as SB_CLASS_TYPES)
+}
+
+function SBValidateObject(obj: SBObjectHandle, type: 'SBObjectHandle'): boolean
+function SBValidateObject(obj: SBMessage, type: 'SBMessage'): boolean
+function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean {
+  switch (type) {
+    case 'SBMessage': return SB_MESSAGE_SYMBOL in obj
+    case 'SBObjectHandle': return SB_OBJECT_HANDLE_SYMBOL in obj
   }
 }
 
@@ -1732,7 +1821,7 @@ function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecorat
 //     }
 //     return operation.call(this, ...args)
 //   }
-// }
+// 
 
 // Decorator
 // Not useful: (see design note [5]_)
@@ -1745,6 +1834,65 @@ function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecorat
 // }
 
 //#endregion - local decorators
+
+/******************************************************************************************************/
+//#region - SETUP and STARTUP stuff
+
+// this is the global crypto object
+const sbCrypto = new SBCrypto();
+
+let availableReadServers = new Promise<Array<string>>((resolve, _reject) => {
+  const servers = [ 'http://localhost:3841', 'http://localhost:4000' ]
+  Promise.all(servers.map(async (server) => {
+    try {
+      const methods = (await SBFetch(server + '/api/version'));
+      const methodsJson = await methods.json();
+      return { server, canRead: methodsJson.read, canWrite: methodsJson.write };
+    } catch {
+      return { server, canRead: false, canWrite: false };
+    }
+  })).then((capabilities) => {
+    let readServers = capabilities.filter(c => c.canRead).map(c => c.server);
+    readServers.push('https://shard.3.8.4.land');
+    readServers.push('https://storage.384co.workers.dev'); 
+    console.warn("NOTE: ignore any 'ERR_CONNECTION_REFUSED' errors immediately above, they were expected\n"
+    + "(they are due to a limitation in your browser, making it impossible to silently verify connections)\n")
+    resolve(readServers);
+  });
+});
+
+const sbSetup = new Promise(async (resolve, _reject) => {
+  await availableReadServers;
+  resolve(availableReadServers)
+
+  // try {
+  //   const version = await SBFetch('http://localhost:3841/api/version')
+  //   console.log('sbSetup() - version:')
+  //   // let's list all headers:
+  //   for (let h of (version.headers as any).entries()) {
+  //     console.log(h)
+  //   }
+  //   version.json().then((v) => {
+  //     console.log(v)
+  //     resolve(v)
+  //   })
+  // } catch (e) {
+  //   console.error(`sbSetup() - failed to fetch version: ${e}`)
+  //   reject(e)
+  // }
+});
+
+sbSetup.then((v) => {
+  console.log("sbSetup() - success:")
+  console.log(v)
+}).catch((e) => {
+  console.error(`sbSetup() - failed to fetch version: ${e}`)
+})
+
+//#endregion - SETUP and STARTUP stuff
+
+/******************************************************************************************************/
+//#region - SB384 Class
 
 /**
  *
@@ -1823,39 +1971,7 @@ class SB384 {
   /** @type {string}        */ @Memoize @Ready get ownerChannelId() { return this.#ownerChannelId! }
 
 } /* class SB384 */
-
-interface SBMessageContents {
-  sender_pubKey?: JsonWebKey,
-  sender_username?: string,
-  encrypted: boolean,
-  isVerfied: boolean,
-  contents: string,
-  sign: string,
-  image: string,
-  image_sign?: string,
-  imageMetadata_sign?: string,
-  imageMetaData?: ImageMetaData,
-}
-
-const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle'] as const
-type SB_CLASS_TYPES = typeof SB_CLASS_ARRAY[number]
-type SB_CLASSES = SBMessage | SBObjectHandle
-
-const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage')
-const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle')
-
-function isSBClass(s: any): boolean {
-  return typeof s === 'string' && SB_CLASS_ARRAY.includes(s as SB_CLASS_TYPES)
-}
-
-function SBValidateObject(obj: SBObjectHandle, type: 'SBObjectHandle'): boolean
-function SBValidateObject(obj: SBMessage, type: 'SBMessage'): boolean
-function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean {
-  switch (type) {
-    case 'SBMessage': return SB_MESSAGE_SYMBOL in obj
-    case 'SBObjectHandle': return SB_OBJECT_HANDLE_SYMBOL in obj
-  }
-}
+//#endregion - SB384 Class
 
 /**
  * Class SBMessage
@@ -1923,70 +2039,6 @@ class SBMessage {
     // TODO: i've punted on queue here <--- queueMicrotaks maybe?
   }
 } /* class SBMessage */
-
-// Left here for reference; we're putting anything like a concep of a "file"
-// in SBFileHelper and similar.  we're moving jslib towards minimalism of
-// simply implementing core SB (aka infrastructure) functionality.
-
-// /**
-//  * SBFile
-//  * @class
-//  * @constructor
-//  * @public
-//  */
-// export class SBFile extends SBMessage {
-//   // encrypted = false
-//   // contents: string = ''
-//   // senderPubKey: CryptoKey
-//   // sign: Promise<string>
-//   data: Dictionary<string> = {
-//     previewImage: '',
-//     fullImage: ''
-//   }
-//   // (now extending SBMessage)
-//   image = '';
-//   image_sign: string = '';
-//   imageMetaData: ImageMetaData = {}
-
-//   // file is an instance of File
-//   constructor(channel: Channel, file: File /* signKey: CryptoKey, key: CryptoKey */) {
-//     throw new Error('working on SBFile()!')
-//     super(channel, '')
-//     // all is TODO with new image code
-//     // this.senderPubKey = key;
-//     // ... done by SBMessage parent?
-//     // this.sign = sbCrypto.sign(channel.keys.channelSignKey, this.contents);
-//     // if (file.type.match(/^image/i)) {
-//     //   this.#asImage(file, signKey)
-//     // } else {
-//     //   throw new Error('Unsupported file type: ' + file.type);
-//     // }
-//   }
-
-//   async #asImage(image: File, signKey: CryptoKey) {
-//     // TODO: the getfile/restrict should be done by SBImage etc, other stuff is SB messaging
-//     throw new Error(`#asImage() needs carryover from SBImage etc (${image}, ${signKey})`)
-
-//     //   this.data.previewImage = this.#padImage(await(await this.#restrictPhoto(image, 4096, 'image/jpeg', 0.92)).arrayBuffer());
-//     //   const previewHash: Dictionary = await this.#generateImageHash(this.data.previewImage);
-//     //   this.data.fullImage = image.byteLength > 15728640 ? this.#padImage(await(await this.#restrictPhoto(image, 15360, 'image/jpeg', 0.92)).arrayBuffer()) : this.#padImage(image);
-//     //   const fullHash: Dictionary = await this.#generateImageHash(this.data.fullImage);
-//     //   this.image = await this.#getFileData(await this.#restrictPhoto(image, 15, 'image/jpeg', 0.92), 'url');
-//     //   this.image_sign = await sbCrypto.sign(signKey, this.image);
-//     //   this.imageMetaData = JSON.stringify({
-//     //     imageId: fullHash.id,
-//     //     previewId: previewHash.id,
-//     //     imageKey: fullHash.key,
-//     //     previewKey: previewHash.key
-//     //   });
-//     //   this.imageMetadata_sign = await sbCrypto.sign(signKey, this.imageMetaData)
-//   }
-
-// } /* class SBFile */
-
-/** SB384 */
-
-
 
 /**
  * Channel Class
@@ -2465,22 +2517,6 @@ export class ChannelSocket extends Channel {
     console.log(`Tracing ${b ? 'en' : 'dis'}abled`);
   }
 
-  // // see comments above on SBFile
-  // /**
-  //  * ChannelSocket.sendSbObject()
-  //  *
-  //  * Send SB object (file) on channel socket
-  //  */
-  // // todo - move to API?
-  // async sendSbObject(file: SBFile) {
-  //   return (this.send(file))
-  //   // this.ready.then(() => {
-  //   //   this.#wrap(file /* , this.#keys!.encryptionKey */).then((payload) => this.send(payload));
-  //   // } else {
-  //   //   this.#queue.push(file);
-  //   // }
-  // }
-
   /**
     * ChannelSocket.send()
     *
@@ -2563,57 +2599,6 @@ export class ChannelSocket extends Channel {
   /** @type {JsonWebKey} */ @Memoize @Ready get exportable_owner_pubKey() { return this.#exportable_owner_pubKey }
 
 } /* class ChannelSocket */
-
-// these map to conventions and are different namespaces
-// currently: 'full', 'preview', and 'block'. there's an (old)
-// bug in current servers that they don't like reads unless
-// it's of type 'p', but we'll fix that soon ...
-
-export type SBObjectType = 'f' | 'p' | 'b' | 't'
-
-// this exists as both interface and class, but the class
-// is mostly used internally, and the interface is what
-// you'll use to communicate with the API
-export interface SBObjectHandle {
-  [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
-  version?: '1',
-  type: SBObjectType,
-  // for long-term storage you only need these:
-  id: string, key: string,
-  id32?: Base62Encoded, key32?: Base62Encoded, // optional: array32 format of key
-  // and currently you also need to keep track of this,
-  // but you can start sharing / communicating the
-  // object before it's resolved: among other things it
-  // serves as a 'write-through' verification
-  verification: Promise<string> | string,
-  // you'll need these in case you want to track an object
-  // across future (storage) servers, but as long as you
-  // are within the same SB servers you can request them.
-  iv?: Uint8Array | string,
-  salt?: Uint8Array | string,
-  // the following are optional and not tracked by
-  // shard servers etc, but facilitates app usage
-  fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
-  dateAndTime?: string, // optional: time of shard creation
-  shardServer?: string, // optionally direct a shard to a specific server (especially for reads)
-  fileType?: string, // optional: file type (mime)
-  lastModified?: number, // optional: last modified time (of underlying file, if any)
-  actualSize?: number, // optional: actual size of underlying file, if any
-  savedSize?: number, // optional: size of shard (may be different from actualSize)
-}
-
-// export interface SBObjectMetadata {
-//   [SB_OBJECT_HANDLE_SYMBOL]: boolean,
-//   version: '1', type: SBObjectType,
-//   // for long-term storage you only need these:
-//   id: string, key: string,
-//   paddedBuffer: ArrayBuffer
-//   // you'll need these in case you want to track an object
-//   // across future (storage) servers, but as long as you
-//   // are within the same SB servers you can request them.
-//   iv: Uint8Array,
-//   salt: Uint8Array
-// }
 
 /**
  * Basic object handle for a shard (all storage).
@@ -2751,17 +2736,6 @@ export class SBObjectHandleClass {
 
   get type(): SBObjectType { return this.#type; }
 
-}
-
-export interface SBObjectMetadata {
-  [SB_OBJECT_HANDLE_SYMBOL]: boolean;
-  version: '1';
-  type: SBObjectType;
-  id: string;
-  key: string;
-  paddedBuffer: ArrayBuffer;
-  iv: Uint8Array;
-  salt: Uint8Array;
 }
 
 /**
@@ -3010,31 +2984,6 @@ class StorageApi {
 
     })
   }
-
-  // // see comments above on class SBFile
-  // /**
-  //  * StorageApi.saveFile()
-  //  *
-  //  * @param channel
-  //  * @param sbFile
-  //  */
-  // saveFile(channel: Channel, sbFile: SBFile) {
-  //   console.log("saveFile()")
-  //   // const metaData: Dictionary = jsonParseWrapper(sbFile.imageMetaData, 'L1732');
-  //   const metaData: ImageMetaData = sbFile.imageMetaData
-  //   const fullStorePromise = this.storeImage(sbFile.data.fullImage, metaData.imageId!, metaData.imageKey!, 'f');
-  //   const previewStorePromise = this.storeImage(sbFile.data.previewImage, metaData.previewId!, metaData.previewKey!, 'p');
-  //   // TODO: We should probably discuss this in more detail
-  //   Promise.all([fullStorePromise, previewStorePromise]).then((results) => {
-  //     results.forEach((controlData) => {
-  //       // @ts-ignore
-  //       channel.sendSbObject({ ...controlData, control: true });
-  //     });
-  //     // psm: need to generalize classes ... sbFile and sbImage descent from sbMessage?
-  //     // channel.sendSbObject(sbFile);
-  //     channel.send(sbFile)
-  //   });
-  // }
 
   /**
    * StorageApi().storeRequest
@@ -3646,9 +3595,7 @@ class ChannelApi {
    */
 
 } /* class ChannelAPI */
-
 //#region - class ChannelAPI - TODO implement these methods
-
 
 /**
    * Snackabra is the main class for interacting with the Snackable backend.
@@ -3795,18 +3742,11 @@ class Snackabra {
     return sbCrypto;
   }
 
-  // // see comments above re: SBFile:
-  // /**
-  //  * Sends a file to the channel.
-  //  * 
-  //  * @param file - the file to send
-  //  */
-  // sendFile(file: SBFile) {
-  //   this.storage.saveFile(this.#channel, file);
-  // }
 
 } /* class Snackabra */
 
+/******************************************************************************************************/
+//#region - exporting stuff
 export type {
   ChannelData,
   ChannelKeyStrings
@@ -3830,3 +3770,4 @@ export var SB = {
   SB384: SB384,
   arrayBufferToBase64: arrayBufferToBase64
 };
+//#endregion - exporting stuff

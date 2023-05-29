@@ -825,7 +825,6 @@ class SBCrypto {
         });
     }
 }
-const sbCrypto = new SBCrypto();
 function Memoize(target, propertyKey, descriptor) {
     if ((descriptor) && (descriptor.get)) {
         let get = descriptor.get;
@@ -859,6 +858,18 @@ function Ready(target, propertyKey, descriptor) {
         };
     }
 }
+const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle'];
+const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage');
+const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle');
+function isSBClass(s) {
+    return typeof s === 'string' && SB_CLASS_ARRAY.includes(s);
+}
+function SBValidateObject(obj, type) {
+    switch (type) {
+        case 'SBMessage': return SB_MESSAGE_SYMBOL in obj;
+        case 'SBObjectHandle': return SB_OBJECT_HANDLE_SYMBOL in obj;
+    }
+}
 function VerifyParameters(_target, _propertyKey, descriptor) {
     if ((descriptor) && (descriptor.value)) {
         const operation = descriptor.value;
@@ -889,6 +900,37 @@ function ExceptionReject(target, _propertyKey, descriptor) {
         };
     }
 }
+const sbCrypto = new SBCrypto();
+let availableReadServers = new Promise((resolve, _reject) => {
+    const servers = ['http://localhost:3841', 'http://localhost:4000'];
+    Promise.all(servers.map(async (server) => {
+        try {
+            const methods = (await SBFetch(server + '/api/version'));
+            const methodsJson = await methods.json();
+            return { server, canRead: methodsJson.read, canWrite: methodsJson.write };
+        }
+        catch {
+            return { server, canRead: false, canWrite: false };
+        }
+    })).then((capabilities) => {
+        let readServers = capabilities.filter(c => c.canRead).map(c => c.server);
+        readServers.push('https://shard.3.8.4.land');
+        readServers.push('https://storage.384co.workers.dev');
+        console.warn("NOTE: ignore any 'ERR_CONNECTION_REFUSED' errors immediately above, they were expected\n"
+            + "(they are due to a limitation in your browser, making it impossible to silently verify connections)\n");
+        resolve(readServers);
+    });
+});
+const sbSetup = new Promise(async (resolve, _reject) => {
+    await availableReadServers;
+    resolve(availableReadServers);
+});
+sbSetup.then((v) => {
+    console.log("sbSetup() - success:");
+    console.log(v);
+}).catch((e) => {
+    console.error(`sbSetup() - failed to fetch version: ${e}`);
+});
 class SB384 {
     ready;
     sb384Ready;
@@ -957,18 +999,6 @@ __decorate([
     Memoize,
     Ready
 ], SB384.prototype, "ownerChannelId", null);
-const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle'];
-const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage');
-const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle');
-function isSBClass(s) {
-    return typeof s === 'string' && SB_CLASS_ARRAY.includes(s);
-}
-function SBValidateObject(obj, type) {
-    switch (type) {
-        case 'SBMessage': return SB_MESSAGE_SYMBOL in obj;
-        case 'SBObjectHandle': return SB_OBJECT_HANDLE_SYMBOL in obj;
-    }
-}
 class SBMessage {
     ready;
     channel;

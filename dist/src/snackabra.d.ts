@@ -92,6 +92,48 @@ export interface EncryptedContentsBin {
 }
 export declare function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedContentsBin;
 export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encypted';
+interface SBMessageContents {
+    sender_pubKey?: JsonWebKey;
+    sender_username?: string;
+    encrypted: boolean;
+    isVerfied: boolean;
+    contents: string;
+    sign: string;
+    image: string;
+    image_sign?: string;
+    imageMetadata_sign?: string;
+    imageMetaData?: ImageMetaData;
+}
+export type SBObjectType = 'f' | 'p' | 'b' | 't';
+export interface SBObjectHandle {
+    [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
+    version?: '1';
+    type: SBObjectType;
+    id: string;
+    key: string;
+    id32?: Base62Encoded;
+    key32?: Base62Encoded;
+    verification: Promise<string> | string;
+    iv?: Uint8Array | string;
+    salt?: Uint8Array | string;
+    fileName?: string;
+    dateAndTime?: string;
+    shardServer?: string;
+    fileType?: string;
+    lastModified?: number;
+    actualSize?: number;
+    savedSize?: number;
+}
+export interface SBObjectMetadata {
+    [SB_OBJECT_HANDLE_SYMBOL]: boolean;
+    version: '1';
+    type: SBObjectType;
+    id: string;
+    key: string;
+    paddedBuffer: ArrayBuffer;
+    iv: Uint8Array;
+    salt: Uint8Array;
+}
 export declare class MessageBus {
     #private;
     bus: Dictionary<any>;
@@ -156,6 +198,8 @@ declare class SBCrypto {
     lookupKey(key: JsonWebKey, array: Array<JsonWebKey>): number;
     channelKeyStringsToCryptoKeys(keyStrings: ChannelKeyStrings): Promise<ChannelKeys>;
 }
+declare const SB_MESSAGE_SYMBOL: unique symbol;
+declare const SB_OBJECT_HANDLE_SYMBOL: unique symbol;
 declare class SB384 {
     #private;
     ready: Promise<SB384>;
@@ -168,20 +212,6 @@ declare class SB384 {
     get _id(): string;
     get ownerChannelId(): string;
 }
-interface SBMessageContents {
-    sender_pubKey?: JsonWebKey;
-    sender_username?: string;
-    encrypted: boolean;
-    isVerfied: boolean;
-    contents: string;
-    sign: string;
-    image: string;
-    image_sign?: string;
-    imageMetadata_sign?: string;
-    imageMetaData?: ImageMetaData;
-}
-declare const SB_MESSAGE_SYMBOL: unique symbol;
-declare const SB_OBJECT_HANDLE_SYMBOL: unique symbol;
 declare class SBMessage {
     ready: Promise<SBMessage>;
     channel: Channel;
@@ -230,26 +260,6 @@ export declare class ChannelSocket extends Channel {
     send(msg: SBMessage | string): Promise<string>;
     get exportable_owner_pubKey(): JsonWebKey | null;
 }
-export type SBObjectType = 'f' | 'p' | 'b' | 't';
-export interface SBObjectHandle {
-    [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
-    version?: '1';
-    type: SBObjectType;
-    id: string;
-    key: string;
-    id32?: Base62Encoded;
-    key32?: Base62Encoded;
-    verification: Promise<string> | string;
-    iv?: Uint8Array | string;
-    salt?: Uint8Array | string;
-    fileName?: string;
-    dateAndTime?: string;
-    shardServer?: string;
-    fileType?: string;
-    lastModified?: number;
-    actualSize?: number;
-    savedSize?: number;
-}
 export declare class SBObjectHandleClass {
     #private;
     version: string;
@@ -274,16 +284,6 @@ export declare class SBObjectHandleClass {
     set verification(value: Promise<string> | string);
     get verification(): Promise<string> | string;
     get type(): SBObjectType;
-}
-export interface SBObjectMetadata {
-    [SB_OBJECT_HANDLE_SYMBOL]: boolean;
-    version: '1';
-    type: SBObjectType;
-    id: string;
-    key: string;
-    paddedBuffer: ArrayBuffer;
-    iv: Uint8Array;
-    salt: Uint8Array;
 }
 declare class StorageApi {
     #private;

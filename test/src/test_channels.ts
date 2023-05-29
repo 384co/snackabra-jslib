@@ -208,7 +208,7 @@ function installTestButton(name: string, func: () => void) {
     button.onclick = func
     document.body.appendChild(button)
 
-    const testButtons = document.getElementById('testButtons')
+    const testButtons = document.getElementById('channelTestButtons')
     const testDiv = document.createElement('div')
     testDiv.id = name
     testDiv.appendChild(button)
