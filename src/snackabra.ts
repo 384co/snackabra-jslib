@@ -2472,7 +2472,7 @@ export class ChannelSocket extends Channel {
 
           // and now we are ready!
           // TODO: psm needs to understand why we're using super here :-)
-          _sb_assert(super.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)')
+          _sb_assert(this.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)')
           this.#ChannelSocketReadyFlag = true
           if (DBG) console.log("++++++++ readyPromise() all done - resolving!")
 

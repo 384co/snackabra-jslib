@@ -1360,7 +1360,7 @@ export class ChannelSocket extends Channel {
                     this.#ws.websocket.addEventListener('message', (e) => {
                         this.#processMessage(e.data);
                     });
-                    _sb_assert(super.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)');
+                    _sb_assert(this.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)');
                     this.#ChannelSocketReadyFlag = true;
                     if (DBG)
                         console.log("++++++++ readyPromise() all done - resolving!");
