@@ -183,6 +183,7 @@ export interface ChannelMessage {
   timestampPrefix?: string, // '0'/'1' - 42 of them
   channelID?: SBChannelId, // base64 - 64 chars (512 bits)
   control?: boolean,
+  encrypted?: boolean,
   encrypted_contents?: EncryptedContents,
   contents?: string, // if present means unencrypted
   text?: string, // backwards compat, same as contents
@@ -193,12 +194,15 @@ export interface ChannelMessage {
   imageMetadata_sign?: string,
   motd?: string,
   ready?: boolean,
+  replyTo?: string, // for whispers 1:1 between clients
   roomLocked?: boolean,
   sender_pubKey?: JsonWebKey,
   sender_username?: string,
   system?: boolean,
   user?: { name: string, _id?: JsonWebKey },
   verificationToken?: string,
+  whisper?: string,
+  whispered?: boolean,
 }
 
 // interface ChannelAckMessage {
@@ -2061,8 +2065,8 @@ abstract class Channel extends SB384 {
    * @param string - the <a href="../glossary.html#term-channel-name">Channel Name</a> to find on that server (optional)
    * 
    */
-  // TODO: we've had to hack the ready template for the moment on this class
-  // ready: Promise<Channel>
+
+  ready: Promise<Channel>
   channelReady: Promise<Channel>
   #ChannelReadyFlag: boolean = false // must be named <class>ReadyFlag
 
@@ -2095,10 +2099,10 @@ abstract class Channel extends SB384 {
 
   constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
     super(key)
-    // let superThis = this
+    let superThis = this
     this.#sbServer = sbServer
     this.#api = new ChannelApi(this)
-    this.channelReady = new Promise<Channel>(async (resolve) => {
+    this.ready = new Promise<Channel>(async (resolve) => {
       if (channelId) {
         this.#channelId = channelId
       } else {
@@ -2113,11 +2117,10 @@ abstract class Channel extends SB384 {
         .then(() => {
           this.#channelKeysLoaded = true
           this.#ChannelReadyFlag = true
-          this.ready = Promise.resolve(this) // TODO: not ready pattern
-          resolve(this) // TODO: this was superThis, might need to revisit
+          resolve(superThis)
         })
     })
-    // this.channelReady = this.ready
+    this.channelReady = this.ready
   }
 
   //
@@ -2143,10 +2146,7 @@ abstract class Channel extends SB384 {
   }
 
   get sbServer() { return this.#sbServer }
-  get readyFlag(): boolean {
-    console.warn('Channel.readyFlag: ', this.#ChannelReadyFlag)
-    return this.#ChannelReadyFlag
-  }
+  get readyFlag(): boolean { return this.#ChannelReadyFlag }
 
   @Memoize @Ready get api() { return this.#api }
   @Memoize @Ready get channelId() { return this.#channelId }
@@ -2413,12 +2413,11 @@ export class ChannelSocket extends Channel {
 
       this.#ws.websocket.addEventListener('open', () => {
         this.#ws.closed = false
-        // TODO: needed to hack ready pattern for this class, for now
-        // this.channelReady.then() => {
-        this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) } // TODO: sometimes this is null?
-        if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
-        this.#ws.websocket!.send(JSON.stringify(this.#ws.init))
-        // })
+        this.channelReady.then(() => {
+          this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) } // TODO: sometimes this is null?
+          if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
+          this.#ws.websocket!.send(JSON.stringify(this.#ws.init))
+        })
       })
 
       this.#ws.websocket.addEventListener('message', async (e: MessageEvent) => {
@@ -2442,42 +2441,35 @@ export class ChannelSocket extends Channel {
         this.#exportable_owner_pubKey = exportable_owner_pubKey;
         if (DBG) console.log(this.#exportable_owner_pubKey)
         await this.importKeys(message.keys);
-        // TODO: note this is hack of regular ready pattern, for now
-        // channelReady will not be ready until keys are imported so we move this here
-        this.channelReady.then(async () => {
-          console.warn(this.api)
-          // once we have keys we can also query admin info
-          this.adminData = await this.api.getAdminData()
-          this.owner = sbCrypto.compareKeys(exportable_owner_pubKey, this.exportable_pubKey!)
+        _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)')
+        // once we have keys we can also query admin info
+        this.adminData = await this.api.getAdminData()
+        this.owner = sbCrypto.compareKeys(exportable_owner_pubKey, this.exportable_pubKey!)
 
-          if (DBG) { console.log("++++++++ readyPromise() getting adminData:"); console.log(this.adminData); }
-          // TODO: until we have better logic here a shim from old code
-          this.admin = this.owner
-          if (backlog.length > 0) {
-            // console.log("++++++++ readyPromise() we are queuing up a microtask for message processing")
-            queueMicrotask(() => {
-              if (DBG) console.log("++++++++ readyPromise() inside micro task")
-              for (let d in backlog) {
-                if (DBG) { console.log("++++++++ pulling this message from the backlog:"); console.log(e); }
-                this.#processMessage(d)
-              }
-            });
-          } else {
-            if (DBG) console.log("++++++++ readyPromise() there were NO messages queued up")
-          }
-          // once we've gotten our keys, we substitute the message handler
-          this.#ws.websocket!.addEventListener('message', (e: MessageEvent) => {
-            this.#processMessage(e.data)
-          })
-
-          // and now we are ready!
-          // TODO: psm needs to understand why we're using super here :-)
-          _sb_assert(this.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)')
-          this.#ChannelSocketReadyFlag = true
-          if (DBG) console.log("++++++++ readyPromise() all done - resolving!")
-
-          resolve(this)
+        if (DBG) { console.log("++++++++ readyPromise() getting adminData:"); console.log(this.adminData); }
+        // TODO: until we have better logic here a shim from old code
+        this.admin = this.owner
+        if (backlog.length > 0) {
+          // console.log("++++++++ readyPromise() we are queuing up a microtask for message processing")
+          queueMicrotask(() => {
+            if (DBG) console.log("++++++++ readyPromise() inside micro task")
+            for (let d in backlog) {
+              if (DBG) { console.log("++++++++ pulling this message from the backlog:"); console.log(e); }
+              this.#processMessage(d)
+            }
+          });
+        } else {
+          if (DBG) console.log("++++++++ readyPromise() there were NO messages queued up")
+        }
+        // once we've gotten our keys, we substitute the message handler
+        this.#ws.websocket!.addEventListener('message', (e: MessageEvent) => {
+          this.#processMessage(e.data)
         })
+        // and now we are ready!
+        _sb_assert(this.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)')
+        this.#ChannelSocketReadyFlag = true
+        if (DBG) console.log("++++++++ readyPromise() all done - resolving!")
+        resolve(this)
       })
 
       this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
