@@ -444,19 +444,6 @@ export interface SBObjectHandle {
   savedSize?: number, // optional: size of shard (may be different from actualSize)
 }
 
-// export interface SBObjectMetadata {
-//   [SB_OBJECT_HANDLE_SYMBOL]: boolean,
-//   version: '1', type: SBObjectType,
-//   // for long-term storage you only need these:
-//   id: string, key: string,
-//   paddedBuffer: ArrayBuffer
-//   // you'll need these in case you want to track an object
-//   // across future (storage) servers, but as long as you
-//   // are within the same SB servers you can request them.
-//   iv: Uint8Array,
-//   salt: Uint8Array
-// }
-
 export interface SBObjectMetadata {
   [SB_OBJECT_HANDLE_SYMBOL]: boolean;
   version: '1';
@@ -554,23 +541,6 @@ function WrapError(e: any) {
   else return new Error(String(e));
 }
 
-// the below general exception handler might be improved to
-// retain the error stack, per:
-// https://stackoverflow.com/a/42755876
-// class RethrownError ext ends Error {
-//   constructor(message, error){
-//     super(message)
-//     this.name = this.constructor.name
-//     if (!error) throw new Error('RethrownError requires a message and error')
-//     this.original_error = error
-//     this.stack_before_rethrow = this.stack
-//     const message_lines =  (this.message.match(/\n/g)||[]).length + 1
-//     this.stack = this.stack.split('\n').slice(0, message_lines+1).join('\n') + '\n' +
-//                  error.stack
-//   }
-// }
-// throw new RethrownError(`Oh no a "${error.message}" error`, error)
-
 /** @private */
 export function _sb_exception(loc: string, msg: string) {
   const m = '<< SB lib error (' + loc + ': ' + msg + ') >>';
@@ -603,13 +573,6 @@ export function _sb_assert(val: unknown, msg: string) {
     throw new Error(m);
   }
 }
-
-
-// return this.#preferredServer
-//   ? new Promise<ChannelSocket>((resolve, reject) => resolve(new ChannelSocket(this.#preferredServer!, onMessage, key, channelId)))
-//   : Promise.any(SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId))))
-//   .then((c) => resolve(c.ready))
-//   .catch((e) => { console.log("No known servers responding to channel"); reject(e); })
 
 // used to create NEW channel
 /** @private */
@@ -703,20 +666,6 @@ function ensureSafe(base64: string): string {
   _sb_assert((z) && (z[0] === base64), 'ensureSafe() tripped: something is not URI safe')
   return base64
 }
-
-// function typedArrayToBuffer(array: Uint8Array): ArrayBuffer {
-//   console.log('typedArrayToBuffer')
-//   console.log(typeof array)
-//   console.log(Object.assign({}, array))
-//   console.log(Object.assign({}, array.buffer))
-//   try {
-//     return array.buffer.slice(array.byteOffset, array.byteLength + array.byteOffset)
-//   } catch (e) {
-//     console.log('ERROR in typedArrayTo Buffer')
-//     console.log(e)
-//     return array
-//   }
-// }
 
 /*
   we use URI/URL 'safe' characters in our b64 encoding to avoid having
@@ -1111,12 +1060,6 @@ export function cleanBase32mi(s: string) {
  */
 export function partition(str: string, n: number) {
   throw (`partition() not tested on TS yet - (${str}, ${n})`)
-  // const returnArr = [];
-  // let i, l;
-  // for (i = 0, l = str.length; i < l; i += n) {
-  //   returnArr.push(str.slice(i, l + n));
-  // }
-  // return returnArr;
 }
 
 /**
@@ -1789,6 +1732,19 @@ function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecor
   }
 }
 
+// // variation of "ready" pattern: an object is ready whenever it's validated,
+// // and any setter that might impact this needs to be decorated. 
+// function Validate(_target: any, _propertyKey: string, descriptor: PropertyDescriptor) {
+//   const operation = descriptor.value
+//   descriptor.value = function (...args: any[]) {
+//     for (let x of args) {
+//       const m = x.constructor.name
+//       if (isSBClass(m)) _sb_assert(SBValidateObject(x, m), `invalid parameter: ${x} (expecting ${m})`)
+//     }
+//     return operation.call(this, ...args)
+//   }
+// 
+
 // Decorator
 /** @private */
 function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecoratorContext */, descriptor?: PropertyDescriptor) {
@@ -1807,30 +1763,6 @@ function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecorat
     }
   }
 }
-
-// // possible alternate decorator:
-// // variation of "ready" pattern: an object is ready whenever it's validated,
-// // and any setter that might impact this needs to be decorated. 
-// function Validate(_target: any, _propertyKey: string, descriptor: PropertyDescriptor) {
-//   const operation = descriptor.value
-//   descriptor.value = function (...args: any[]) {
-//     for (let x of args) {
-//       const m = x.constructor.name
-//       if (isSBClass(m)) _sb_assert(SBValidateObject(x, m), `invalid parameter: ${x} (expecting ${m})`)
-//     }
-//     return operation.call(this, ...args)
-//   }
-// 
-
-// Decorator
-// Not useful: (see design note [5]_)
-// function Online(_target: any, _propertyKey: string, descriptor: PropertyDescriptor): void {
-//   const operation = descriptor.value
-//   descriptor.value = function (...args: any[]) {
-//     if (navigator.onLine) return operation.call(this, ...args)
-//     else return new Promise((_resolve, reject) => reject("offline"))
-//   }
-// }
 
 //#endregion - local decorators
 
@@ -2057,6 +1989,31 @@ class SBMessage {
  */
 abstract class Channel extends SB384 {
   /**
+   * Channel Class
+   * 
+   * This is the main work horse for channels. However, it is ABSTRACT,
+   * meaning you need a 'concrete' class to use it.
+   * 
+   * Currently you have two options:
+   * 
+   * You can create a ChannelEndpoint object. That can do everything against
+   * a channel except send/receive messages synchronously.
+   * 
+   * The other option is ChannelSocket, which does everything ChannelEndpoint
+   * does, but ALSO connects with a web socket.
+   * 
+   * So unless you're actually connecting with intent on interactive, fast
+   * messaging, an endpoint is sufficient. In fact, UNLESS you are going to
+   * do send/receive, you should use ChannelEndpoint, not ChannelSocket.
+   * 
+   * In our current thinking, 'Channel' captures pretty much everything, 
+   * except how you want (instant) messaging to be hooked up. So for example, our
+   * next class might be 'ChannelP2P', which would be setting up webrtc
+   * data channel connections in a mesh.
+   * 
+   * Note that you don't need to worry about what API calls involve race
+   * conditions and which don't, jslib will do that for you.
+   * 
    * @param Snackabra - server to join
    * @param JsonWebKey - key to use to join (optional)
    * @param string - the <a href="../glossary.html#term-channel-name">Channel Name</a> to find on that server (optional)
@@ -2140,7 +2097,7 @@ abstract class Channel extends SB384 {
   @Memoize @Ready get keys() { return this.#channelKeys! }
   @Memoize @Ready get sbServer() { return this.#sbServer }
   @Memoize @Ready get readyFlag(): boolean { return this.#ChannelReadyFlag }
-  @Memoize @Ready get api() { return this } // supercedes 'api'
+  @Memoize @Ready get api() { return this } // for compatibility
   @Memoize @Ready get channelId() { return this.#channelId }
   @Memoize @Ready get channelSignKey() { return (this.#channelSignKey!) }
 
@@ -2485,32 +2442,46 @@ abstract class Channel extends SB384 {
 
 
 /**
- *
  * ChannelSocket
- *
- *  Class managing connections
  */
 export class ChannelSocket extends Channel {
   ready: Promise<ChannelSocket>
   #ChannelSocketReadyFlag: boolean = false // must be named <class>ReadyFlag
-  // #channelId: string
   #ws: WSProtocolOptions
-  // #keys?: ChannelKeys
-  // #exportable_owner_pubKey: JsonWebKey | null = null
   #sbServer: SBServer
-  // adminData?: ChannelAdminData
-  // #queue: Array<SBMessage> = [];
   #onMessage: (m: ChannelMessage) => void  // CallableFunction // the user message handler
   #ack: Dictionary<any> = []
   #traceSocket: boolean = false
-  // #api?: ChannelApi
-
-  // #channelSignKey?: CryptoKey;
 
   /**
-   * ChannelSocket
    * 
-   * */
+   * ChannelSocket constructor
+   * 
+   * This extends Channel. Use this instead of ChannelEndpoint if you
+   * are going to be sending/receiving messages.
+   * 
+   * You send by calling channel.send(msg: SBMessage | string), i.e.
+   * you can send a quick string.
+   * 
+   * You can set your message handler upon creation, or later by using
+   * channel.onMessage = (m: ChannelMessage) => { ... }.
+   * 
+   * This implementation uses websockeds to connect all participating
+   * clients through a single servlet (somewhere), with very fast
+   * forwarding.
+   * 
+   * You don't need to worry about managing resources, like closing it,
+   * or checking if it's open. It will close based on server behavior,
+   * eg it's up to the server to close the connection based on inactivity.
+   * The ChannelSocket will re-open if you try to send against a closed
+   * connection. You can check status with channelSocket.status if you
+   * like, but it shouldn't be necessary.
+   * 
+   * @param sbServer 
+   * @param onMessage 
+   * @param key 
+   * @param channelId 
+   */
   constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string) {
     super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
     _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
