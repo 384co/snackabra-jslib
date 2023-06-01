@@ -1,4 +1,4 @@
-declare const version = "1.0.x";
+declare const version = "1.1.x";
 export interface SBChannelHandle {
     channelId: SBChannelId;
     key: JsonWebKey;

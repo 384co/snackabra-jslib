@@ -21,7 +21,7 @@
 
 */
 
-const version = '1.0.x'
+const version = '1.1.x'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -1925,12 +1925,9 @@ class SBMessage {
     _sb_assert(body.length < this.MAX_SB_BODY_SIZE, 'SBMessage(): body must be smaller than 64 KiB')
     this.channel = channel
     this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: '', imageMetaData: {} }
-    console.log("#### SBMessage constructor")
     this.ready = new Promise<SBMessage>((resolve) => {
-      console.log("#### SBMessage constructor - waiting for channelReady() on:")
-      console.log(channel)
+      // console.log(channel)
       channel.channelReady.then(async () => {
-        console.log("#### channel ready for the SBMessage object")
         this.contents.sender_pubKey = this.channel.exportable_pubKey!
         if (channel.userName) this.contents.sender_username = channel.userName
         const signKey = this.channel.channelSignKey
@@ -1938,7 +1935,6 @@ class SBMessage {
         const image_sign = sbCrypto.sign(signKey!, this.contents.image)
         const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData))
         Promise.all([sign, image_sign, imageMetadata_sign]).then((values) => {
-          console.log("+++++++ SBMessage constructor - all promises resolved")
           this.contents.sign = values[0]
           this.contents.image_sign = values[1]
           this.contents.imageMetadata_sign = values[2]
@@ -1946,8 +1942,7 @@ class SBMessage {
           // const isVerfied = await this.channel.api.postPubKey(this.channel.exportable_pubKey!)
           // console.log('here',isVerfied)
           // this.contents.isVerfied = isVerfied?.success ? true : false
-          console.log("+++++++ SBMessage RESOLVED:")
-          console.log(this)
+          // console.log(this)
           resolve(this)
         })
       })
@@ -2062,7 +2057,6 @@ abstract class Channel extends SB384 {
           headers: { 'Content-Type': 'application/json' },
         })
         .then((response: Response) => {
-          console.log("got response for ChannelEndpoint =======")
           _sb_assert(response.ok, "ChannelEndpoint(): failed to get channel keys (network response not ok)")
           return response.json() as unknown as ChannelKeyStrings // continues processing below
         })
@@ -2100,6 +2094,7 @@ abstract class Channel extends SB384 {
   @Memoize @Ready get api() { return this } // for compatibility
   @Memoize @Ready get channelId() { return this.#channelId }
   @Memoize @Ready get channelSignKey() { return (this.#channelSignKey!) }
+  // @Memoize @Ready get capacity() { return this.#capacity }
 
   /**
    * getLastMessageTimes
@@ -2176,7 +2171,7 @@ abstract class Channel extends SB384 {
   async #callApi(path: string, body: any): Promise<any>
   async #callApi(path: string, body?: any): Promise<any> {
     if (DBG) console.log(path)
-    if (!this.readyFlag) {
+    if (!this.#ChannelReadyFlag) {
       console.log("ChannelApi.#callApi: channel not ready (we will wait)")
       await (this.channelReady)
     }
@@ -3675,6 +3670,5 @@ export var SB = {
 
 if (!(globalThis as any).SB)
   (globalThis as any).SB = SB;
-console.log("************ SNACKABRA jslib loaded **************")
-console.log((globalThis as any).SB.version)
+console.log(`************ SNACKABRA jslib loaded ${(globalThis as any).SB.version} **************`)
 //#endregion - exporting stuff

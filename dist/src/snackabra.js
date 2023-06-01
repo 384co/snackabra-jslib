@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.0.x';
+const version = '1.1.x';
 const SBKnownServers = [
     {
         channel_server: 'https://channel.384co.workers.dev',
@@ -980,12 +980,8 @@ class SBMessage {
         _sb_assert(body.length < this.MAX_SB_BODY_SIZE, 'SBMessage(): body must be smaller than 64 KiB');
         this.channel = channel;
         this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: '', imageMetaData: {} };
-        console.log("#### SBMessage constructor");
         this.ready = new Promise((resolve) => {
-            console.log("#### SBMessage constructor - waiting for channelReady() on:");
-            console.log(channel);
             channel.channelReady.then(async () => {
-                console.log("#### channel ready for the SBMessage object");
                 this.contents.sender_pubKey = this.channel.exportable_pubKey;
                 if (channel.userName)
                     this.contents.sender_username = channel.userName;
@@ -994,12 +990,9 @@ class SBMessage {
                 const image_sign = sbCrypto.sign(signKey, this.contents.image);
                 const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData));
                 Promise.all([sign, image_sign, imageMetadata_sign]).then((values) => {
-                    console.log("+++++++ SBMessage constructor - all promises resolved");
                     this.contents.sign = values[0];
                     this.contents.image_sign = values[1];
                     this.contents.imageMetadata_sign = values[2];
-                    console.log("+++++++ SBMessage RESOLVED:");
-                    console.log(this);
                     resolve(this);
                 });
             });
@@ -1051,7 +1044,6 @@ class Channel extends SB384 {
                 headers: { 'Content-Type': 'application/json' },
             })
                 .then((response) => {
-                console.log("got response for ChannelEndpoint =======");
                 _sb_assert(response.ok, "ChannelEndpoint(): failed to get channel keys (network response not ok)");
                 return response.json();
             })
@@ -1130,7 +1122,7 @@ class Channel extends SB384 {
     async #callApi(path, body) {
         if (DBG)
             console.log(path);
-        if (!this.readyFlag) {
+        if (!this.#ChannelReadyFlag) {
             console.log("ChannelApi.#callApi: channel not ready (we will wait)");
             await (this.channelReady);
         }
@@ -2246,6 +2238,5 @@ export var SB = {
 };
 if (!globalThis.SB)
     globalThis.SB = SB;
-console.log("************ SNACKABRA jslib loaded **************");
-console.log(globalThis.SB.version);
+console.log(`************ SNACKABRA jslib loaded ${globalThis.SB.version} **************`);
 //# sourceMappingURL=snackabra.js.map
