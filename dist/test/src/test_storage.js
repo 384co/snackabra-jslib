@@ -127,15 +127,12 @@ function test07() {
 }
 function installTestButton(name, func) {
     const button = document.createElement('button');
-    button.innerText = 'STORAGE:\n' + name;
+    button.innerText = 'CHANNEL:\n' + name;
     button.onclick = func;
-    document.body.appendChild(button);
+    button.style.margin = "2px 2px";
     const testButtons = document.getElementById('storageTestButtons');
-    const testDiv = document.createElement('div');
-    testDiv.id = name;
-    testDiv.appendChild(button);
     if (testButtons)
-        testButtons.appendChild(testDiv);
+        testButtons.appendChild(button);
     else
         console.log('testButtons not found');
 }

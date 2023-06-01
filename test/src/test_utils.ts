@@ -1,8 +1,7 @@
 // (c) 2023 384 (tm)
  
 /*
-  Asserts boolean, but doesn't break program flow, instead
-  it reports on it and returns the outcome
+  Asserts boolean
   */
 export function assert(expr: any, msg: string = ''): boolean {
   if (expr) {
@@ -12,7 +11,7 @@ export function assert(expr: any, msg: string = ''): boolean {
     console.error(m)
     console.log('stack trace:')
     console.trace()
-    return false
+    throw new Error(m)
   }
 }
 

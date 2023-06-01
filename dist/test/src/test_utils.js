@@ -7,7 +7,7 @@ export function assert(expr, msg = '') {
         console.error(m);
         console.log('stack trace:');
         console.trace();
-        return false;
+        throw new Error(m);
     }
 }
 //# sourceMappingURL=test_utils.js.map

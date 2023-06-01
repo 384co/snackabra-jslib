@@ -312,7 +312,7 @@ export interface EncryptedContentsBin {
 }
 
 // set by creation of Snackabra object
-var DBG = true;
+var DBG = false;
 
 /**
  * Force EncryptedContents object to binary (interface
@@ -1739,19 +1739,12 @@ function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext
 /** @private */
 function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
-    // console.log("Checking ready for:")
-    // console.log(target.constructor.name)
     let get = descriptor.get
     descriptor.get = function () {
-      // console.log("============= Ready checking this:")
-      // console.log(this)
       const obj = target.constructor.name
-      // TODO: the Ready template can probably be simplified
       const prop = `${obj}ReadyFlag`
       if (prop in this) {
-        // console.log(`============= Ready() - checking readyFlag for ${propertyKey}`)
         const rf = "readyFlag" as keyof PropertyDescriptor
-        // console.log(this[rf])
         _sb_assert(this[rf], `${propertyKey} getter accessed but object ${obj} not ready (fatal)`)
       }
       const retValue = get.call(this)
@@ -2000,8 +1993,12 @@ class SBMessage {
     _sb_assert(body.length < this.MAX_SB_BODY_SIZE, 'SBMessage(): body must be smaller than 64 KiB')
     this.channel = channel
     this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: '', imageMetaData: {} }
+    console.log("#### SBMessage constructor")
     this.ready = new Promise<SBMessage>((resolve) => {
-      channel.ready.then(async () => {
+      console.log("#### SBMessage constructor - waiting for channelReady() on:")
+      console.log(channel)
+      channel.channelReady.then(async () => {
+        console.log("#### channel ready for the SBMessage object")
         this.contents.sender_pubKey = this.channel.exportable_pubKey!
         if (channel.userName) this.contents.sender_username = channel.userName
         const signKey = this.channel.channelSignKey
@@ -2009,6 +2006,7 @@ class SBMessage {
         const image_sign = sbCrypto.sign(signKey!, this.contents.image)
         const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData))
         Promise.all([sign, image_sign, imageMetadata_sign]).then((values) => {
+          console.log("+++++++ SBMessage constructor - all promises resolved")
           this.contents.sign = values[0]
           this.contents.image_sign = values[1]
           this.contents.imageMetadata_sign = values[2]
@@ -2016,6 +2014,8 @@ class SBMessage {
           // const isVerfied = await this.channel.api.postPubKey(this.channel.exportable_pubKey!)
           // console.log('here',isVerfied)
           // this.contents.isVerfied = isVerfied?.success ? true : false
+          console.log("+++++++ SBMessage RESOLVED:")
+          console.log(this)
           resolve(this)
         })
       })
@@ -2028,11 +2028,8 @@ class SBMessage {
    * @param {SBMessage} message - the message object to send
    */
   send() {
-    // console.log("SBMessage.send():")
-    // console.log(this)
     return new Promise<string>((resolve, reject) => {
       this.ready.then(() => {
-        // message ready
         this.channel.send(this).then((result) => {
           if (result === "success") {
             resolve(result)
@@ -2040,7 +2037,7 @@ class SBMessage {
             reject(result)
           }
         })
-      })
+       })
     })
     // TODO: i've punted on queue here <--- queueMicrotaks maybe?
   }
@@ -2066,7 +2063,7 @@ abstract class Channel extends SB384 {
    * 
    */
 
-  ready: Promise<Channel>
+  // ready: Promise<Channel>
   channelReady: Promise<Channel>
   #ChannelReadyFlag: boolean = false // must be named <class>ReadyFlag
 
@@ -2075,190 +2072,417 @@ abstract class Channel extends SB384 {
   locked?: boolean = false
   owner: boolean = false
   admin: boolean = false
+  adminData?: Dictionary<any> // TODO: make into getter
+
   verifiedGuest: boolean = false
   userName: string = ''
-
-  // abstract get keys(): ChannelKeys
 
   #channelKeys?: ChannelKeys;
   #channelSignKey?: CryptoKey;
   #channelId?: string
 
-  #channelKeysLoaded = false
-  #channelKeysResolve!: (value: Channel | PromiseLike<Channel>) => void
+  // #server: string; // this is now sbServer.channel_server
+  #cursor: string = ''; // last (oldest) message key seen
+  #channelApi: string = '';
+  #channelServer: string = '';
 
-  // abstract channelSignKey(): Promise<CryptoKey>;
-  // abstract setChannelSignKey(k: CryptoKey): Promise<void>;
-
-  abstract send(m: SBMessage | string, messageType?: 'string' | 'SBMessage'): Promise<string> // "success" or error message
-  // abstract set onMessage(f: CallableFunction)
-
-  #api: ChannelApi
-  abstract adminData?: Dictionary<any> // TODO: make into getter
-  //abstract get api(): ChannelApi;
+  abstract send(message: SBMessage): Promise<string>
 
   constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
+    _sb_assert(channelId, "Channel(): as of jslib 1.1.x the channelId must be provided")
     super(key)
-    let superThis = this
     this.#sbServer = sbServer
-    this.#api = new ChannelApi(this)
-    this.ready = new Promise<Channel>(async (resolve) => {
-      if (channelId) {
-        this.#channelId = channelId
-      } else {
-        // we need to wait for a new channelId to propagate
-        await this.sb384Ready
-        this.#channelId = this.ownerChannelId!
-      }
-      new Promise<Channel>(channelKeysResolve => {
-        const f = channelKeysResolve // this looks like a no-op but leave it for now
-        this.#channelKeysResolve = f
-      })
-        .then(() => {
-          this.#channelKeysLoaded = true
-          this.#ChannelReadyFlag = true
-          resolve(superThis)
+    this.#channelId = channelId
+    this.#channelApi = sbServer.channel_server + '/api/'
+    this.#channelServer = sbServer.channel_server + '/api/room/'
+
+    this.channelReady = new Promise<Channel>(async (resolve, reject) => {
+      await this.sb384Ready
+      // xTODO: check all known servers for this channel
+      SBFetch(this.#sbServer.channel_server + '/api/room/' + this.#channelId + '/getChannelKeys',
+        {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
         })
+        .then((response: Response) => {
+          console.log("got response for ChannelEndpoint =======")
+          _sb_assert(response.ok, "ChannelEndpoint(): failed to get channel keys (network response not ok)")
+          return response.json() as unknown as ChannelKeyStrings // continues processing below
+        })
+        .then(async (data) => {
+          _sb_assert(!data.error, "ChannelEndpoint(): failed to get channel keys (error in response)")
+          await this.#loadKeys(data)
+
+          // now we're ready
+          this.#ChannelReadyFlag = true
+          resolve(this)
+        })
+        .catch((e: Error) => { reject("ChannelApi Error [1]: " + WrapError(e)) })
     })
-    this.channelReady = this.ready
   }
 
-  //
-  // design note: the abstract class Channel keeps track of keys,
-  // but the means of acquiring them depends on the type of channel.
-  // currently there are two, ChannelEndpoint and ChannelSocket.
-  //
   /** @private */
-  async importKeys(keyStrings: ChannelKeyStrings): Promise<void> {
-    this.#channelKeys = await sbCrypto.channelKeyStringsToCryptoKeys(keyStrings)
+  async #setKeys(k: ChannelKeys) {
+    this.#channelKeys = k
     _sb_assert(this.#channelKeys, "Channel.importKeys: no channel keys (?)")
     _sb_assert(this.#channelKeys!.publicSignKey, "Channel.importKeys: no public sign key (?)")
     _sb_assert(this.privateKey, "Channel.importKeys: no private key (?)")
     this.#channelSignKey = await sbCrypto.deriveKey(
       this.privateKey!, this.#channelKeys.publicSignKey, 'HMAC', false, ['sign', 'verify']
     )
-    this.#channelKeysResolve(this)
+  }
+  
+  /** @private */
+  async #loadKeys(keyStrings: ChannelKeyStrings): Promise<void> {
+    await this.#setKeys(await sbCrypto.channelKeyStringsToCryptoKeys(keyStrings))
   }
 
-  get keys(): ChannelKeys {
-    if (!this.#channelKeys) _sb_assert(false, "Channel.keys: not initialized (?)")
-    return (this.#channelKeys!)
-  }
-
-  get sbServer() { return this.#sbServer }
-  get readyFlag(): boolean { return this.#ChannelReadyFlag }
-
-  @Memoize @Ready get api() { return this.#api }
+  @Memoize @Ready get keys() { return this.#channelKeys! }
+  @Memoize @Ready get sbServer() { return this.#sbServer }
+  @Memoize @Ready get readyFlag(): boolean { return this.#ChannelReadyFlag }
+  @Memoize @Ready get api() { return this } // supercedes 'api'
   @Memoize @Ready get channelId() { return this.#channelId }
-  @Memoize @Ready get channelSignKey() { _sb_assert(this.#channelKeysLoaded, "Channel.keys: not loaded (?)"); return (this.#channelSignKey!) }
+  @Memoize @Ready get channelSignKey() { return (this.#channelSignKey!) }
 
-} /* class Channel */
-
-function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: ChannelKeys): Promise<ChannelMessage> {
-  return new Promise<ChannelMessage>((resolve, reject) => {
-    const z = messageIdRegex.exec(m00)
-    const encryptionKey = keys.encryptionKey
-    if (z) {
-      let m: ChannelEncryptedMessage = {
-        type: 'encrypted',
-        channelID: z[1],
-        timestampPrefix: z[2],
-        _id: z[1] + z[2],
-        encrypted_contents: encryptedContentsMakeBinary(m01)
-      }
-      sbCrypto.unwrap(encryptionKey, m.encrypted_contents!, 'string').then((unwrapped) => {
-        let m2: ChannelMessage = { ...m, ...jsonParseWrapper(unwrapped, 'L1977') };
-        if (m2.contents) {
-          m2.text = m2.contents
-          // if(!m2?.contents?.hasOwnProperty('isVerfied')){
-          //   m2.contents!.isVerified
-          // }
+  /**
+   * getLastMessageTimes
+   */
+  getLastMessageTimes() {
+    // xTODO: convert to new API call model
+    return new Promise((resolve, reject) => {
+      SBFetch(this.#channelApi + '/getLastMessageTimes', {
+        method: 'POST', body: JSON.stringify([this.channelId])
+      }).then((response: Response) => {
+        if (!response.ok) {
+          reject(new Error('Network response was not OK'));
         }
-        m2.user = {
-          name: m2.sender_username ? m2.sender_username : 'Unknown',
-          _id: m2.sender_pubKey
-        }
-
-        if ((m2.verificationToken) && (!m2.sender_pubKey)) {
-          // we don't check signature unless we can (obviously)
-          console.info('WARNING: message with verification token is lacking sender identity.\n' +
-            '         This may not be allowed in the future.')
-        } else {
-          // TODO: we could speed this up by caching imported keys from known senders
-          sbCrypto.importKey('jwk', m2.sender_pubKey!, 'ECDH', true, []).then((senderPubKey) => {
-            sbCrypto.deriveKey(keys.signKey, senderPubKey, 'HMAC', false, ['sign', 'verify']).then((verifyKey) => {
-              sbCrypto.verify(verifyKey, m2.sign!, m2.contents!).then((v) => {
-                if (!v) {
-                  console.log("***** signature is NOT correct message (rejecting)")
-                  console.log("verifyKey:")
-                  console.log(Object.assign({}, verifyKey))
-                  console.log("m2.sign")
-                  console.log(Object.assign({}, m2.sign))
-                  console.log("m2.contents")
-                  console.log(structuredClone(m2.contents))
-                  console.log("Message:")
-                  console.log(Object.assign({}, m2))
-                  console.trace()
-                  reject(null)
-                }
-                resolve(m2)
-              })
-            })
-          })
-        }
-      })
-    } else {
-      console.log("++++++++ #processMessage: ERROR - cannot parse channel ID / timestamp, invalid message")
-      console.log(Object.assign({}, m00))
-      console.log(Object.assign({}, m01))
-      reject(null)
-    }
-  })
-}
-
-/**
- *
- * ChannelEndpoint
- *
- * Gives access to a Channel API (without needing to connect to socket)
- */
-export class ChannelEndpoint extends Channel {
-  adminData?: Dictionary<any> // TODO: make into getter
-  constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
-    super(sbServer, key, channelId)
-    //
-    // design note:
-    // the Channel will only be ready when it has keys. in the case of
-    // ChannelEndpoint, we need to fetch them directly. and we can't use
-    // channel.api for this, since that's what we're enabling here.
-    //
-    SBFetch(this.sbServer.channel_server + '/api/room/' + this.channelId + '/getChannelKeys',
-      {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      .then((response: Response) => {
-        _sb_assert(response.ok, "ChannelEndpoint(): failed to get channel keys (network response not ok)")
-        return response.json() as unknown as ChannelKeyStrings
-      })
-      .then((data) => {
-        console.warn(data)
-        _sb_assert(!data.error, "ChannelEndpoint(): failed to get channel keys (error in response)")
-        this.importKeys(data)
-      })
-      .catch((e: Error) => { _sb_assert(false, "ChannelApi Error [1]: " + WrapError(e)) })
+        return response.json();
+      }).then((message_times) => {
+        resolve(message_times[this.channelId!]);
+      }).catch((e: Error) => {
+        reject(e);
+      });
+    });
   }
 
-  send(_m: SBMessage | string, _messageType?: 'string' | 'SBMessage'): Promise<string> {
-    return new Promise<string>((_resolve, reject) => {
-      reject('ChannelEndpoint.send(): send outside ChannelSocket not yet implemented')
+  /**
+   * getOldMessages
+   * 
+   * Will return most recent messages from the channel.
+   * 
+   * @param currentMessagesLength - number to fetch (default 100)
+   * @param paginate - if true, will paginate from last request (default false)
+   *
+   * TODO: this needs to be able to check that the channel socket
+   *       is ready, otherwise the keys might not be ... currently
+   *       before calling this, make a ready check on the socket
+   */
+  @Ready getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
+    // TODO: yeah the below situation needs to be chased down
+    // console.log("warning: this might throw an exception on keys() if ChannelSocket is not ready")
+    // xTODO: convert to new API call model
+    return new Promise((resolve, reject) => {
+      // const encryptionKey = this.#channel.keys.encryptionKey
+      // TODO: we want to cache (merge) these messages into a local cached list (since they are immutable)
+      let cursorOption = '';
+      if (paginate)
+        cursorOption = '&cursor=' + this.#cursor;
+      SBFetch(this.#channelServer + this.channelId + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
+        method: 'GET',
+      }).then(async (response: Response) => {
+        if (!response.ok) reject(new Error('Network response was not OK'));
+        return response.json();
+      }).then((messages) => {
+        if (DBG) {
+          console.log("getOldMessages")
+          console.log(structuredClone(Object.values(messages)))
+        }
+        Promise.all(Object
+          .keys(messages)
+          .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
+          // .map((v) => { console.log("#*#*#*#*#*#*#"); console.log(structuredClone(messages[v].encrypted_contents)); return v; })
+          .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.keys)))
+          .then((decryptedMessageArray) => {
+            let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
+            if (lastMessage)
+              this.#cursor = lastMessage._id || lastMessage.id || '';
+            resolve(decryptedMessageArray)
+          })
+      }).catch((e: Error) => {
+        reject(e);
+      });
+    });
+  }
+
+  // ChannelApi.#callApi
+  async #callApi(path: string): Promise<any>
+  async #callApi(path: string, body: any): Promise<any>
+  async #callApi(path: string, body?: any): Promise<any> {
+    if (DBG) console.log(path)
+    if (!this.readyFlag) {
+      console.log("ChannelApi.#callApi: channel not ready (we will wait)")
+      await (this.channelReady)
+    }
+    const method = body ? 'POST' : 'GET'
+    return new Promise(async (resolve, reject) => {
+      await (this.ready)
+      let authString = '';
+      const token_data: string = new Date().getTime().toString()
+      authString = token_data + '.' + await sbCrypto.sign(this.channelSignKey, token_data)
+      let init: RequestInit = {
+        method: method,
+        headers: {
+          'Content-Type': 'application/json',
+          'authorization': authString
+        }
+      }
+      if (body)
+        init.body = JSON.stringify(body);
+      await (this.ready)
+      SBFetch(this.#channelServer + this.channelId + path, init)
+        .then((response: Response) => {
+          if (!response.ok) reject(new Error('Network response was not OK'))
+          return response.json()
+        })
+        .then((data: Dictionary<any>) => {
+          if (data.error) reject(new Error(data.error))
+          else resolve(data)
+        })
+        .catch((e: Error) => { reject("ChannelApi Error [2]: " + WrapError(e)) })
     })
   }
 
-  set onMessage(_f: CallableFunction) {
-    _sb_assert(false, "ChannelEndpoint.onMessage: send/receive outside ChannelSocket not yet implemented")
+  /**
+   * Update (set) the capacity of the channel; Owner only
+   */
+  @Ready updateCapacity(capacity: number) { return this.#callApi('/updateRoomCapacity?capacity=' + capacity) }
+  /**
+   * getCapacity
+   */
+  @Ready getCapacity() { return (this.#callApi('/getRoomCapacity')) }
+  /**
+   * getStorageLimit (current storage budget)
+   */
+  @Ready getStorageLimit() { return (this.#callApi('/getStorageLimit')) }
+  /**
+   * getMother
+   * 
+   * Get the channelID from which this channel was budded. Note that
+   * this is only accessible by Owner (as well as hosting server)
+   */
+  @Ready getMother() { return (this.#callApi('/getMother')) }
+  /**
+   * getJoinRequests
+   */
+  @Ready getJoinRequests() { return this.#callApi('/getJoinRequests') }
+  /**
+   * isLocked
+   */
+  @ExceptionReject isLocked() { return new Promise<boolean>((resolve) => (this.#callApi('/roomLocked')).then((d) => resolve(d.locked === true))) }
+  /**
+   * Set message of the day
+   */
+  @Ready setMOTD(motd: string) { return this.#callApi('/motd', { motd: motd }) }
+  /**
+   * getAdminData
+   */
+  @Ready getAdminData(): Promise<ChannelAdminData> { return this.#callApi('/getAdminData') }
+
+  /**
+   * downloadData
+   */
+  @Ready downloadData() {
+    return new Promise((resolve, reject) => {
+      this.#callApi('/downloadData')
+        .then((response: Response) => { return response.json(); })
+        .then((data: Dictionary<any>) => {
+          Promise.all(Object
+            .keys(data)
+            .filter((v) => {
+              const regex = new RegExp(this.channelId as string);
+              if (v.match(regex)) {
+                const message = jsonParseWrapper(data[v], "L3318")
+                if (message.hasOwnProperty('encrypted_contents')) {
+                  if (DBG) console.log(message)
+                  return message;
+                }
+              }
+            })
+            .map((v) => {
+              const message = jsonParseWrapper(data[v], "L3327")
+              if (DBG) console.log(v, message.encrypted_contents, this.keys)
+              return deCryptChannelMessage(v, message.encrypted_contents, this.keys)
+            }))
+            .then((decryptedMessageArray) => {
+              let storage: any = {}
+              decryptedMessageArray.forEach((message) => {
+                if (!message.control && message.imageMetaData!.imageId) {
+                  const f_control_msg = decryptedMessageArray.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == message.imageMetaData!.imageId)
+                  const p_control_msg = decryptedMessageArray.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == message.imageMetaData!.previewId)
+                  storage[`${message.imageMetaData!.imageId}.f`] = f_control_msg?.verificationToken
+                  storage[`${message.imageMetaData!.previewId}.p`] = p_control_msg?.verificationToken
+                }
+              })
+              resolve({ storage: storage, channel: data })
+            })
+        }).catch((error: Error) => {
+          reject(error);
+        });
+    });
   }
-}
+
+  @Ready uploadChannel(channelData: ChannelData) {
+    return this.#callApi('/uploadRoom', channelData)
+  }
+
+  @Ready authorize(ownerPublicKey: Dictionary<any>, serverSecret: string) {
+    return this.#callApi('/authorizeRoom', { roomId: this.channelId, SERVER_SECRET: serverSecret, ownerKey: ownerPublicKey })
+  }
+
+  // deprecated - this is now implicitly done on first connect
+  @Ready postPubKey(_exportable_pubKey: JsonWebKey): Promise<{ success: boolean }> {
+    throw new Error("postPubKey() deprecated")
+  }
+
+  @Ready storageRequest(byteLength: number): Promise<Dictionary<any>> {
+    return this.#callApi('/storageRequest?size=' + byteLength)
+  }
+
+  // TODO: test this guy, i doubt if it's working post-re-factor
+  @Ready lock() {
+    console.trace("WARNING: lock() on channel api has not been tested/debugged fully ..")
+    return new Promise(async (resolve, reject) => {
+      if (this.keys.lockedKey == null && this.admin) {
+        const _locked_key: CryptoKey = await crypto.subtle.generateKey({
+          name: 'AES-GCM', length: 256
+        }, true, ['encrypt', 'decrypt']);
+        const _exportable_locked_key: Dictionary<any> = await crypto.subtle.exportKey('jwk', _locked_key);
+        this.#callApi('lockRoom')
+          .then((data: Dictionary<any>) => {
+            if (data.locked) {
+              this.acceptVisitor(JSON.stringify(this.exportable_pubKey))
+                .then(() => {
+                  resolve({ locked: data.locked, lockedKey: _exportable_locked_key })
+                })
+            }
+          })
+          .catch((error: Error) => { reject(error) });
+      } else {
+        reject(new Error('no lock key or not admin'));
+      }
+    });
+  }
+
+  // TODO: test this guy, i doubt if it's working post-re-factor
+  @Ready acceptVisitor(pubKey: string) {
+    console.warn("WARNING: acceptVisitor() on channel api has not been tested/debugged fully ..")
+    return new Promise(async (resolve) => {
+      _sb_assert(this.keys.privateKey, "acceptVisitor(): no private key")
+      const shared_key = await sbCrypto.deriveKey(this.keys.privateKey!,
+        await sbCrypto.importKey('jwk', jsonParseWrapper(pubKey, 'L2276'), 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']);
+      const _encrypted_locked_key = await sbCrypto.encrypt(sbCrypto.str2ab(JSON.stringify(this.keys.lockedKey!)), shared_key)
+      resolve(this.#callApi('/acceptVisitor',
+        {
+          pubKey: pubKey, lockedKey: JSON.stringify(_encrypted_locked_key)
+        }))
+    });
+  }
+
+  // 2023.05.06:
+  // In previous hosting strategy, the concept was that the host / SSO would
+  // create and allocate a channel, but the SSO would keep track of owner key;
+  // thus we needed a mechanism to rotate the owner key, should the user
+  // wish to not have the SSO have access.  That way on a per-hosting service
+  // basis, the provider could decide policy (eg an enterprise might disallow
+  // owner key rotation).  In our new (2023) design, we have generalized channels
+  // to be (much) more than a "room".  In the new design, channels are also
+  // carriers of api and storage budget, and to control all the keys, a user
+  // can "budd()" off a channel provided by server. Thus in the new design,
+  // owner keys are NEVER rotated (other keys can be rotated). 
+  @Ready ownerKeyRotation() {
+    throw new Error("ownerKeyRotation() replaced by new budd() approach")
+  }
+
+  /**
+   * "budd" will spin a channel off an existing one.
+   * You need to provide one of the following combinations of info:
+   * 
+   * - nothing (special case, create new channel and transfer all storage budget)
+   * - just storage amount (creates new channel with that amount)
+   * - just a target channel (moves all storage budget to that channel)
+   * - just keys (creates new channel with those keys and transfers all storage budget)
+   * - keys and storage amount (creates new channel with those keys and that storage amount)
+   * 
+   * In the first (special) case you can just call budd(), in the other
+   * cases you need to fill out the options object.
+   * 
+   * Another way to remember the above: all combinations are valid except
+   * both a target channel and assigning keys.
+   * 
+   * Note: if you're specifying the target channel, then the return values will
+   * not include the private key (that return value will be empty).
+   */
+  budd(): Promise<SBChannelHandle> // clone and full plunder
+  budd(options:
+    {
+      keys?: JsonWebKey;
+      storage?: number;
+      targetChannel?: SBChannelId;
+    }): Promise<SBChannelHandle> // clone with specified keys, storage, and target channel
+  @Ready budd(options?:
+    {
+      keys?: JsonWebKey;
+      storage?: number;
+      targetChannel?: SBChannelId;
+    }): Promise<SBChannelHandle> {
+    let { keys, storage, targetChannel } = options ?? {};
+    return new Promise<SBChannelHandle>(async (resolve, reject) => {
+      try {
+        if (!storage) storage = Infinity;
+        if (targetChannel) {
+          // just a straight up transfer of budget
+          if (keys) throw new Error("[budd()]: You can't specify both a target channel and keys");
+          resolve(this.#callApi(`/budd?targetChannel=${targetChannel}&transferBudget=${storage}`))
+        } else {
+          // we are creating a new channel
+          const { channelData, exportable_privateKey } = await newChannelData(keys);
+          let resp: Dictionary<any> = await this.#callApi(`/budd?targetChannel=${channelData.roomId}&transferBudget=${storage}`, channelData)
+          if (resp.success) {
+            resolve({ channelId: channelData.roomId!, key: exportable_privateKey })
+          } else {
+            reject(JSON.stringify(resp));
+          }
+        }
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+
+  /*
+  mtg: These methods have no implementation in the current webclient so I have skipped them for the time being
+  // unused
+  notifications() {
+  }
+
+  // unused
+  getPubKeys() {
+  }
+
+  // unused
+  ownerUnread() {
+  }
+
+  // unused
+  registerDevice() {
+  }
+   */
+
+} /* class ChannelAPI */
+//#region - class ChannelAPI - TODO implement these methods
+
+
 
 /**
  *
@@ -2272,9 +2496,9 @@ export class ChannelSocket extends Channel {
   // #channelId: string
   #ws: WSProtocolOptions
   // #keys?: ChannelKeys
-  #exportable_owner_pubKey: JsonWebKey | null = null
+  // #exportable_owner_pubKey: JsonWebKey | null = null
   #sbServer: SBServer
-  adminData?: ChannelAdminData
+  // adminData?: ChannelAdminData
   // #queue: Array<SBMessage> = [];
   #onMessage: (m: ChannelMessage) => void  // CallableFunction // the user message handler
   #ack: Dictionary<any> = []
@@ -2303,9 +2527,9 @@ export class ChannelSocket extends Channel {
     this.ready = this.#readyPromise()
   }
 
-  close = () => {
-    if (this.#ws.websocket) return this.#ws.websocket.close()
-  }
+  // close = () => {
+  //   if (this.#ws.websocket) return this.#ws.websocket.close()
+  // }
 
   /* ChannelSocket
     internal to channelsocket: this always gets all messages; certain
@@ -2315,7 +2539,6 @@ export class ChannelSocket extends Channel {
   /** @private */
   #processMessage(m: any) {
     if (this.#traceSocket) {
-      console.log("got raw message (string):")
       console.log(structuredClone(m))
     }
     const data = jsonParseWrapper(m, 'L1489')
@@ -2326,7 +2549,7 @@ export class ChannelSocket extends Channel {
     if (data.ack) {
       const r = this.#ack[data._id]
       if (r) {
-        console.log(`++++++++ found matching ack for id ${data._id} (on first check?)`)
+        if (this.#traceSocket) console.log(`++++++++ found matching ack for id ${data._id} (on first check?)`)
         delete this.#ack[data._id]
         r("success") // resolve
       }
@@ -2393,14 +2616,14 @@ export class ChannelSocket extends Channel {
     }
   }
 
-
   /* ChannelSocket */
   /** @private */
   #readyPromise(): Promise<ChannelSocket> {
     const url = this.#ws.url
-    let backlog: Array<MessageEvent> = []
-    let processingKeys = false
+    let insideFirstMessageHandler = false
+
     return new Promise<ChannelSocket>((resolve, reject) => {
+      let rememberThis = this
       if (DBG) { console.log("++++++++ readyPromise() has url:"); console.log(url); }
       if (!this.#ws.websocket) this.#ws.websocket = new WebSocket(this.#ws.url)
       if (this.#ws.websocket.readyState === 3) {
@@ -2411,66 +2634,57 @@ export class ChannelSocket extends Channel {
         this.#ws.websocket = new WebSocket(url)
       }
 
-      this.#ws.websocket.addEventListener('open', () => {
-        this.#ws.closed = false
-        this.channelReady.then(() => {
-          this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) } // TODO: sometimes this is null?
-          if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
-          this.#ws.websocket!.send(JSON.stringify(this.#ws.init))
-        })
-      })
-
-      this.#ws.websocket.addEventListener('message', async (e: MessageEvent) => {
-        // the 'root' administrative messages are processed first before
-        // anything else can be processed, when this is done it self-replaces
-        if (DBG) { console.log("++++++++ readyPromise() received ChannelKeysMessage:"); console.log(e); }
-        if (processingKeys) {
-          backlog.push(e.data)
-          if (DBG) { console.log("++++++++ readyPromise() pushing message to backlog:"); console.log(e); }
+      async function firstMessageEventHandler(e: MessageEvent) {
+        if (insideFirstMessageHandler) {
+          // safeguarding
+          console.warn("WARNING: firstMessageEventHandler() called recursively (?)")
           return
         }
-        processingKeys = true // helps not drop messages
-        // const message: ChannelKeysMessage = deserializeMessage(e.data, 'channelKeys')! as ChannelKeysMessage
+        insideFirstMessageHandler = true
+        
+        // first time should be a handshake of keys, they should match what we have;
+        // there may be other information in the message (eg motd, roomLocked)
+        if (DBG) { console.log("++++++++ readyPromise() received ChannelKeysMessage:"); console.log(e); }
+    
         const message = jsonParseWrapper(e.data, 'L2239') as ChannelKeysMessage
         if (DBG) console.log(message)
         _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)')
-        this.motd = message.motd
-        this.locked = message.roomLocked
-
+        rememberThis.motd = message.motd
+        rememberThis.locked = message.roomLocked
         const exportable_owner_pubKey = jsonParseWrapper(message.keys.ownerKey, 'L2246')
-        this.#exportable_owner_pubKey = exportable_owner_pubKey;
-        if (DBG) console.log(this.#exportable_owner_pubKey)
-        await this.importKeys(message.keys);
-        _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)')
+        // just small sanity check on owner key (x marks the spot)
+        _sb_assert(rememberThis.keys.ownerPubKeyX === exportable_owner_pubKey.x, 'ChannelSocket.readyPromise(): owner key mismatch??')
+        _sb_assert(rememberThis.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)')
+        // this sets us as owner only if the keys match
+        rememberThis.owner = sbCrypto.compareKeys(exportable_owner_pubKey, rememberThis.exportable_pubKey!)
+        // TODO: we have mostly lost the "admin" concept
+        rememberThis.admin = rememberThis.owner
         // once we have keys we can also query admin info
-        this.adminData = await this.api.getAdminData()
-        this.owner = sbCrypto.compareKeys(exportable_owner_pubKey, this.exportable_pubKey!)
-
-        if (DBG) { console.log("++++++++ readyPromise() getting adminData:"); console.log(this.adminData); }
-        // TODO: until we have better logic here a shim from old code
-        this.admin = this.owner
-        if (backlog.length > 0) {
-          // console.log("++++++++ readyPromise() we are queuing up a microtask for message processing")
-          queueMicrotask(() => {
-            if (DBG) console.log("++++++++ readyPromise() inside micro task")
-            for (let d in backlog) {
-              if (DBG) { console.log("++++++++ pulling this message from the backlog:"); console.log(e); }
-              this.#processMessage(d)
-            }
-          });
-        } else {
-          if (DBG) console.log("++++++++ readyPromise() there were NO messages queued up")
-        }
+        // // TODO: confirm that this doesn't cause queuing of messages
+        // rememberThis.adminData = await rememberThis.api.getAdminData()
         // once we've gotten our keys, we substitute the message handler
-        this.#ws.websocket!.addEventListener('message', (e: MessageEvent) => {
-          this.#processMessage(e.data)
+        rememberThis.#ws.websocket!.removeEventListener('message', firstMessageEventHandler)
+        rememberThis.#ws.websocket!.addEventListener('message', (e: MessageEvent) => {
+          rememberThis.#processMessage(e.data)
         })
-        // and now we are ready!
-        _sb_assert(this.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)')
-        this.#ChannelSocketReadyFlag = true
         if (DBG) console.log("++++++++ readyPromise() all done - resolving!")
-        resolve(this)
+        rememberThis.#ChannelSocketReadyFlag = true
+        insideFirstMessageHandler = false
+        resolve(rememberThis)
+      }
+
+      this.#ws.websocket.addEventListener('open', () => {
+        this.#ws.closed = false
+        // need to make sure parent is ready (and has keys)
+        this.channelReady.then(() => {
+          _sb_assert(this.exportable_pubKey, "ChannelSocket.readyPromise(): no exportable pub key?")
+          this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) }
+          if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
+          this.#ws.websocket!.send(JSON.stringify(this.#ws.init)) // this should trigger a response with keys
+        })
       })
+
+      this.#ws.websocket.addEventListener('message', firstMessageEventHandler);
 
       this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
         this.#ws.closed = true
@@ -2529,7 +2743,6 @@ export class ChannelSocket extends Channel {
       message.ready.then((message) => {
         this.ready.then(() => {
           if (this.#traceSocket) {
-            console.log("++++++++ ChannelSocket.send() this message (cloned): ")
             //console.log(structuredClone(message))
             console.log(Object.assign({}, message))
           }
@@ -2590,9 +2803,102 @@ export class ChannelSocket extends Channel {
     })
   }
 
-  /** @type {JsonWebKey} */ @Memoize @Ready get exportable_owner_pubKey() { return this.#exportable_owner_pubKey }
+  /** @type {JsonWebKey} */ @Memoize @Ready get exportable_owner_pubKey() { return this.keys.ownerKey }
 
 } /* class ChannelSocket */
+
+
+//# region - classes ChannelEndpoint
+/**
+ *
+ * ChannelEndpoint
+ *
+ * Gives access to a Channel API (without needing to connect to socket).
+ * It's fully functional except it won't send or receive messages
+ * (obviously, that's what a socket is for, but we might add send/receive
+ * in the future for non-socket use cases)
+ */
+export class ChannelEndpoint extends Channel {
+  constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
+    super(sbServer, key, channelId)
+  }
+
+  send(_m: SBMessage | string, _messageType?: 'string' | 'SBMessage'): Promise<string> {
+    return new Promise<string>((_resolve, reject) => {
+      reject('ChannelEndpoint.send(): send outside ChannelSocket not yet implemented')
+    })
+  }
+
+  set onMessage(_f: CallableFunction) {
+    _sb_assert(false, "ChannelEndpoint.onMessage: send/receive outside ChannelSocket not yet implemented")
+  }
+}
+//#endregion - classes ChannelEndpoint
+
+
+
+
+function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: ChannelKeys): Promise<ChannelMessage> {
+  return new Promise<ChannelMessage>((resolve, reject) => {
+    const z = messageIdRegex.exec(m00)
+    const encryptionKey = keys.encryptionKey
+    if (z) {
+      let m: ChannelEncryptedMessage = {
+        type: 'encrypted',
+        channelID: z[1],
+        timestampPrefix: z[2],
+        _id: z[1] + z[2],
+        encrypted_contents: encryptedContentsMakeBinary(m01)
+      }
+      sbCrypto.unwrap(encryptionKey, m.encrypted_contents!, 'string').then((unwrapped) => {
+        let m2: ChannelMessage = { ...m, ...jsonParseWrapper(unwrapped, 'L1977') };
+        if (m2.contents) {
+          m2.text = m2.contents
+          // if(!m2?.contents?.hasOwnProperty('isVerfied')){
+          //   m2.contents!.isVerified
+          // }
+        }
+        m2.user = {
+          name: m2.sender_username ? m2.sender_username : 'Unknown',
+          _id: m2.sender_pubKey
+        }
+
+        if ((m2.verificationToken) && (!m2.sender_pubKey)) {
+          // we don't check signature unless we can (obviously)
+          console.info('WARNING: message with verification token is lacking sender identity.\n' +
+            '         This may not be allowed in the future.')
+        } else {
+          // TODO: we could speed this up by caching imported keys from known senders
+          sbCrypto.importKey('jwk', m2.sender_pubKey!, 'ECDH', true, []).then((senderPubKey) => {
+            sbCrypto.deriveKey(keys.signKey, senderPubKey, 'HMAC', false, ['sign', 'verify']).then((verifyKey) => {
+              sbCrypto.verify(verifyKey, m2.sign!, m2.contents!).then((v) => {
+                if (!v) {
+                  console.log("***** signature is NOT correct message (rejecting)")
+                  console.log("verifyKey:")
+                  console.log(Object.assign({}, verifyKey))
+                  console.log("m2.sign")
+                  console.log(Object.assign({}, m2.sign))
+                  console.log("m2.contents")
+                  console.log(structuredClone(m2.contents))
+                  console.log("Message:")
+                  console.log(Object.assign({}, m2))
+                  console.trace()
+                  reject(null)
+                }
+                resolve(m2)
+              })
+            })
+          })
+        }
+      })
+    } else {
+      console.log("++++++++ #processMessage: ERROR - cannot parse channel ID / timestamp, invalid message")
+      console.log(Object.assign({}, m00))
+      console.log(Object.assign({}, m01))
+      reject(null)
+    }
+  })
+} // deCryptChannelMessage()
 
 /**
  * Basic object handle for a shard (all storage).
@@ -2867,13 +3173,8 @@ class StorageApi {
             .then((storageTokenReq) => {
               if (storageTokenReq.hasOwnProperty('error')) reject('storage token request error')
               let storageToken = JSON.stringify(storageTokenReq)
-              // console.log("storeObject() data:")
-              // console.log(data)
-              // console.log(image_id)
               this.storeData(type, image_id, iv, salt, storageToken, data)
                 .then((resp_json) => {
-                  // console.log("storeData() returned:")
-                  // console.log(resp_json)
                   if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
                   if (resp_json.image_id != image_id) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
                   resolve(resp_json.verification_token)
@@ -3029,9 +3330,6 @@ class StorageApi {
   /** @private */
   #processData(payload: ArrayBuffer, h: SBObjectHandle): Promise<ArrayBuffer> {
     return new Promise((resolve, reject) => {
-      // console.log('#processData()')
-      // console.log(payload)
-      // console.log(h)
       try {
         let j = jsonParseWrapper(sbCrypto.ab2str(new Uint8Array(payload)), 'L3062')
         // normal operation is to break on the JSON.parse() and continue to finally clause
@@ -3043,10 +3341,6 @@ class StorageApi {
         }
       } catch (e) {
         // do nothing - this is expected
-        // if (DBG) {
-        //   console.log(`#processData() JSON.parse() failed as expected:`)
-        //   console.log(e)
-        // }
       } finally {
         const data = extractPayload(payload)
         if (DBG) {
@@ -3226,373 +3520,9 @@ class StorageApi {
 
 } /* class StorageApi */
 
-/**
- * Channel API
- * 
- * Requires a Channel object to initialize. That can be a ChannelSocket, for
- * example, or if you just need access to send commands to the channel you
- * can use ChannelEndpoint (since "Channel" is an abstract class)
- * 
- * @class
- * @constructor
- * @public
- */
-class ChannelApi {
-  #sbServer: SBServer
-  #server: string; // channel server
-  #channel: Channel;
-  #channelApi: string;
-  #channelServer: string;
-  #cursor: string = ''; // last (oldest) message key seen
 
-  // #payload: Payload;
-
-  constructor(channel: Channel) {
-    this.#channel = channel
-    this.#sbServer = this.#channel.sbServer
-    this.#server = this.#sbServer.channel_server
-    // this.#payload = new Payload()
-    this.#channelApi = this.#server + '/api/'
-    this.#channelServer = this.#server + '/api/room/'
-    // if (identity) this.#identity = identity!
-  }
-
-  /**
-   * getLastMessageTimes
-   */
-  getLastMessageTimes() {
-    return new Promise((resolve, reject) => {
-      SBFetch(this.#channelApi + '/getLastMessageTimes', {
-        method: 'POST', body: JSON.stringify([this.#channel.channelId])
-      }).then((response: Response) => {
-        if (!response.ok) {
-          reject(new Error('Network response was not OK'));
-        }
-        return response.json();
-      }).then((message_times) => {
-        resolve(message_times[this.#channel.channelId!]);
-      }).catch((e: Error) => {
-        reject(e);
-      });
-    });
-  }
-
-  /**
-   * getOldMessages
-   * 
-   * Will return most recent messages from the channel.
-   * 
-   * @param currentMessagesLength - number to fetch (default 100)
-   * @param paginate - if true, will paginate from last request (default false)
-   *
-   * TODO: this needs to be able to check that the channel socket
-   *       is ready, otherwise the keys might not be ... currently
-   *       before calling this, make a ready check on the socket
-   */
-  getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
-    // TODO: yeah the below situation needs to be chased down
-    // console.log("warning: this might throw an exception on keys() if ChannelSocket is not ready")
-    return new Promise((resolve, reject) => {
-      // const encryptionKey = this.#channel.keys.encryptionKey
-      // TODO: we want to cache (merge) these messages into a local cached list (since they are immutable)
-      let cursorOption = '';
-      if (paginate)
-        cursorOption = '&cursor=' + this.#cursor;
-      SBFetch(this.#channelServer + this.#channel.channelId + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
-        method: 'GET',
-      }).then(async (response: Response) => {
-        if (!response.ok) reject(new Error('Network response was not OK'));
-        return response.json();
-      }).then((messages) => {
-        if (DBG) {
-          console.log("getOldMessages")
-          console.log(structuredClone(Object.values(messages)))
-        }
-        Promise.all(Object
-          .keys(messages)
-          .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-          // .map((v) => { console.log("#*#*#*#*#*#*#"); console.log(structuredClone(messages[v].encrypted_contents)); return v; })
-          .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.#channel.keys)))
-          .then((decryptedMessageArray) => {
-            let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-            if (lastMessage)
-              this.#cursor = lastMessage._id || lastMessage.id || '';
-            resolve(decryptedMessageArray)
-          })
-      }).catch((e: Error) => {
-        reject(e);
-      });
-    });
-  }
-
-  // ChannelApi.#callApi
-  async #callApi(path: string): Promise<any>
-  async #callApi(path: string, body: any): Promise<any>
-  async #callApi(path: string, body?: any): Promise<any> {
-    if (DBG) console.log(path)
-    const method = body ? 'POST' : 'GET'
-    return new Promise(async (resolve, reject) => {
-      await (this.#channel.ready)
-      let authString = '';
-      const token_data: string = new Date().getTime().toString()
-      authString = token_data + '.' + await sbCrypto.sign(this.#channel.channelSignKey, token_data)
-      let init: RequestInit = {
-        method: method,
-        headers: {
-          'Content-Type': 'application/json',
-          'authorization': authString
-        }
-      }
-      if (body)
-        init.body = JSON.stringify(body);
-      await (this.#channel.ready)
-      SBFetch(this.#channelServer + this.#channel.channelId + path, init)
-        .then((response: Response) => {
-          if (!response.ok) reject(new Error('Network response was not OK'))
-          return response.json()
-        })
-        .then((data: Dictionary<any>) => {
-          if (data.error) reject(new Error(data.error))
-          else resolve(data)
-        })
-        .catch((e: Error) => { reject("ChannelApi Error [1]: " + WrapError(e)) })
-    })
-  }
-
-  get channelId() { _sb_assert(this.#channel.readyFlag, 'ChannedlApi.channelId(): channel not ready (?)'); return this.#channel.channelId }
-
-  /**
-   * Update (set) the capacity of the channel; Owner only
-   */
-  updateCapacity(capacity: number) { return this.#callApi('/updateRoomCapacity?capacity=' + capacity) }
-  /**
-   * getCapacity
-   */
-  getCapacity() { return (this.#callApi('/getRoomCapacity')) }
-  /**
-   * getStorageLimit (current storage budget)
-   */
-  getStorageLimit() { return (this.#callApi('/getStorageLimit')) }
-  /**
-   * getMother
-   * 
-   * Get the channelID from which this channel was budded. Note that
-   * this is only accessible by Owner (as well as hosting server)
-   */
-  getMother() { return (this.#callApi('/getMother')) }
-  /**
-   * getJoinRequests
-   */
-  getJoinRequests() { return this.#callApi('/getJoinRequests') }
-  /**
-   * isLocked
-   */
-  @ExceptionReject isLocked() { return new Promise<boolean>((resolve) => (this.#callApi('/roomLocked')).then((d) => resolve(d.locked === true))) }
-  /**
-   * Set message of the day
-   */
-  setMOTD(motd: string) { return this.#callApi('/motd', { motd: motd }) }
-  /**
-   * getAdminData
-   */
-  getAdminData(): Promise<ChannelAdminData> { return this.#callApi('/getAdminData') }
-
-  /**
-   * downloadData
-   */
-  downloadData() {
-    return new Promise((resolve, reject) => {
-      this.#callApi('/downloadData')
-        .then((response: Response) => { return response.json(); })
-        .then((data: Dictionary<any>) => {
-          Promise.all(Object
-            .keys(data)
-            .filter((v) => {
-              const regex = new RegExp(this.#channel.channelId as string);
-              if (v.match(regex)) {
-                const message = jsonParseWrapper(data[v], "L3318")
-                if (message.hasOwnProperty('encrypted_contents')) {
-                  if (DBG) console.log(message)
-                  return message;
-                }
-              }
-            })
-            .map((v) => {
-              const message = jsonParseWrapper(data[v], "L3327")
-              if (DBG) console.log(v, message.encrypted_contents, this.#channel.keys)
-              return deCryptChannelMessage(v, message.encrypted_contents, this.#channel.keys)
-            }))
-            .then((decryptedMessageArray) => {
-              let storage: any = {}
-              decryptedMessageArray.forEach((message) => {
-                if (!message.control && message.imageMetaData!.imageId) {
-                  const f_control_msg = decryptedMessageArray.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == message.imageMetaData!.imageId)
-                  const p_control_msg = decryptedMessageArray.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == message.imageMetaData!.previewId)
-                  storage[`${message.imageMetaData!.imageId}.f`] = f_control_msg?.verificationToken
-                  storage[`${message.imageMetaData!.previewId}.p`] = p_control_msg?.verificationToken
-                }
-              })
-              resolve({ storage: storage, channel: data })
-            })
-        }).catch((error: Error) => {
-          reject(error);
-        });
-    });
-  }
-
-  uploadChannel(channelData: ChannelData) {
-    return this.#callApi('/uploadRoom', channelData)
-  }
-
-  authorize(ownerPublicKey: Dictionary<any>, serverSecret: string) {
-    return this.#callApi('/authorizeRoom', { roomId: this.#channel.channelId, SERVER_SECRET: serverSecret, ownerKey: ownerPublicKey })
-  }
-
-  // deprecated - this is now implicitly done on first connect
-  postPubKey(_exportable_pubKey: JsonWebKey): Promise<{ success: boolean }> {
-    throw new Error("postPubKey() deprecated")
-  }
-
-  storageRequest(byteLength: number): Promise<Dictionary<any>> {
-    return this.#callApi('/storageRequest?size=' + byteLength)
-  }
-
-  // TODO: test this guy, i doubt if it's working post-re-factor
-  lock() {
-    console.trace("WARNING: lock() on channel api has not been tested/debugged fully ..")
-    return new Promise(async (resolve, reject) => {
-      if (this.#channel.keys.lockedKey == null && this.#channel.admin) {
-        const _locked_key: CryptoKey = await crypto.subtle.generateKey({
-          name: 'AES-GCM', length: 256
-        }, true, ['encrypt', 'decrypt']);
-        const _exportable_locked_key: Dictionary<any> = await crypto.subtle.exportKey('jwk', _locked_key);
-        this.#callApi('lockRoom')
-          .then((data: Dictionary<any>) => {
-            if (data.locked) {
-              this.acceptVisitor(JSON.stringify(this.#channel.exportable_pubKey))
-                .then(() => {
-                  resolve({ locked: data.locked, lockedKey: _exportable_locked_key })
-                })
-            }
-          })
-          .catch((error: Error) => { reject(error) });
-      } else {
-        reject(new Error('no lock key or not admin'));
-      }
-    });
-  }
-
-  // TODO: test this guy, i doubt if it's working post-re-factor
-  acceptVisitor(pubKey: string) {
-    console.warn("WARNING: acceptVisitor() on channel api has not been tested/debugged fully ..")
-    return new Promise(async (resolve) => {
-      _sb_assert(this.#channel.keys.privateKey, "acceptVisitor(): no private key")
-      const shared_key = await sbCrypto.deriveKey(this.#channel.keys.privateKey!,
-        await sbCrypto.importKey('jwk', jsonParseWrapper(pubKey, 'L2276'), 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']);
-      const _encrypted_locked_key = await sbCrypto.encrypt(sbCrypto.str2ab(JSON.stringify(this.#channel.keys.lockedKey!)), shared_key)
-      resolve(this.#callApi('/acceptVisitor',
-        {
-          pubKey: pubKey, lockedKey: JSON.stringify(_encrypted_locked_key)
-        }))
-    });
-  }
-
-  // 2023.05.06:
-  // In previous hosting strategy, the concept was that the host / SSO would
-  // create and allocate a channel, but the SSO would keep track of owner key;
-  // thus we needed a mechanism to rotate the owner key, should the user
-  // wish to not have the SSO have access.  That way on a per-hosting service
-  // basis, the provider could decide policy (eg an enterprise might disallow
-  // owner key rotation).  In our new (2023) design, we have generalized channels
-  // to be (much) more than a "room".  In the new design, channels are also
-  // carriers of api and storage budget, and to control all the keys, a user
-  // can "budd()" off a channel provided by server. Thus in the new design,
-  // owner keys are NEVER rotated (other keys can be rotated). 
-  ownerKeyRotation() {
-    throw new Error("ownerKeyRotation() replaced by new budd() approach")
-  }
-
-  /**
-   * "budd" will spin a channel off an existing one.
-   * You need to provide one of the following combinations of info:
-   * 
-   * - nothing (special case, create new channel and transfer all storage budget)
-   * - just storage amount (creates new channel with that amount)
-   * - just a target channel (moves all storage budget to that channel)
-   * - just keys (creates new channel with those keys and transfers all storage budget)
-   * - keys and storage amount (creates new channel with those keys and that storage amount)
-   * 
-   * In the first (special) case you can just call budd(), in the other
-   * cases you need to fill out the options object.
-   * 
-   * Another way to remember the above: all combinations are valid except
-   * both a target channel and assigning keys.
-   * 
-   * Note: if you're specifying the target channel, then the return values will
-   * not include the private key (that return value will be empty).
-   */
-  budd(): Promise<SBChannelHandle> // clone and full plunder
-  budd(options:
-    {
-      keys?: JsonWebKey;
-      storage?: number;
-      targetChannel?: SBChannelId;
-    }): Promise<SBChannelHandle> // clone with specified keys, storage, and target channel
-  budd(options?:
-    {
-      keys?: JsonWebKey;
-      storage?: number;
-      targetChannel?: SBChannelId;
-    }): Promise<SBChannelHandle> {
-    let { keys, storage, targetChannel } = options ?? {};
-    return new Promise<SBChannelHandle>(async (resolve, reject) => {
-      try {
-        if (!storage) storage = Infinity;
-        if (targetChannel) {
-          // just a straight up transfer of budget
-          if (keys) throw new Error("[budd()]: You can't specify both a target channel and keys");
-          resolve(this.#callApi(`/budd?targetChannel=${targetChannel}&transferBudget=${storage}`))
-        } else {
-          // we are creating a new channel
-          const { channelData, exportable_privateKey } = await newChannelData(keys);
-          let resp: Dictionary<any> = await this.#callApi(`/budd?targetChannel=${channelData.roomId}&transferBudget=${storage}`, channelData)
-          if (resp.success) {
-            resolve({ channelId: channelData.roomId!, key: exportable_privateKey })
-          } else {
-            reject(JSON.stringify(resp));
-          }
-        }
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }
-
-
-  /*
-  mtg: These methods have no implementation in the current webclient so I have skipped them for the time being
-  // unused
-  notifications() {
-  }
-
-  // unused
-  getPubKeys() {
-  }
-
-  // unused
-  ownerUnread() {
-  }
-
-  // unused
-  registerDevice() {
-  }
-   */
-
-} /* class ChannelAPI */
-//#region - class ChannelAPI - TODO implement these methods
-
-/**
-   * Snackabra is the main class for interacting with the Snackable backend.
+/**  Snackabra
+   * The main class for interacting with SB servers
    * 
    * It is a singleton, so you can only have one instance of it.
    * It is guaranteed to be synchronous, so you can use it right away.
@@ -3615,6 +3545,8 @@ class ChannelApi {
   *
   */
 class Snackabra {
+  // xTODO: multiple storage and multiple channel connections
+  //        channels tell us what storage to use
   #storage!: StorageApi
   #channel!: Channel
   // #defaultIdentity = new Identity();
@@ -3656,12 +3588,13 @@ class Snackabra {
   connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
     if ((DBG) && (key)) console.log(key)
     if ((DBG) && (channelId)) console.log(channelId)
-    return new Promise<ChannelSocket>((resolve) => {
-      // if we have a preferred server then we do not have to wait for 'ready'
-
-      if (this.#preferredServer) resolve(new ChannelSocket(this.#preferredServer!, onMessage, key, channelId))
-      // otherwise we have to wait for at least one of them to be 'ready', or we won't know which one to use
-      else resolve(Promise.any(SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId)).ready)))
+    return new Promise<ChannelSocket>(async (resolve) => {
+      if (this.#preferredServer)
+        // if we have a preferred server then we do not have to wait for 'ready'
+        resolve(new ChannelSocket(this.#preferredServer!, onMessage, key, channelId))
+      else
+        // otherwise we have to wait for at least one of them to be 'ready', or we won't know which one to use
+        resolve(Promise.any(SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId)).ready)))
     })
   }
 
@@ -3748,7 +3681,7 @@ export type {
 
 export {
   Channel,
-  ChannelApi,
+  // ChannelApi,
   SBMessage,
   Snackabra,
   SBCrypto,

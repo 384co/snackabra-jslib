@@ -1,11 +1,16 @@
 import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js';
 import { assert } from './test_utils.js';
-import { Snackabra, SBMessage, ChannelEndpoint, ChannelApi } from '../dist/snackabra.js';
+import { Snackabra, SBMessage, ChannelEndpoint } from '../dist/snackabra.js';
 const TRACE_CHANNELS = jslibVerbose;
 function logTest(msg) {
     const z = getElement('channel_tests');
     z.innerHTML += msg + "<br/><br/>";
-    console.log('==== LogTest: ' + msg);
+    if (msg.includes('ERROR')) {
+        console.warn('test_channels: ' + msg);
+    }
+    else {
+        console.log('test_channels: ' + msg);
+    }
 }
 function getElement(s) {
     const z = document.getElementById(s);
@@ -17,160 +22,197 @@ function getElement(s) {
         return z;
     }
 }
+console.log("\n\n-- test_channels loaded --\n\n");
+logTest("==== creating SB for use in channel tests (see console) ====");
 const globalSB = new Snackabra(sb_config, jslibVerbose);
-logTest("SB for channel tests created");
-console.log("SB server (for channel tests) created:");
 console.log(globalSB);
-let globalChannelHandle;
-let globalChannelAPI;
-let secondaryGlobalChannelAPI;
-let globalChannelSocket;
+const globalState = {
+    channelHandle: null,
+    channelEndpoint: null,
+    secondEndpoint: null,
+    channelSocket: null,
+    test14: false,
+    noDepency: true,
+};
 async function test09() {
-    logTest("RUNNING TEST 09: create channel");
-    try {
-        const sbServer = sb_config;
-        console.log("Using these servers:");
-        console.log(sbServer);
-        globalChannelHandle = await globalSB.create(sbServer, serverPassword);
-        logTest("New channel created");
-        console.log(globalChannelHandle);
-    }
-    catch (e) {
-        logTest("ERROR: test09 failed");
-        console.log(e);
-    }
+    const sbServer = sb_config;
+    console.log("Using these servers:");
+    console.log(sbServer);
+    globalState.channelHandle = await globalSB.create(sbServer, serverPassword);
+    logTest("New channel created");
+    console.log(globalState.channelHandle);
 }
 async function test10() {
-    if (!globalChannelHandle)
-        await test09();
-    assert(globalChannelHandle, "globalChannelHandle is null (after test09)");
-    logTest("RUNNING TEST 10: connect to socket");
-    let c = await globalSB.connect((m) => { console.log('got message:'); console.log(m); }, globalChannelHandle.key, globalChannelHandle.channelId);
-    c.enableTrace = TRACE_CHANNELS;
-    c.userName = "TestBot";
-    (new SBMessage(c, "Hello from TestBot!")).send()
-        .then((c) => { console.log(`test message sent! (${c})`); });
-    let messageCount = 0;
-    getElement('anotherMessage').onclick = (async () => {
-        messageCount++;
-        let sbm = new SBMessage(c, `message number ${messageCount} from test10!`);
-        logTest(`==== sending message number ${messageCount} (on console)`);
-        console.log(`==== sending message number ${messageCount}:`);
-        console.log(sbm);
-        await c.send(sbm)
-            .then((c) => console.log(`back from sending message ${messageCount} (${c})`));
+    return new Promise(async (resolve, reject) => {
+        assert(globalState.channelHandle, "global channelHandle is null");
+        let c = await globalSB.connect((m) => { console.log('got message:'); console.log(m); }, globalState.channelHandle.key, globalState.channelHandle.channelId);
+        c.enableTrace = TRACE_CHANNELS;
+        c.userName = "TestBot";
+        globalState.channelSocket = c;
+        logTest("global channel (socket) is ready, and we are about to send a message; socket:");
+        console.log(globalState.channelSocket);
+        let messageCount = 0;
+        getElement('anotherMessage').onclick = (async () => {
+            messageCount++;
+            let additionalMessageSent = false;
+            let sbm = new SBMessage(c, `message number ${messageCount} from test10!`);
+            logTest(`==== sending message number ${messageCount} (on console)`);
+            console.log(sbm);
+            c.send(sbm)
+                .then((c) => {
+                logTest(`... back from sending message ${messageCount} (${c})`);
+                additionalMessageSent = true;
+            });
+            setTimeout(() => {
+                if (!additionalMessageSent) {
+                    logTest(`ERROR: message ${messageCount} was not sent`);
+                }
+                else {
+                    logTest(`SUCCESS: message ${messageCount} was sent`);
+                }
+            }, 500);
+        });
+        let firstMessageWasSent = false;
+        (new SBMessage(c, "Hello from TestBot!")).send()
+            .then((c) => {
+            console.log(`test message sent! (${c})`);
+            firstMessageWasSent = true;
+            resolve("first message was directly sent");
+        });
+        setTimeout(() => {
+            if (!firstMessageWasSent) {
+                logTest("ERROR: first message was not sent");
+                reject("message was not sent");
+            }
+            else {
+                logTest("SUCCESS: first message was eventually sent");
+            }
+        }, 500);
     });
-    globalChannelSocket = c;
-    logTest("global channel (socket) is ready");
-    console.log(globalChannelSocket);
 }
 async function test11() {
-    if (!globalChannelHandle)
-        await test09();
-    assert(globalChannelHandle, "globalChannelHandle is null (after test09)");
-    logTest("RUNNING TEST 11: test channel api (without socket)");
-    const channelEndpoint = new ChannelEndpoint(sb_config, globalChannelHandle.key, globalChannelHandle.channelId);
+    const channelEndpoint = new ChannelEndpoint(sb_config, globalState.channelHandle.key, globalState.channelHandle.channelId);
     await channelEndpoint.ready;
-    logTest("channel (endpoint) is ready");
-    console.log(channelEndpoint);
-    globalChannelAPI = new ChannelApi(channelEndpoint);
+    globalState.channelEndpoint = channelEndpoint;
     logTest("global channel (api) is ready");
-    console.log(globalChannelAPI);
+    console.log(globalState.channelEndpoint);
 }
 async function test12() {
-    if (!globalChannelAPI) {
-        logTest("No channel api - will run test11 automatically");
-        await test11();
-    }
-    logTest("RUNNING TEST 12: get api endpoint and some basic capacity (budding) tests");
-    assert(globalChannelAPI, "globalChannelAPI is null");
-    const storageLimit = await globalChannelAPI.getStorageLimit();
+    const storageLimit = await globalState.channelEndpoint.getStorageLimit();
     logTest(`storage limit is ${storageLimit}`);
     console.log(`storage limit is:`);
     console.log(storageLimit);
 }
 async function test13() {
-    if (!globalChannelAPI)
-        await test11();
-    assert(globalChannelAPI, "globalChannelAPI is null");
-    logTest("RUNNING TEST 13: 'budd' a new channel (take full budget)");
-    assert(globalChannelAPI, "globalChannelAPI is null");
-    const newChannel = await globalChannelAPI.budd();
+    const newChannel = await globalState.channelEndpoint.budd();
     logTest(`new channel is ${newChannel.channelId}`);
     console.log('swapping global channel handle to new channel');
-    globalChannelHandle = newChannel;
-    globalChannelAPI = undefined;
+    globalState.channelHandle = newChannel;
+    globalState.channelEndpoint = null;
 }
 async function test14() {
-    if (!globalChannelHandle)
-        await test09();
-    logTest("RUNNING TEST 14: create a small budded channel");
-    const channelEndpoint = new ChannelEndpoint(sb_config, globalChannelHandle.key, globalChannelHandle.channelId);
-    globalChannelAPI = new ChannelApi(channelEndpoint);
-    let { storageLimit } = await globalChannelAPI.getStorageLimit();
+    const channelEndpoint = new ChannelEndpoint(sb_config, globalState.channelHandle.key, globalState.channelHandle.channelId);
+    globalState.channelEndpoint = channelEndpoint;
+    let { storageLimit } = await globalState.channelEndpoint.getStorageLimit();
     logTest(`mother budget is ${storageLimit}`);
     assert(storageLimit > 0, "mother budget is zero?");
-    const newChannel = await globalChannelAPI.budd({ storage: 64 * 1024 * 1024 });
+    const newChannel = await globalState.channelEndpoint.budd({ storage: 64 * 1024 * 1024 });
     logTest(`new channel is ${newChannel.channelId}`);
-    const newChannelApi = new ChannelApi(new ChannelEndpoint(sb_config, newChannel.key, newChannel.channelId));
-    secondaryGlobalChannelAPI = newChannelApi;
+    let newChannelApi = new ChannelEndpoint(sb_config, newChannel.key, newChannel.channelId);
+    globalState.secondEndpoint = newChannelApi;
     const { motherChannel } = await newChannelApi.getMother();
     logTest(`new channel is tracking mother ${motherChannel}`);
     ({ storageLimit } = await newChannelApi.getStorageLimit());
     logTest(`new channel budget is ${storageLimit}`);
+    globalState.test14 = true;
 }
 async function test15() {
-    if (!secondaryGlobalChannelAPI)
-        await test14();
     const testAmount = 64 * 1024 * 1024;
     logTest(`RUNNING TEST 15: move ${testAmount / (1024 * 1024)} MiB to new budded channel`);
-    let { storageLimit } = await globalChannelAPI.getStorageLimit();
+    let { storageLimit } = await globalState.channelEndpoint.getStorageLimit();
     logTest(`mother budget is ${storageLimit}`);
-    ({ storageLimit } = await secondaryGlobalChannelAPI.getStorageLimit());
+    ({ storageLimit } = await globalState.secondEndpoint.getStorageLimit());
     logTest(`child budget is ${storageLimit}`);
     const childBudget1 = storageLimit;
-    await globalChannelAPI.budd({ storage: 64 * 1024 * 1024, targetChannel: secondaryGlobalChannelAPI.channelId });
-    ({ storageLimit } = await globalChannelAPI.getStorageLimit());
+    await globalState.channelEndpoint.budd({ storage: 64 * 1024 * 1024, targetChannel: globalState.secondEndpoint.channelId });
+    ({ storageLimit } = await globalState.channelEndpoint.getStorageLimit());
     logTest(`after transfer, mother budget is ${storageLimit}`);
-    ({ storageLimit } = await secondaryGlobalChannelAPI.getStorageLimit());
+    ({ storageLimit } = await globalState.channelEndpoint.getStorageLimit());
     logTest(`after transfer, child budget is ${storageLimit}`);
     const childBudget2 = storageLimit;
-    if (childBudget2 - childBudget1 != testAmount)
-        logTest(`ERROR: child budget did not increase by ${testAmount} (it increased by ${childBudget2 - childBudget1})`);
-    else
+    if (childBudget2 - childBudget1 != testAmount) {
+        let errMsg = `ERROR: child budget did not increase by ${testAmount} (it increased by ${childBudget2 - childBudget1})`;
+        logTest(errMsg);
+        return errMsg;
+    }
+    else {
         logTest(`SUCCESS: child budget increased by ${testAmount}`);
+        return '';
+    }
 }
-function installTestButton(name, func) {
+function installTestButton(name, id, func) {
     const button = document.createElement('button');
-    button.innerText = 'CHANNEL:\n' + name;
+    if (id)
+        button.innerText = `CHANNEL (T${id}) :\n` + name;
+    else
+        button.innerText = name;
     button.onclick = func;
-    document.body.appendChild(button);
+    button.style.margin = "2px 2px";
     const testButtons = document.getElementById('channelTestButtons');
-    const testDiv = document.createElement('div');
-    testDiv.id = name;
-    testDiv.appendChild(button);
     if (testButtons)
-        testButtons.appendChild(testDiv);
+        testButtons.appendChild(button);
     else
         console.log('testButtons not found');
 }
-installTestButton('create a channel', test09);
-installTestButton('connect to socket', test10);
-installTestButton('test channel api (without socket)', test11);
-installTestButton('get api endpoint and some basic capacity (budding) tests', test12);
-installTestButton('"budd" a new channel', test13);
-installTestButton('create a small budded channel', test14);
-installTestButton('move 64MB to new budded channel', test15);
-async function testAll() {
-    await test09();
-    await test10();
-    await test11();
-    await test12();
-    await test13();
-    await test14();
-    await test15();
+const arrayOfTests = [
+    { id: 9, name: 'create a channel', func: test09, dependency: 'noDependency', depFunc: null },
+    { id: 10, name: 'connect to socket', func: test10, dependency: 'channelHandle', depFunc: 9 },
+    { id: 11, name: 'test channel api (without socket)', func: test11, dependency: 'channelHandle', depFunc: 9 },
+    { id: 12, name: 'get api endpoint and some\nbasic capacity (budding) tests', func: test12, dependency: 'channelEndpoint', depFunc: 11 },
+    { id: 13, name: '"budd" a new channel', func: test13, dependency: 'channelEndpoint', depFunc: 11 },
+    { id: 14, name: 'create a small\nbudded channel', func: test14, dependency: 'channelHandle', depFunc: 13 },
+    { id: 15, name: 'move 64MB to new\nbudded channel', func: test15, dependency: 'test14', depFunc: 14 },
+];
+async function runTest(id) {
+    const test = arrayOfTests.find((t) => t.id === id);
+    if (!test)
+        throw new Error(`ERROR: test ${id} not found`);
+    console.log(`starting test ${id}: ${test.name}`);
+    const dependencyMet = globalState[test.dependency] !== null;
+    if (!dependencyMet) {
+        console.log(`... but first running test ${test.depFunc} (dependency '${test.dependency}' not met)`);
+        if (test.depFunc) {
+            await runTest(test.depFunc);
+            assert(test.dependency, `... dependency for test ${id} not met after running dependency function`);
+        }
+        else {
+            throw new Error(`ERROR: test ${id} has no dependency function, but dependency '${test.dependency}' not met (?)`);
+        }
+    }
+    logTest(`==== running test ${id}: ${test.name} ====`);
+    test.func()
+        .then((r) => {
+        if ((r) && r.includes('ERROR')) {
+            logTest(`******  ERROR: test ${id} failed: ${r}  ******`);
+        }
+        else {
+            logTest(`++++ test ${id} passed ++++`);
+        }
+    })
+        .catch((e) => {
+        logTest(`******  ERROR: test ${id} failed (${e})  ******`);
+        console.warn(e);
+        return;
+    });
 }
-installTestButton('ALL CHANNEL TESTS', testAll);
+for (const test of arrayOfTests) {
+    installTestButton(test.name, test.id, () => runTest(test.id));
+}
+async function testAll() {
+    for (const test of arrayOfTests)
+        await runTest(test.id);
+}
+installTestButton('RUN ALL\nCHANNEL TESTS', 0, testAll);
 if (autoRun) {
     testAll();
 }

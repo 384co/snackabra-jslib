@@ -229,43 +229,64 @@ declare class SBMessage {
 }
 declare abstract class Channel extends SB384 {
     #private;
-    ready: Promise<Channel>;
     channelReady: Promise<Channel>;
     motd?: string;
     locked?: boolean;
     owner: boolean;
     admin: boolean;
+    adminData?: Dictionary<any>;
     verifiedGuest: boolean;
     userName: string;
-    abstract send(m: SBMessage | string, messageType?: 'string' | 'SBMessage'): Promise<string>;
-    abstract adminData?: Dictionary<any>;
+    abstract send(message: SBMessage): Promise<string>;
     constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string);
-    importKeys(keyStrings: ChannelKeyStrings): Promise<void>;
     get keys(): ChannelKeys;
     get sbServer(): SBServer;
     get readyFlag(): boolean;
-    get api(): ChannelApi;
+    get api(): this;
     get channelId(): string | undefined;
     get channelSignKey(): CryptoKey;
-}
-export declare class ChannelEndpoint extends Channel {
-    adminData?: Dictionary<any>;
-    constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string);
-    send(_m: SBMessage | string, _messageType?: 'string' | 'SBMessage'): Promise<string>;
-    set onMessage(_f: CallableFunction);
+    getLastMessageTimes(): Promise<unknown>;
+    getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
+    updateCapacity(capacity: number): Promise<any>;
+    getCapacity(): Promise<any>;
+    getStorageLimit(): Promise<any>;
+    getMother(): Promise<any>;
+    getJoinRequests(): Promise<any>;
+    isLocked(): Promise<boolean>;
+    setMOTD(motd: string): Promise<any>;
+    getAdminData(): Promise<ChannelAdminData>;
+    downloadData(): Promise<unknown>;
+    uploadChannel(channelData: ChannelData): Promise<any>;
+    authorize(ownerPublicKey: Dictionary<any>, serverSecret: string): Promise<any>;
+    postPubKey(_exportable_pubKey: JsonWebKey): Promise<{
+        success: boolean;
+    }>;
+    storageRequest(byteLength: number): Promise<Dictionary<any>>;
+    lock(): Promise<unknown>;
+    acceptVisitor(pubKey: string): Promise<unknown>;
+    ownerKeyRotation(): void;
+    budd(): Promise<SBChannelHandle>;
+    budd(options: {
+        keys?: JsonWebKey;
+        storage?: number;
+        targetChannel?: SBChannelId;
+    }): Promise<SBChannelHandle>;
 }
 export declare class ChannelSocket extends Channel {
     #private;
     ready: Promise<ChannelSocket>;
-    adminData?: ChannelAdminData;
     constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string);
-    close: () => void;
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set onMessage(f: (m: ChannelMessage) => void);
     get onMessage(): (m: ChannelMessage) => void;
     set enableTrace(b: boolean);
     send(msg: SBMessage | string): Promise<string>;
-    get exportable_owner_pubKey(): JsonWebKey | null;
+    get exportable_owner_pubKey(): CryptoKey;
+}
+export declare class ChannelEndpoint extends Channel {
+    constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string);
+    send(_m: SBMessage | string, _messageType?: 'string' | 'SBMessage'): Promise<string>;
+    set onMessage(_f: CallableFunction);
 }
 export declare class SBObjectHandleClass {
     #private;
@@ -306,37 +327,6 @@ declare class StorageApi {
     fetchData(h: SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
     retrieveImage(imageMetaData: ImageMetaData, controlMessages: Array<ChannelMessage>, imageId?: string, imageKey?: string, imageType?: SBObjectType): Promise<Dictionary<any>>;
 }
-declare class ChannelApi {
-    #private;
-    constructor(channel: Channel);
-    getLastMessageTimes(): Promise<unknown>;
-    getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
-    get channelId(): string | undefined;
-    updateCapacity(capacity: number): Promise<any>;
-    getCapacity(): Promise<any>;
-    getStorageLimit(): Promise<any>;
-    getMother(): Promise<any>;
-    getJoinRequests(): Promise<any>;
-    isLocked(): Promise<boolean>;
-    setMOTD(motd: string): Promise<any>;
-    getAdminData(): Promise<ChannelAdminData>;
-    downloadData(): Promise<unknown>;
-    uploadChannel(channelData: ChannelData): Promise<any>;
-    authorize(ownerPublicKey: Dictionary<any>, serverSecret: string): Promise<any>;
-    postPubKey(_exportable_pubKey: JsonWebKey): Promise<{
-        success: boolean;
-    }>;
-    storageRequest(byteLength: number): Promise<Dictionary<any>>;
-    lock(): Promise<unknown>;
-    acceptVisitor(pubKey: string): Promise<unknown>;
-    ownerKeyRotation(): void;
-    budd(): Promise<SBChannelHandle>;
-    budd(options: {
-        keys?: JsonWebKey;
-        storage?: number;
-        targetChannel?: SBChannelId;
-    }): Promise<SBChannelHandle>;
-}
 declare class Snackabra {
     #private;
     constructor(args?: SBServer, DEBUG?: boolean);
@@ -347,7 +337,7 @@ declare class Snackabra {
     get crypto(): SBCrypto;
 }
 export type { ChannelData, ChannelKeyStrings };
-export { Channel, ChannelApi, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version };
+export { Channel, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version };
 export declare var SB: {
     Snackabra: typeof Snackabra;
     SBMessage: typeof SBMessage;
