@@ -1058,12 +1058,16 @@ class Channel extends SB384 {
     }
     async #setKeys(k) {
         this.#channelKeys = k;
+        console.log("set channelkeys to 'k':");
+        console.log(k);
         _sb_assert(this.#channelKeys, "Channel.importKeys: no channel keys (?)");
         _sb_assert(this.#channelKeys.publicSignKey, "Channel.importKeys: no public sign key (?)");
         _sb_assert(this.privateKey, "Channel.importKeys: no private key (?)");
         this.#channelSignKey = await sbCrypto.deriveKey(this.privateKey, this.#channelKeys.publicSignKey, 'HMAC', false, ['sign', 'verify']);
     }
     async #loadKeys(keyStrings) {
+        console.log("loading keys:");
+        console.log(keyStrings);
         await this.#setKeys(await sbCrypto.channelKeyStringsToCryptoKeys(keyStrings));
     }
     get keys() { return this.#channelKeys; }
@@ -1089,7 +1093,12 @@ class Channel extends SB384 {
         });
     }
     getOldMessages(currentMessagesLength = 100, paginate = false) {
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
+            if (!this.#ChannelReadyFlag) {
+                console.log("Channel.getOldMessages: channel not ready (we will wait)");
+                await (this.channelReady);
+                _sb_assert(this.#channelKeys, "Channel.getOldMessages: no channel keys (?) despite waiting");
+            }
             let cursorOption = '';
             if (paginate)
                 cursorOption = '&cursor=' + this.#cursor;
@@ -1100,18 +1109,19 @@ class Channel extends SB384 {
                     reject(new Error('Network response was not OK'));
                 return response.json();
             }).then((messages) => {
-                if (DBG) {
+                if (true) {
                     console.log("getOldMessages");
-                    console.log(structuredClone(Object.values(messages)));
+                    console.log(messages);
                 }
                 Promise.all(Object
                     .keys(messages)
                     .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-                    .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.keys)))
+                    .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.#channelKeys)))
                     .then((decryptedMessageArray) => {
                     let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
                     if (lastMessage)
                         this.#cursor = lastMessage._id || lastMessage.id || '';
+                    console.log(decryptedMessageArray);
                     resolve(decryptedMessageArray);
                 });
             }).catch((e) => {
@@ -1308,9 +1318,6 @@ __decorate([
     Memoize,
     Ready
 ], Channel.prototype, "channelSignKey", null);
-__decorate([
-    Ready
-], Channel.prototype, "getOldMessages", null);
 __decorate([
     Ready
 ], Channel.prototype, "updateCapacity", null);

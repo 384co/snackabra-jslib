@@ -2075,6 +2075,8 @@ abstract class Channel extends SB384 {
   /** @private */
   async #setKeys(k: ChannelKeys) {
     this.#channelKeys = k
+    console.log("set channelkeys to 'k':")
+    console.log(k)
     _sb_assert(this.#channelKeys, "Channel.importKeys: no channel keys (?)")
     _sb_assert(this.#channelKeys!.publicSignKey, "Channel.importKeys: no public sign key (?)")
     _sb_assert(this.privateKey, "Channel.importKeys: no private key (?)")
@@ -2085,6 +2087,8 @@ abstract class Channel extends SB384 {
   
   /** @private */
   async #loadKeys(keyStrings: ChannelKeyStrings): Promise<void> {
+    console.log("loading keys:")
+    console.log(keyStrings)
     await this.#setKeys(await sbCrypto.channelKeyStringsToCryptoKeys(keyStrings))
   }
 
@@ -2129,12 +2133,18 @@ abstract class Channel extends SB384 {
    *       is ready, otherwise the keys might not be ... currently
    *       before calling this, make a ready check on the socket
    */
-  @Ready getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
+  getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
     // TODO: yeah the below situation needs to be chased down
-    // console.log("warning: this might throw an exception on keys() if ChannelSocket is not ready")
+    // console.log("warning: this might throw an exception on keys() if Channel is not ready")
     // xTODO: convert to new API call model
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       // const encryptionKey = this.#channel.keys.encryptionKey
+      // make sure channel is ready
+      if (!this.#ChannelReadyFlag) {
+        console.log("Channel.getOldMessages: channel not ready (we will wait)")
+        await (this.channelReady)
+        _sb_assert(this.#channelKeys, "Channel.getOldMessages: no channel keys (?) despite waiting")
+      }
       // TODO: we want to cache (merge) these messages into a local cached list (since they are immutable)
       let cursorOption = '';
       if (paginate)
@@ -2145,19 +2155,21 @@ abstract class Channel extends SB384 {
         if (!response.ok) reject(new Error('Network response was not OK'));
         return response.json();
       }).then((messages) => {
-        if (DBG) {
+        if (true) {
           console.log("getOldMessages")
-          console.log(structuredClone(Object.values(messages)))
+          // console.log(structuredClone(Object.values(messages)))
+          console.log(messages)
         }
         Promise.all(Object
           .keys(messages)
           .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
           // .map((v) => { console.log("#*#*#*#*#*#*#"); console.log(structuredClone(messages[v].encrypted_contents)); return v; })
-          .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.keys)))
+          .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.#channelKeys!)))
           .then((decryptedMessageArray) => {
             let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
             if (lastMessage)
               this.#cursor = lastMessage._id || lastMessage.id || '';
+            console.log(decryptedMessageArray)
             resolve(decryptedMessageArray)
           })
       }).catch((e: Error) => {
