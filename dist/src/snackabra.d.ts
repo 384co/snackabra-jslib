@@ -275,6 +275,7 @@ declare abstract class Channel extends SB384 {
 export declare class ChannelSocket extends Channel {
     #private;
     ready: Promise<ChannelSocket>;
+    channelSocketReady: Promise<ChannelSocket>;
     constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string);
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set onMessage(f: (m: ChannelMessage) => void);

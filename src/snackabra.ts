@@ -27,10 +27,6 @@ const version = '1.1.x'
 //#region Interfaces - Types
 
 /**
- * Interfaces
- */
-
-/**
  * SBChannelHandle
  *
  * Complete descriptor of a channel. 'key' is stringified 'jwk' key.
@@ -82,12 +78,6 @@ const SBKnownServers: Array<SBServer> = [
     storage_server: 'https://storage.384co.workers.dev',
     shard_server: 'https://shard.3.8.4.land'
   },
-  // {
-  //   // local (miniflare) servers
-  //   channel_server: 'http://localhost:4001',
-  //   channel_ws: 'ws://localhost:4001',
-  //   storage_server: 'http://localhost:4000'
-  // },
   {
     // This is both "384.chat" (production) and "sn.ac"
     channel_server: 'https://r.384co.workers.dev',
@@ -312,7 +302,7 @@ export interface EncryptedContentsBin {
 }
 
 // set by creation of Snackabra object
-var DBG = false;
+var DBG = false; // this should not be checked in as 'true'
 
 /**
  * Force EncryptedContents object to binary (interface
@@ -2177,7 +2167,6 @@ abstract class Channel extends SB384 {
     });
   }
 
-  // ChannelApi.#callApi
   async #callApi(path: string): Promise<any>
   async #callApi(path: string, body: any): Promise<any>
   async #callApi(path: string, body?: any): Promise<any> {
@@ -2203,15 +2192,18 @@ abstract class Channel extends SB384 {
         init.body = JSON.stringify(body);
       await (this.ready)
       SBFetch(this.#channelServer + this.channelId + path, init)
-        .then((response: Response) => {
-          if (!response.ok) reject(new Error('Network response was not OK'))
-          return response.json()
+        .then(async (response: Response) => {
+          const retValue = await response.json()
+          if ((!response.ok) || (retValue.error)) {
+            let apiErrorMsg = 'Network or Server error on Channel API call'
+            if (response.status) apiErrorMsg += ' [' + response.status + ']'
+            if (retValue.error) apiErrorMsg += ': ' + retValue.error
+            reject(new Error(apiErrorMsg))
+          } else {
+            resolve(retValue)
+          }
         })
-        .then((data: Dictionary<any>) => {
-          if (data.error) reject(new Error(data.error))
-          else resolve(data)
-        })
-        .catch((e: Error) => { reject("ChannelApi Error [2]: " + WrapError(e)) })
+        .catch((e: Error) => { reject("ChannelApi (SBFetch) Error [2]: " + WrapError(e)) })
     })
   }
 
@@ -2452,12 +2444,16 @@ abstract class Channel extends SB384 {
  */
 export class ChannelSocket extends Channel {
   ready: Promise<ChannelSocket>
+  channelSocketReady: Promise<ChannelSocket>
   #ChannelSocketReadyFlag: boolean = false // must be named <class>ReadyFlag
+
   #ws: WSProtocolOptions
   #sbServer: SBServer
-  #onMessage: (m: ChannelMessage) => void  // CallableFunction // the user message handler
-  #ack: Dictionary<any> = []
-  #traceSocket: boolean = false
+  #onMessage: (m: ChannelMessage) => void  // the user message handler
+  #ack: Map<string, (value: string | PromiseLike<string>) => void> = new Map()
+  #traceSocket: boolean = false // should not be true in production
+  #resolveFirstMessage: (value: ChannelSocket | PromiseLike<ChannelSocket>) => void = () => { _sb_exception('L2461', 'this should never be called') }
+  #firstMessageEventHandlerReference: (e: MessageEvent<any>) => void = (_e: MessageEvent<any>) => { _sb_exception('L2462', 'this should never be called') }
 
   /**
    * 
@@ -2483,6 +2479,14 @@ export class ChannelSocket extends Channel {
    * connection. You can check status with channelSocket.status if you
    * like, but it shouldn't be necessary.
    * 
+   * Messages are delivered as type ChannelMessage. Usually they are
+   * simple blobs of data that are encrypted: the ChannelSocket will
+   * decrypt them for you. It also handles a simple ack/nack mechanism
+   * with the server transparently.
+   * 
+   * Be aware that if ChannelSocket doesn't know how to handle a certain
+   * message, it will generally just forward it to you as-is. 
+   * 
    * @param sbServer 
    * @param onMessage 
    * @param key 
@@ -2501,20 +2505,56 @@ export class ChannelSocket extends Channel {
       closed: false,
       timeout: 2000
     }
-    this.ready = this.#readyPromise()
+    this.ready = this.channelSocketReady = this.#channelSocketReadyFactory()
   }
 
-  // close = () => {
-  //   if (this.#ws.websocket) return this.#ws.websocket.close()
-  // }
+  #channelSocketReadyFactory() {
+    return new Promise<ChannelSocket>((resolve, reject) => {
+      this.#resolveFirstMessage = resolve
+      const url = this.#ws.url
+      if (DBG) { console.log("++++++++ readyPromise() has url:"); console.log(url); }
+      if (!this.#ws.websocket) this.#ws.websocket = new WebSocket(this.#ws.url)
+      if (this.#ws.websocket.readyState === 3) {
+        // it's been closed
+        this.#ws.websocket = new WebSocket(url)
+      } else if (this.#ws.websocket.readyState === 2) {
+        console.warn("STRANGE - trying to use a ChannelSocket that is in the process of closing ...")
+        this.#ws.websocket = new WebSocket(url)
+      }
+      this.#ws.websocket.addEventListener('open', () => {
+        this.#ws.closed = false
+        // need to make sure parent is ready (and has keys)
+        this.channelReady.then(() => {
+          _sb_assert(this.exportable_pubKey, "ChannelSocket.readyPromise(): no exportable pub key?")
+          this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) }
+          if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
+          this.#ws.websocket!.send(JSON.stringify(this.#ws.init)) // this should trigger a response with keys
+        })
+      })
+      this.#firstMessageEventHandlerReference = this.#firstMessageEventHandler.bind(this)
+      this.#ws.websocket.addEventListener('message', this.#firstMessageEventHandlerReference);
+      this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
+        this.#ws.closed = true
+        if (!e.wasClean) {
+          console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.#sbServer.channel_server}`)
+        } else {
+          if (e.reason.includes("does not have an owner"))
+            reject(`No such channel on this server (${this.#sbServer.channel_server})`)
+          else console.log('ChannelSocket() was closed (cleanly): ', e.reason)
+        }
+        reject('wbSocket() closed before it was opened (?)')
+      })
+      this.#ws.websocket.addEventListener('error', (e) => {
+        this.#ws.closed = true
+        console.log('ChannelSocket() error: ', e)
+        reject('ChannelSocket creation error (see log)')
+      })
+    })
 
-  /* ChannelSocket
-    internal to channelsocket: this always gets all messages; certain
-    protocol aspects are low-level (independent of 'app') and those
-    are handled here. others are never delivered 'raw', for example
-    encrypted messages are always decrypted */
+  }
+
   /** @private */
-  #processMessage(msg: any) {
+  async #processMessage(msg: any) {
     let m = msg.data
     if (this.#traceSocket) {
       console.log("... raw unwrapped message:")
@@ -2531,25 +2571,43 @@ export class ChannelSocket extends Channel {
     const message = data as ChannelMessage
     try {
       // messages are structured a bit funky for historical reasons
-      let m01 = Object.entries(message)[0][1]
-      if ((data.ack) || (m01.ack) || (m01.type === 'ack')) { // some historical funkiness
-        // FIRST we process ack/nack mechanism (such as it is)
-        if (this.#traceSocket) console.log("++++++++ #processMessage: Received 'ack'")
-        const ack_id = m01._id
-        const r = this.#ack[ack_id]
+      const m01 = Object.entries(message)[0][1]
+
+      // TODO: remind me why we needed a separate 'ack' mechanism?
+      // if ((data.ack) || (m01.ack) || (m01.type === 'ack')) { // some historical funkiness
+      //   // FIRST we process ack/nack mechanism (such as it is)
+      //   if (this.#traceSocket) console.log("++++++++ #processMessage: Received 'ack'")
+      //   const ack_id = m01._id
+      //   const r = this.#ack[ack_id]
+      //   if (r) {
+      //     if (this.#traceSocket) console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`)
+      //     delete this.#ack[ack_id]
+      //     r("success") // resolve
+      //   } else {
+      //     console.warn(`WARNING: did not find matching ack for id ${ack_id} (?)`)
+      //   }
+      // } else if ((data.nack) || (m01.nack) || (m01.type === 'nack')) {
+      //   console.warn(`++++++++ #processMessage: Nack received on message ${m01._id}`)
+      //   this.#ws.closed = true
+      //   // if (this.#websocket) this.#websocket.close()  // not needed
+      // } else
+
+      if (Object.keys(m01)[0] === 'encrypted_contents') {
+        console.log("++++++++ #processMessage: received message:")
+        console.log(m01.encrypted_contents.content)
+    
+        // check if this message is one that we've recently sent
+        const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(m01.encrypted_contents.content))
+        const ack_id = arrayBufferToBase64(hash)
+        console.log("Received message with hash:")
+        console.log(ack_id)
+        const r = this.#ack.get(ack_id)
         if (r) {
           if (this.#traceSocket) console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`)
-          delete this.#ack[ack_id]
-          r("success") // resolve
-        } else {
-          console.warn(`WARNING: did not find matching ack for id ${ack_id} (?)`)
+          this.#ack.delete(ack_id)
+          r("success") // we first resolve that outstanding send (and then also deliver message)
         }
-      } else if ((data.nack) || (m01.nack) || (m01.type === 'nack')) {
-        console.warn(`++++++++ #processMessage: Nack received on message ${m01._id}`)
-        this.#ws.closed = true
-        // if (this.#websocket) this.#websocket.close()  // not needed
-      } else if (Object.keys(m01)[0] === 'encrypted_contents') {
-        // NEXT we deal with the common case of encrypted messages
+
         const m00 = Object.entries(data)[0][0]
         // the 'iv' field as incoming should be base64 encoded, with 16 b64
         // characters translating here to 12 bytes
@@ -2582,92 +2640,39 @@ export class ChannelSocket extends Channel {
     }
   }
 
-  /* ChannelSocket */
-  /** @private */
-  #readyPromise(): Promise<ChannelSocket> {
-    const url = this.#ws.url
-    let insideFirstMessageHandler = false
+  #insideFirstMessageHandler(e: MessageEvent) {
+    console.warn("WARNING: firstMessageEventHandler() called recursively (?)")
+    console.warn(e)
+  }
 
-    return new Promise<ChannelSocket>((resolve, reject) => {
-      let rememberThis = this
-      if (DBG) { console.log("++++++++ readyPromise() has url:"); console.log(url); }
-      if (!this.#ws.websocket) this.#ws.websocket = new WebSocket(this.#ws.url)
-      if (this.#ws.websocket.readyState === 3) {
-        // it's been closed
-        this.#ws.websocket = new WebSocket(url)
-      } else if (this.#ws.websocket.readyState === 2) {
-        console.log("STRANGE - trying to use a ChannelSocket that is in the process of closing ...")
-        this.#ws.websocket = new WebSocket(url)
-      }
-
-      async function firstMessageEventHandler(e: MessageEvent) {
-        if (insideFirstMessageHandler) {
-          // safeguarding
-          console.warn("WARNING: firstMessageEventHandler() called recursively (?)")
-          return
-        }
-        insideFirstMessageHandler = true
-
-        // first time should be a handshake of keys, they should match what we have;
-        // there may be other information in the message (eg motd, roomLocked)
-        if (DBG) { console.log("++++++++ readyPromise() received ChannelKeysMessage:"); console.log(e); }
-
-        const message = jsonParseWrapper(e.data, 'L2239') as ChannelKeysMessage
-        if (DBG) console.log(message)
-        _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)')
-        rememberThis.motd = message.motd
-        rememberThis.locked = message.roomLocked
-        const exportable_owner_pubKey = jsonParseWrapper(message.keys.ownerKey, 'L2246')
-        // just small sanity check on owner key (x marks the spot)
-        _sb_assert(rememberThis.keys.ownerPubKeyX === exportable_owner_pubKey.x, 'ChannelSocket.readyPromise(): owner key mismatch??')
-        _sb_assert(rememberThis.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)')
-        // this sets us as owner only if the keys match
-        rememberThis.owner = sbCrypto.compareKeys(exportable_owner_pubKey, rememberThis.exportable_pubKey!)
-        // TODO: we have mostly lost the "admin" concept
-        rememberThis.admin = rememberThis.owner
-        // once we have keys we can also query admin info
-        // // TODO: confirm that this doesn't cause queuing of messages
-        // rememberThis.adminData = await rememberThis.api.getAdminData()
-        // once we've gotten our keys, we substitute the message handler
-        rememberThis.#ws.websocket!.removeEventListener('message', firstMessageEventHandler)
-        rememberThis.#ws.websocket!.addEventListener('message', rememberThis.#processMessage.bind(rememberThis))
-        if (DBG) console.log("++++++++ readyPromise() all done - resolving!")
-        rememberThis.#ChannelSocketReadyFlag = true
-        insideFirstMessageHandler = false
-        resolve(rememberThis)
-      }
-
-      this.#ws.websocket.addEventListener('open', () => {
-        this.#ws.closed = false
-        // need to make sure parent is ready (and has keys)
-        this.channelReady.then(() => {
-          _sb_assert(this.exportable_pubKey, "ChannelSocket.readyPromise(): no exportable pub key?")
-          this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) }
-          if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
-          this.#ws.websocket!.send(JSON.stringify(this.#ws.init)) // this should trigger a response with keys
-        })
-      })
-
-      this.#ws.websocket.addEventListener('message', firstMessageEventHandler);
-
-      this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
-        this.#ws.closed = true
-        if (!e.wasClean) {
-          console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.#sbServer.channel_server}`)
-        } else {
-          if (e.reason.includes("does not have an owner"))
-            reject(`No such channel on this server (${this.#sbServer.channel_server})`)
-          else console.log('ChannelSocket() was closed (cleanly): ', e.reason)
-        }
-        reject('wbSocket() closed before it was opened (?)')
-      })
-
-      this.#ws.websocket.addEventListener('error', (e) => {
-        this.#ws.closed = true
-        console.log('ChannelSocket() error: ', e)
-        reject('ChannelSocket creation error (see log)')
-      })
-    })
+  // we use (bound) message handlers orchestrate who handles first message (and only once)
+  #firstMessageEventHandler(e: MessageEvent) {
+    const blocker = this.#insideFirstMessageHandler.bind(this)
+    this.#ws.websocket!.addEventListener('message', blocker)
+    this.#ws.websocket!.removeEventListener('message', this.#firstMessageEventHandlerReference)
+    // first time should be a handshake of keys, they should match what we have;
+    // there may be other information in the message (eg motd, roomLocked)
+    console.log("++++++++ readyPromise() received ChannelKeysMessage:"); console.log(e);
+    const message = jsonParseWrapper(e.data, 'L2239') as ChannelKeysMessage
+    console.log(message)
+    _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)')
+    this.motd = message.motd
+    this.locked = message.roomLocked
+    const exportable_owner_pubKey = jsonParseWrapper(message.keys.ownerKey, 'L2246')
+    // just small sanity check on owner key (x marks the spot)
+    _sb_assert(this.keys.ownerPubKeyX === exportable_owner_pubKey.x, 'ChannelSocket.readyPromise(): owner key mismatch??')
+    _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)')
+    // this sets us as owner only if the keys match
+    this.owner = sbCrypto.compareKeys(exportable_owner_pubKey, this.exportable_pubKey!)
+    // TODO: we have mostly lost the "admin" concept (need adminData?)
+    // this.adminData = await this.api.getAdminData()
+    this.admin = this.owner
+    // once we've gotten our keys, we substitute the main message handler
+    this.#ws.websocket!.addEventListener('message', this.#processMessage.bind(this))
+    this.#ws.websocket!.removeEventListener('message', blocker)
+    if (DBG) console.log("++++++++ readyPromise() all done - resolving!")
+    this.#ChannelSocketReadyFlag = true
+    this.#resolveFirstMessage(this)
   }
 
   get status() {
@@ -2701,15 +2706,12 @@ export class ChannelSocket extends Channel {
     _sb_assert(this.#ws.websocket, "ChannelSocket.send() called before ready")
     if (this.#ws.closed) {
       if (this.#traceSocket) console.info("send() triggered reset of #readyPromise() (normal)")
-      this.ready = this.#readyPromise() // possible reset of ready
+      this.ready = this.channelSocketReady = this.#channelSocketReadyFactory()
+      this.#ChannelSocketReadyFlag = true
     }
     return new Promise((resolve, reject) => {
-      message.ready.then((message) => {
-        this.ready.then(() => {
-          if (this.#traceSocket) {
-            //console.log(structuredClone(message))
-            console.log(Object.assign({}, message))
-          }
+      message.ready.then((message) => { // message needs to be ready
+        this.ready.then(() => { // so does channel socket
           if (!this.#ChannelSocketReadyFlag) reject("ChannelSocket.send() is confused - ready or not?")
           switch (this.#ws.websocket!.readyState) {
             case 1: // OPEN
@@ -2717,33 +2719,25 @@ export class ChannelSocket extends Channel {
                 console.log("Wrapping message contents:")
                 console.log(Object.assign({}, message.contents))
               }
-              sbCrypto.wrap(this.keys.encryptionKey, JSON.stringify(message.contents), 'string').then((wrappedMessage) => {
-                if (this.#traceSocket) {
-                  console.log("ChannelSocket.send():")
-                  console.log(Object.assign({}, wrappedMessage))
-                }
+              sbCrypto.wrap(this.keys.encryptionKey, JSON.stringify(message.contents), 'string')
+              .then((wrappedMessage) => {
                 const m = JSON.stringify({ encrypted_contents: wrappedMessage })
-                if (this.#traceSocket) {
-                  console.log("++++++++ ChannelSocket.send() got this from wrap:")
-                  console.log(structuredClone(m))
-                  console.log("++++++++ ChannelSocket.send() then got this from JSON.stringify:")
-                  console.log(Object.assign({}, wrappedMessage))
-                }
-                crypto.subtle.digest('SHA-256', new TextEncoder().encode(m)).then((hash) => {
-                  const _id = arrayBufferToBase64(hash)
-                  const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
-                  this.#ack[_id] = resolve
-                  if (this.#traceSocket) {
-                    console.log('++++++++ ChannelSocket.send() this message:')
-                    console.log(structuredClone(m))
-                  }
+                console.log("++++++++ ChannelSocket.send(): sending message:")
+                console.log(wrappedMessage.content as string)
+                crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content as string))
+                .then((hash) => {
+                  const messageHash = arrayBufferToBase64(hash)
+                  console.log("Which has hash:")
+                  console.log(messageHash)
+                  // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
+                  this.#ack.set(messageHash, resolve)
                   this.#ws.websocket!.send(m)
-                  // TODO: update protocol so server acks on message
-                  this.#ws.websocket!.send(JSON.stringify(ackPayload));
+                  // TODO: not sure why we needed separate 'ack' interaction, just resolve on seeing message back?
+                  // this.#ws.websocket!.send(JSON.stringify(ackPayload));
                   setTimeout(() => {
-                    if (this.#ack[_id]) {
-                      delete this.#ack[_id]
-                      const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${_id})`
+                    if (this.#ack.has(messageHash)) {
+                      this.#ack.delete(messageHash)
+                      const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`
                       console.error(msg)
                       reject(msg)
                     } else {
@@ -2759,7 +2753,7 @@ export class ChannelSocket extends Channel {
             case 0: // CONNECTING
             case 2: // CLOSING
               const errMsg = 'socket not OPEN - either CLOSED or in the state of CONNECTING/CLOSING'
-              _sb_exception('ChannelSocket', errMsg)
+              // _sb_exception('ChannelSocket', errMsg)
               reject(errMsg)
           }
         })

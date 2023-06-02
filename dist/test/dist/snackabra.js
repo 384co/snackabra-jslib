@@ -1153,18 +1153,21 @@ class Channel extends SB384 {
                 init.body = JSON.stringify(body);
             await (this.ready);
             SBFetch(this.#channelServer + this.channelId + path, init)
-                .then((response) => {
-                if (!response.ok)
-                    reject(new Error('Network response was not OK'));
-                return response.json();
+                .then(async (response) => {
+                const retValue = await response.json();
+                if ((!response.ok) || (retValue.error)) {
+                    let apiErrorMsg = 'Network or Server error on Channel API call';
+                    if (response.status)
+                        apiErrorMsg += ' [' + response.status + ']';
+                    if (retValue.error)
+                        apiErrorMsg += ': ' + retValue.error;
+                    reject(new Error(apiErrorMsg));
+                }
+                else {
+                    resolve(retValue);
+                }
             })
-                .then((data) => {
-                if (data.error)
-                    reject(new Error(data.error));
-                else
-                    resolve(data);
-            })
-                .catch((e) => { reject("ChannelApi Error [2]: " + WrapError(e)); });
+                .catch((e) => { reject("ChannelApi (SBFetch) Error [2]: " + WrapError(e)); });
         });
     }
     updateCapacity(capacity) { return this.#callApi('/updateRoomCapacity?capacity=' + capacity); }
@@ -1371,12 +1374,15 @@ __decorate([
 ], Channel.prototype, "budd", null);
 export class ChannelSocket extends Channel {
     ready;
+    channelSocketReady;
     #ChannelSocketReadyFlag = false;
     #ws;
     #sbServer;
     #onMessage;
-    #ack = [];
+    #ack = new Map();
     #traceSocket = false;
+    #resolveFirstMessage = () => { _sb_exception('L2461', 'this should never be called'); };
+    #firstMessageEventHandlerReference = (_e) => { _sb_exception('L2462', 'this should never be called'); };
     constructor(sbServer, onMessage, key, channelId) {
         super(sbServer, key, channelId);
         _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided');
@@ -1389,9 +1395,60 @@ export class ChannelSocket extends Channel {
             closed: false,
             timeout: 2000
         };
-        this.ready = this.#readyPromise();
+        this.ready = this.channelSocketReady = this.#channelSocketReadyFactory();
     }
-    #processMessage(msg) {
+    #channelSocketReadyFactory() {
+        return new Promise((resolve, reject) => {
+            this.#resolveFirstMessage = resolve;
+            const url = this.#ws.url;
+            if (DBG) {
+                console.log("++++++++ readyPromise() has url:");
+                console.log(url);
+            }
+            if (!this.#ws.websocket)
+                this.#ws.websocket = new WebSocket(this.#ws.url);
+            if (this.#ws.websocket.readyState === 3) {
+                this.#ws.websocket = new WebSocket(url);
+            }
+            else if (this.#ws.websocket.readyState === 2) {
+                console.warn("STRANGE - trying to use a ChannelSocket that is in the process of closing ...");
+                this.#ws.websocket = new WebSocket(url);
+            }
+            this.#ws.websocket.addEventListener('open', () => {
+                this.#ws.closed = false;
+                this.channelReady.then(() => {
+                    _sb_assert(this.exportable_pubKey, "ChannelSocket.readyPromise(): no exportable pub key?");
+                    this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) };
+                    if (DBG) {
+                        console.log("++++++++ readyPromise() constructed init:");
+                        console.log(this.#ws.init);
+                    }
+                    this.#ws.websocket.send(JSON.stringify(this.#ws.init));
+                });
+            });
+            this.#firstMessageEventHandlerReference = this.#firstMessageEventHandler.bind(this);
+            this.#ws.websocket.addEventListener('message', this.#firstMessageEventHandlerReference);
+            this.#ws.websocket.addEventListener('close', (e) => {
+                this.#ws.closed = true;
+                if (!e.wasClean) {
+                    console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.#sbServer.channel_server}`);
+                }
+                else {
+                    if (e.reason.includes("does not have an owner"))
+                        reject(`No such channel on this server (${this.#sbServer.channel_server})`);
+                    else
+                        console.log('ChannelSocket() was closed (cleanly): ', e.reason);
+                }
+                reject('wbSocket() closed before it was opened (?)');
+            });
+            this.#ws.websocket.addEventListener('error', (e) => {
+                this.#ws.closed = true;
+                console.log('ChannelSocket() error: ', e);
+                reject('ChannelSocket creation error (see log)');
+            });
+        });
+    }
+    async #processMessage(msg) {
         let m = msg.data;
         if (this.#traceSocket) {
             console.log("... raw unwrapped message:");
@@ -1406,27 +1463,21 @@ export class ChannelSocket extends Channel {
             _sb_exception('ChannelSocket', 'received message but there is no handler');
         const message = data;
         try {
-            let m01 = Object.entries(message)[0][1];
-            if ((data.ack) || (m01.ack) || (m01.type === 'ack')) {
-                if (this.#traceSocket)
-                    console.log("++++++++ #processMessage: Received 'ack'");
-                const ack_id = m01._id;
-                const r = this.#ack[ack_id];
+            const m01 = Object.entries(message)[0][1];
+            if (Object.keys(m01)[0] === 'encrypted_contents') {
+                console.log("++++++++ #processMessage: received message:");
+                console.log(m01.encrypted_contents.content);
+                const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(m01.encrypted_contents.content));
+                const ack_id = arrayBufferToBase64(hash);
+                console.log("Received message with hash:");
+                console.log(ack_id);
+                const r = this.#ack.get(ack_id);
                 if (r) {
                     if (this.#traceSocket)
                         console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`);
-                    delete this.#ack[ack_id];
+                    this.#ack.delete(ack_id);
                     r("success");
                 }
-                else {
-                    console.warn(`WARNING: did not find matching ack for id ${ack_id} (?)`);
-                }
-            }
-            else if ((data.nack) || (m01.nack) || (m01.type === 'nack')) {
-                console.warn(`++++++++ #processMessage: Nack received on message ${m01._id}`);
-                this.#ws.closed = true;
-            }
-            else if (Object.keys(m01)[0] === 'encrypted_contents') {
                 const m00 = Object.entries(data)[0][0];
                 const iv_b64 = m01.encrypted_contents.iv;
                 if ((iv_b64) && (_assertBase64(iv_b64)) && (iv_b64.length == 16)) {
@@ -1454,85 +1505,32 @@ export class ChannelSocket extends Channel {
             this.#onMessage(message);
         }
     }
-    #readyPromise() {
-        const url = this.#ws.url;
-        let insideFirstMessageHandler = false;
-        return new Promise((resolve, reject) => {
-            let rememberThis = this;
-            if (DBG) {
-                console.log("++++++++ readyPromise() has url:");
-                console.log(url);
-            }
-            if (!this.#ws.websocket)
-                this.#ws.websocket = new WebSocket(this.#ws.url);
-            if (this.#ws.websocket.readyState === 3) {
-                this.#ws.websocket = new WebSocket(url);
-            }
-            else if (this.#ws.websocket.readyState === 2) {
-                console.log("STRANGE - trying to use a ChannelSocket that is in the process of closing ...");
-                this.#ws.websocket = new WebSocket(url);
-            }
-            async function firstMessageEventHandler(e) {
-                if (insideFirstMessageHandler) {
-                    console.warn("WARNING: firstMessageEventHandler() called recursively (?)");
-                    return;
-                }
-                insideFirstMessageHandler = true;
-                if (DBG) {
-                    console.log("++++++++ readyPromise() received ChannelKeysMessage:");
-                    console.log(e);
-                }
-                const message = jsonParseWrapper(e.data, 'L2239');
-                if (DBG)
-                    console.log(message);
-                _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)');
-                rememberThis.motd = message.motd;
-                rememberThis.locked = message.roomLocked;
-                const exportable_owner_pubKey = jsonParseWrapper(message.keys.ownerKey, 'L2246');
-                _sb_assert(rememberThis.keys.ownerPubKeyX === exportable_owner_pubKey.x, 'ChannelSocket.readyPromise(): owner key mismatch??');
-                _sb_assert(rememberThis.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)');
-                rememberThis.owner = sbCrypto.compareKeys(exportable_owner_pubKey, rememberThis.exportable_pubKey);
-                rememberThis.admin = rememberThis.owner;
-                rememberThis.#ws.websocket.removeEventListener('message', firstMessageEventHandler);
-                rememberThis.#ws.websocket.addEventListener('message', rememberThis.#processMessage.bind(rememberThis));
-                if (DBG)
-                    console.log("++++++++ readyPromise() all done - resolving!");
-                rememberThis.#ChannelSocketReadyFlag = true;
-                insideFirstMessageHandler = false;
-                resolve(rememberThis);
-            }
-            this.#ws.websocket.addEventListener('open', () => {
-                this.#ws.closed = false;
-                this.channelReady.then(() => {
-                    _sb_assert(this.exportable_pubKey, "ChannelSocket.readyPromise(): no exportable pub key?");
-                    this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) };
-                    if (DBG) {
-                        console.log("++++++++ readyPromise() constructed init:");
-                        console.log(this.#ws.init);
-                    }
-                    this.#ws.websocket.send(JSON.stringify(this.#ws.init));
-                });
-            });
-            this.#ws.websocket.addEventListener('message', firstMessageEventHandler);
-            this.#ws.websocket.addEventListener('close', (e) => {
-                this.#ws.closed = true;
-                if (!e.wasClean) {
-                    console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.#sbServer.channel_server}`);
-                }
-                else {
-                    if (e.reason.includes("does not have an owner"))
-                        reject(`No such channel on this server (${this.#sbServer.channel_server})`);
-                    else
-                        console.log('ChannelSocket() was closed (cleanly): ', e.reason);
-                }
-                reject('wbSocket() closed before it was opened (?)');
-            });
-            this.#ws.websocket.addEventListener('error', (e) => {
-                this.#ws.closed = true;
-                console.log('ChannelSocket() error: ', e);
-                reject('ChannelSocket creation error (see log)');
-            });
-        });
+    #insideFirstMessageHandler(e) {
+        console.warn("WARNING: firstMessageEventHandler() called recursively (?)");
+        console.warn(e);
+    }
+    #firstMessageEventHandler(e) {
+        const blocker = this.#insideFirstMessageHandler.bind(this);
+        this.#ws.websocket.addEventListener('message', blocker);
+        this.#ws.websocket.removeEventListener('message', this.#firstMessageEventHandlerReference);
+        console.log("++++++++ readyPromise() received ChannelKeysMessage:");
+        console.log(e);
+        const message = jsonParseWrapper(e.data, 'L2239');
+        console.log(message);
+        _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)');
+        this.motd = message.motd;
+        this.locked = message.roomLocked;
+        const exportable_owner_pubKey = jsonParseWrapper(message.keys.ownerKey, 'L2246');
+        _sb_assert(this.keys.ownerPubKeyX === exportable_owner_pubKey.x, 'ChannelSocket.readyPromise(): owner key mismatch??');
+        _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)');
+        this.owner = sbCrypto.compareKeys(exportable_owner_pubKey, this.exportable_pubKey);
+        this.admin = this.owner;
+        this.#ws.websocket.addEventListener('message', this.#processMessage.bind(this));
+        this.#ws.websocket.removeEventListener('message', blocker);
+        if (DBG)
+            console.log("++++++++ readyPromise() all done - resolving!");
+        this.#ChannelSocketReadyFlag = true;
+        this.#resolveFirstMessage(this);
     }
     get status() {
         if (!this.#ws.websocket)
@@ -1557,14 +1555,12 @@ export class ChannelSocket extends Channel {
         if (this.#ws.closed) {
             if (this.#traceSocket)
                 console.info("send() triggered reset of #readyPromise() (normal)");
-            this.ready = this.#readyPromise();
+            this.ready = this.channelSocketReady = this.#channelSocketReadyFactory();
+            this.#ChannelSocketReadyFlag = true;
         }
         return new Promise((resolve, reject) => {
             message.ready.then((message) => {
                 this.ready.then(() => {
-                    if (this.#traceSocket) {
-                        console.log(Object.assign({}, message));
-                    }
                     if (!this.#ChannelSocketReadyFlag)
                         reject("ChannelSocket.send() is confused - ready or not?");
                     switch (this.#ws.websocket.readyState) {
@@ -1573,32 +1569,22 @@ export class ChannelSocket extends Channel {
                                 console.log("Wrapping message contents:");
                                 console.log(Object.assign({}, message.contents));
                             }
-                            sbCrypto.wrap(this.keys.encryptionKey, JSON.stringify(message.contents), 'string').then((wrappedMessage) => {
-                                if (this.#traceSocket) {
-                                    console.log("ChannelSocket.send():");
-                                    console.log(Object.assign({}, wrappedMessage));
-                                }
+                            sbCrypto.wrap(this.keys.encryptionKey, JSON.stringify(message.contents), 'string')
+                                .then((wrappedMessage) => {
                                 const m = JSON.stringify({ encrypted_contents: wrappedMessage });
-                                if (this.#traceSocket) {
-                                    console.log("++++++++ ChannelSocket.send() got this from wrap:");
-                                    console.log(structuredClone(m));
-                                    console.log("++++++++ ChannelSocket.send() then got this from JSON.stringify:");
-                                    console.log(Object.assign({}, wrappedMessage));
-                                }
-                                crypto.subtle.digest('SHA-256', new TextEncoder().encode(m)).then((hash) => {
-                                    const _id = arrayBufferToBase64(hash);
-                                    const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id };
-                                    this.#ack[_id] = resolve;
-                                    if (this.#traceSocket) {
-                                        console.log('++++++++ ChannelSocket.send() this message:');
-                                        console.log(structuredClone(m));
-                                    }
+                                console.log("++++++++ ChannelSocket.send(): sending message:");
+                                console.log(wrappedMessage.content);
+                                crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content))
+                                    .then((hash) => {
+                                    const messageHash = arrayBufferToBase64(hash);
+                                    console.log("Which has hash:");
+                                    console.log(messageHash);
+                                    this.#ack.set(messageHash, resolve);
                                     this.#ws.websocket.send(m);
-                                    this.#ws.websocket.send(JSON.stringify(ackPayload));
                                     setTimeout(() => {
-                                        if (this.#ack[_id]) {
-                                            delete this.#ack[_id];
-                                            const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${_id})`;
+                                        if (this.#ack.has(messageHash)) {
+                                            this.#ack.delete(messageHash);
+                                            const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`;
                                             console.error(msg);
                                             reject(msg);
                                         }
@@ -1615,7 +1601,6 @@ export class ChannelSocket extends Channel {
                         case 0:
                         case 2:
                             const errMsg = 'socket not OPEN - either CLOSED or in the state of CONNECTING/CLOSING';
-                            _sb_exception('ChannelSocket', errMsg);
                             reject(errMsg);
                     }
                 });
