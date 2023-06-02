@@ -1391,8 +1391,10 @@ export class ChannelSocket extends Channel {
         };
         this.ready = this.#readyPromise();
     }
-    #processMessage(m) {
+    #processMessage(msg) {
+        let m = msg.data;
         if (this.#traceSocket) {
+            console.log("... raw unwrapped message:");
             console.log(structuredClone(m));
         }
         const data = jsonParseWrapper(m, 'L1489');
@@ -1400,74 +1402,56 @@ export class ChannelSocket extends Channel {
             console.log("... json unwrapped version of raw message:");
             console.log(Object.assign({}, data));
         }
-        if (data.ack) {
-            const r = this.#ack[data._id];
-            if (r) {
+        if (typeof this.#onMessage !== 'function')
+            _sb_exception('ChannelSocket', 'received message but there is no handler');
+        const message = data;
+        try {
+            let m01 = Object.entries(message)[0][1];
+            if ((data.ack) || (m01.ack) || (m01.type === 'ack')) {
                 if (this.#traceSocket)
-                    console.log(`++++++++ found matching ack for id ${data._id} (on first check?)`);
-                delete this.#ack[data._id];
-                r("success");
+                    console.log("++++++++ #processMessage: Received 'ack'");
+                const ack_id = m01._id;
+                const r = this.#ack[ack_id];
+                if (r) {
+                    if (this.#traceSocket)
+                        console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`);
+                    delete this.#ack[ack_id];
+                    r("success");
+                }
+                else {
+                    console.warn(`WARNING: did not find matching ack for id ${ack_id} (?)`);
+                }
             }
-        }
-        else if (data.nack) {
-            this.#ws.closed = true;
-        }
-        else if (typeof this.#onMessage === 'function') {
-            const message = data;
-            try {
-                let m01 = Object.entries(message)[0][1];
-                if (Object.keys(m01)[0] === 'encrypted_contents') {
-                    const m00 = Object.entries(data)[0][0];
-                    const iv_b64 = m01.encrypted_contents.iv;
-                    if ((iv_b64) && (_assertBase64(iv_b64)) && (iv_b64.length == 16)) {
-                        m01.encrypted_contents.iv = base64ToArrayBuffer(iv_b64);
-                    }
-                    else {
-                        console.error('processMessage() - iv is malformed, should be 16-char b64 string (ignoring)');
-                    }
-                    if (this.#traceSocket) {
-                        console.log("vvvvvv - calling deCryptChannelMessage() with arg1, arg2, arg3:");
-                        console.log(structuredClone(m00));
-                        console.log(structuredClone(m01.encrypted_contents));
-                        console.log(structuredClone(this.keys));
-                        console.log("^^^^^^ - (end parameter list)");
-                    }
+            else if ((data.nack) || (m01.nack) || (m01.type === 'nack')) {
+                console.warn(`++++++++ #processMessage: Nack received on message ${m01._id}`);
+                this.#ws.closed = true;
+            }
+            else if (Object.keys(m01)[0] === 'encrypted_contents') {
+                const m00 = Object.entries(data)[0][0];
+                const iv_b64 = m01.encrypted_contents.iv;
+                if ((iv_b64) && (_assertBase64(iv_b64)) && (iv_b64.length == 16)) {
+                    m01.encrypted_contents.iv = base64ToArrayBuffer(iv_b64);
                     deCryptChannelMessage(m00, m01.encrypted_contents, this.keys)
                         .then((m) => {
                         if (this.#traceSocket)
                             console.log(Object.assign({}, m));
                         this.#onMessage(m);
                     })
-                        .catch(() => { console.log('Error processing message, dropping it'); });
-                }
-                else if (m01.type === 'ack') {
-                    if (this.#traceSocket)
-                        console.log("++++++++ Received 'ack'");
-                    const ack_id = m01._id;
-                    const r = this.#ack[ack_id];
-                    if (r) {
-                        if (this.#traceSocket)
-                            console.log(`++++++++ found matching ack for id ${ack_id}`);
-                        delete this.#ack[ack_id];
-                        r("success");
-                    }
-                    else {
-                        console.info(`WARNING: did not find matching ack for id ${ack_id}`);
-                    }
+                        .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message'); });
                 }
                 else {
-                    console.log("++++++++ #processMessage: can't decipher message, passing along unchanged:");
-                    console.log(Object.assign({}, message));
-                    this.#onMessage(message);
+                    console.error('#processMessage: - iv is malformed, should be 16-char b64 string (ignoring)');
                 }
             }
-            catch (e) {
-                console.log(`++++++++ #processMessage: caught exception while decyphering (${e}), passing it along unchanged`);
+            else {
+                console.warn("++++++++ #processMessage: can't decipher message, passing along unchanged:");
+                console.log(Object.assign({}, message));
                 this.#onMessage(message);
             }
         }
-        else {
-            _sb_exception('ChannelSocket', 'received message but there is no handler');
+        catch (e) {
+            console.log(`++++++++ #processMessage: caught exception while decyphering (${e}), passing it along unchanged`);
+            this.#onMessage(message);
         }
     }
     #readyPromise() {
@@ -1510,9 +1494,7 @@ export class ChannelSocket extends Channel {
                 rememberThis.owner = sbCrypto.compareKeys(exportable_owner_pubKey, rememberThis.exportable_pubKey);
                 rememberThis.admin = rememberThis.owner;
                 rememberThis.#ws.websocket.removeEventListener('message', firstMessageEventHandler);
-                rememberThis.#ws.websocket.addEventListener('message', (e) => {
-                    rememberThis.#processMessage(e.data);
-                });
+                rememberThis.#ws.websocket.addEventListener('message', rememberThis.#processMessage.bind(rememberThis));
                 if (DBG)
                     console.log("++++++++ readyPromise() all done - resolving!");
                 rememberThis.#ChannelSocketReadyFlag = true;

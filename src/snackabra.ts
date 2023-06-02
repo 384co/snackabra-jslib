@@ -1964,7 +1964,7 @@ class SBMessage {
             reject(result)
           }
         })
-       })
+      })
     })
     // TODO: i've punted on queue here <--- queueMicrotaks maybe?
   }
@@ -2033,7 +2033,6 @@ abstract class Channel extends SB384 {
   #channelSignKey?: CryptoKey;
   #channelId?: string
 
-  // #server: string; // this is now sbServer.channel_server
   #cursor: string = ''; // last (oldest) message key seen
   #channelApi: string = '';
   #channelServer: string = '';
@@ -2084,7 +2083,7 @@ abstract class Channel extends SB384 {
       this.privateKey!, this.#channelKeys.publicSignKey, 'HMAC', false, ['sign', 'verify']
     )
   }
-  
+
   /** @private */
   async #loadKeys(keyStrings: ChannelKeyStrings): Promise<void> {
     console.log("loading keys:")
@@ -2515,8 +2514,10 @@ export class ChannelSocket extends Channel {
     are handled here. others are never delivered 'raw', for example
     encrypted messages are always decrypted */
   /** @private */
-  #processMessage(m: any) {
+  #processMessage(msg: any) {
+    let m = msg.data
     if (this.#traceSocket) {
+      console.log("... raw unwrapped message:")
       console.log(structuredClone(m))
     }
     const data = jsonParseWrapper(m, 'L1489')
@@ -2524,73 +2525,60 @@ export class ChannelSocket extends Channel {
       console.log("... json unwrapped version of raw message:")
       console.log(Object.assign({}, data))
     }
-    if (data.ack) {
-      const r = this.#ack[data._id]
-      if (r) {
-        if (this.#traceSocket) console.log(`++++++++ found matching ack for id ${data._id} (on first check?)`)
-        delete this.#ack[data._id]
-        r("success") // resolve
-      }
-    } else if (data.nack) {
-      // console.error('Nack received')
-      this.#ws.closed = true
-      // if (this.#websocket) this.#websocket.close()
-    } else if (typeof this.#onMessage === 'function') {
-      const message = data as ChannelMessage
-      try {
-        let m01 = Object.entries(message)[0][1]
-        if (Object.keys(m01)[0] === 'encrypted_contents') {
-          const m00 = Object.entries(data)[0][0]
-          // the 'iv' field as incoming should be base64 encoded, with 16 b64
-          // characters translating here to 12 bytes
-          const iv_b64 = m01.encrypted_contents.iv
-          if ((iv_b64) && (_assertBase64(iv_b64)) && (iv_b64.length == 16)) {
-            m01.encrypted_contents.iv = base64ToArrayBuffer(iv_b64)
-          } else {
-            console.error('processMessage() - iv is malformed, should be 16-char b64 string (ignoring)')
-          }
-          if (this.#traceSocket) {
-            console.log("vvvvvv - calling deCryptChannelMessage() with arg1, arg2, arg3:")
-            console.log(structuredClone(m00))
-            console.log(structuredClone(m01.encrypted_contents))
-            console.log(structuredClone(this.keys))
-            console.log("^^^^^^ - (end parameter list)")
-          }
-          deCryptChannelMessage(m00, m01.encrypted_contents, this.keys)
-            .then((m) => {
-              if (this.#traceSocket) console.log(Object.assign({}, m))
-              this.#onMessage(m)
-            })
-            .catch(() => { console.log('Error processing message, dropping it') })
-        } else if (m01.type === 'ack') {
-          if (this.#traceSocket) console.log("++++++++ Received 'ack'")
-          const ack_id = m01._id
-          const r = this.#ack[ack_id]
-          if (r) {
-            if (this.#traceSocket) console.log(`++++++++ found matching ack for id ${ack_id}`)
-            // console.log(r)
-            delete this.#ack[ack_id]
-            r("success") // resolve
-          } else {
-            console.info(`WARNING: did not find matching ack for id ${ack_id}`)
-          }
-        } else {
-          //
-          // TODO: other message types (low level?) are parsed here ...
-          //
-          console.log("++++++++ #processMessage: can't decipher message, passing along unchanged:")
-          console.log(Object.assign({}, message))
-          this.#onMessage(message) // 'as string' ?
-        }
-      } catch (e) {
-        console.log(`++++++++ #processMessage: caught exception while decyphering (${e}), passing it along unchanged`)
-        this.#onMessage(message) // 'as string' ?
-        // console.error(`#processmessage: cannot handle locked channels yet (${e})`)
-        // TODO: locked key might never resolve (if we don't have it)
-        // unwrapped = await sbCrypto.unwrap(this.keys.lockedKey, message.encrypted_contents, 'string')
-      }
-    } else {
+    if (typeof this.#onMessage !== 'function')
       _sb_exception('ChannelSocket', 'received message but there is no handler')
+
+    const message = data as ChannelMessage
+    try {
+      // messages are structured a bit funky for historical reasons
+      let m01 = Object.entries(message)[0][1]
+      if ((data.ack) || (m01.ack) || (m01.type === 'ack')) { // some historical funkiness
+        // FIRST we process ack/nack mechanism (such as it is)
+        if (this.#traceSocket) console.log("++++++++ #processMessage: Received 'ack'")
+        const ack_id = m01._id
+        const r = this.#ack[ack_id]
+        if (r) {
+          if (this.#traceSocket) console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`)
+          delete this.#ack[ack_id]
+          r("success") // resolve
+        } else {
+          console.warn(`WARNING: did not find matching ack for id ${ack_id} (?)`)
+        }
+      } else if ((data.nack) || (m01.nack) || (m01.type === 'nack')) {
+        console.warn(`++++++++ #processMessage: Nack received on message ${m01._id}`)
+        this.#ws.closed = true
+        // if (this.#websocket) this.#websocket.close()  // not needed
+      } else if (Object.keys(m01)[0] === 'encrypted_contents') {
+        // NEXT we deal with the common case of encrypted messages
+        const m00 = Object.entries(data)[0][0]
+        // the 'iv' field as incoming should be base64 encoded, with 16 b64
+        // characters translating here to 12 bytes
+        const iv_b64 = m01.encrypted_contents.iv
+        // open question: if there are any issues decrypting, should we forward as-is?
+        if ((iv_b64) && (_assertBase64(iv_b64)) && (iv_b64.length == 16)) {
+          m01.encrypted_contents.iv = base64ToArrayBuffer(iv_b64)
+          deCryptChannelMessage(m00, m01.encrypted_contents, this.keys)
+          .then((m) => {
+            if (this.#traceSocket) console.log(Object.assign({}, m))
+            this.#onMessage(m)
+          })
+          .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message') })
+        } else {
+          console.error('#processMessage: - iv is malformed, should be 16-char b64 string (ignoring)')
+        }
+      } else {
+        // other (future) message types would be parsed here
+        console.warn("++++++++ #processMessage: can't decipher message, passing along unchanged:")
+        console.log(Object.assign({}, message))
+        this.#onMessage(message)
+      }
+    } catch (e) {
+      console.log(`++++++++ #processMessage: caught exception while decyphering (${e}), passing it along unchanged`)
+      this.#onMessage(message)
+      // console.error(`#processmessage: cannot handle locked channels yet (${e})`)
+      // TODO: locked key might never resolve (if we don't have it)
+      // TODO: ... generally speaking need to test/fix locked channels
+      // unwrapped = await sbCrypto.unwrap(this.keys.lockedKey, message.encrypted_contents, 'string')
     }
   }
 
@@ -2619,11 +2607,11 @@ export class ChannelSocket extends Channel {
           return
         }
         insideFirstMessageHandler = true
-        
+
         // first time should be a handshake of keys, they should match what we have;
         // there may be other information in the message (eg motd, roomLocked)
         if (DBG) { console.log("++++++++ readyPromise() received ChannelKeysMessage:"); console.log(e); }
-    
+
         const message = jsonParseWrapper(e.data, 'L2239') as ChannelKeysMessage
         if (DBG) console.log(message)
         _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)')
@@ -2642,9 +2630,7 @@ export class ChannelSocket extends Channel {
         // rememberThis.adminData = await rememberThis.api.getAdminData()
         // once we've gotten our keys, we substitute the message handler
         rememberThis.#ws.websocket!.removeEventListener('message', firstMessageEventHandler)
-        rememberThis.#ws.websocket!.addEventListener('message', (e: MessageEvent) => {
-          rememberThis.#processMessage(e.data)
-        })
+        rememberThis.#ws.websocket!.addEventListener('message', rememberThis.#processMessage.bind(rememberThis))
         if (DBG) console.log("++++++++ readyPromise() all done - resolving!")
         rememberThis.#ChannelSocketReadyFlag = true
         insideFirstMessageHandler = false
