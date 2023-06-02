@@ -593,8 +593,7 @@ async function newChannelData(keys?: JsonWebKey): Promise<{ channelData: Channel
   return { channelData: channelData, exportable_privateKey: exportable_privateKey }
 }
 
-
-//#endregion
+//#endregion - SB internal utility functions
 
 /******************************************************************************************************/
 //#region - SBCryptoUtils - crypto and translation stuff used by SBCrypto etc
@@ -1326,7 +1325,6 @@ class SBCrypto {  /*************************************************************
       const xBytes = base64ToArrayBuffer(decodeB64Url(owner_key!.x!))
       const yBytes = base64ToArrayBuffer(decodeB64Url(owner_key!.y!))
       const channelBytes = _appendBuffer(xBytes, yBytes)
-      // return await this.#generateChannelHash(channelBytes, 0)
       return await this.#generateChannelHash(channelBytes)
     } else {
       return 'InvalidJsonWebKey'; // invalid owner key
@@ -1443,20 +1441,20 @@ class SBCrypto {  /*************************************************************
   encrypt(data: BufferSource, key: CryptoKey, _iv?: Uint8Array, returnType: 'encryptedContents' | 'arrayBuffer' = 'encryptedContents'): Promise<EncryptedContents | ArrayBuffer> {
     return new Promise(async (resolve, reject) => {
       try {
-        if (data === null) reject(new Error('no contents'))
+        if (data === null)
+          reject(new Error('no contents'))
         const iv: Uint8Array = ((!_iv) || (_iv === null)) ? crypto.getRandomValues(new Uint8Array(12)) : _iv
-        if (typeof data === 'string') data = (new TextEncoder()).encode(data)
-        crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data).then((encrypted) => {
-          if (returnType === 'encryptedContents') {
-            resolve({
-              content: ensureSafe(arrayBufferToBase64(encrypted)),
-              iv: ensureSafe(arrayBufferToBase64(iv))
-            })
-          } else {
-            // _sb_assert(_iv, "encrypt() returning a buffer must have nonce assigned (or it will be lost)")
-            resolve(encrypted)
-          }
-        })
+        if (typeof data === 'string')
+          data = (new TextEncoder()).encode(data)
+        const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data)
+        if (returnType === 'encryptedContents') {
+          resolve({
+            content: ensureSafe(arrayBufferToBase64(encrypted)),
+            iv: ensureSafe(arrayBufferToBase64(iv))
+          })
+        } else {
+          resolve(encrypted)
+        }
       } catch (e) {
         reject(e);
       }
@@ -1469,8 +1467,6 @@ class SBCrypto {  /*************************************************************
     return new Promise<EncryptedContents>((resolve) => {
       let a
       if (bodyType === 'string') {
-        // console.log("wrap() got string:")
-        // console.log(b as string)
         a = sbCrypto.str2ab(b as string)
       } else {
         a = b as ArrayBuffer
@@ -1488,32 +1484,14 @@ class SBCrypto {  /*************************************************************
   unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'string'): Promise<string>
   unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'arrayBuffer'): Promise<ArrayBuffer>
   unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'string' | 'arrayBuffer') {
-    if (DBG) {
-      console.log("SBCrypto.unwrap(), got k/o:")
-      console.log(k)
-      console.log(o)
-    }
     return new Promise(async (resolve, reject) => {
       try {
         const { content: t, iv: iv } = encryptedContentsMakeBinary(o)
-        if (DBG) {
-          console.log("======== calling subtle.decrypt with iv, k, t (AES-GCM):")
-          console.log(iv)
-          console.log(k)
-          console.log(t)
-          console.log("======== (end of subtle.decrypt parameters)")
-        }
-        crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t).then((d) => {
-          if (returnType === 'string') {
-            resolve(new TextDecoder().decode(d))
-          } else if (returnType === 'arrayBuffer') {
-            resolve(d)
-          }
-        }).catch((e) => {
-          console.error(`unwrap(): failed to decrypt - rejecting: ${e}`)
-          console.trace()
-          reject(e)
-        })
+        const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t)
+        if (returnType === 'string')
+          resolve(new TextDecoder().decode(d))
+        else if (returnType === 'arrayBuffer')
+          resolve(d)
       } catch (e) {
         console.error(`unwrap(): unknown issue - rejecting: ${e}`)
         console.trace()
@@ -1757,7 +1735,7 @@ function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecorat
 //#endregion - local decorators
 
 /******************************************************************************************************/
-//#region - SETUP and STARTUP stuff
+//#region - SETUP and STARTUP stuff (in progress)
 
 // this is the global crypto object
 const sbCrypto = new SBCrypto();
@@ -1883,7 +1861,6 @@ class SB384 {
   }
 
   /** @type {boolean}       */ @Memoize get readyFlag() { return this.#SB384ReadyFlag }
-
   /** @type {JsonWebKey}    */ @Memoize @Ready get exportable_pubKey() { return this.#exportable_pubKey! }
   /** @type {JsonWebKey}    */ @Memoize @Ready get exportable_privateKey() { return this.#exportable_privateKey! }
   /** @type {CryptoKey}     */ @Memoize @Ready get privateKey() { return this.#privateKey! }
@@ -2118,16 +2095,10 @@ abstract class Channel extends SB384 {
    * @param currentMessagesLength - number to fetch (default 100)
    * @param paginate - if true, will paginate from last request (default false)
    *
-   * TODO: this needs to be able to check that the channel socket
-   *       is ready, otherwise the keys might not be ... currently
-   *       before calling this, make a ready check on the socket
    */
   getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
-    // TODO: yeah the below situation needs to be chased down
-    // console.log("warning: this might throw an exception on keys() if Channel is not ready")
     // xTODO: convert to new API call model
     return new Promise(async (resolve, reject) => {
-      // const encryptionKey = this.#channel.keys.encryptionKey
       // make sure channel is ready
       if (!this.#ChannelReadyFlag) {
         console.log("Channel.getOldMessages: channel not ready (we will wait)")
@@ -2146,13 +2117,11 @@ abstract class Channel extends SB384 {
       }).then((messages) => {
         if (true) {
           console.log("getOldMessages")
-          // console.log(structuredClone(Object.values(messages)))
           console.log(messages)
         }
         Promise.all(Object
           .keys(messages)
           .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-          // .map((v) => { console.log("#*#*#*#*#*#*#"); console.log(structuredClone(messages[v].encrypted_contents)); return v; })
           .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.#channelKeys!)))
           .then((decryptedMessageArray) => {
             let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
@@ -2414,29 +2383,14 @@ abstract class Channel extends SB384 {
     });
   }
 
-
-  /*
-  mtg: These methods have no implementation in the current webclient so I have skipped them for the time being
-  // unused
-  notifications() {
-  }
-
-  // unused
-  getPubKeys() {
-  }
-
-  // unused
-  ownerUnread() {
-  }
-
-  // unused
-  registerDevice() {
-  }
-   */
+  // // currently not used by webclient, so these are not hooked up
+  // notifications() { }
+  // getPubKeys() { }
+  // ownerUnread() { }
+  // registerDevice() { }
 
 } /* class ChannelAPI */
 //#region - class ChannelAPI - TODO implement these methods
-
 
 
 /**
@@ -2794,8 +2748,6 @@ export class ChannelEndpoint extends Channel {
 //#endregion - classes ChannelEndpoint
 
 
-
-
 function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: ChannelKeys): Promise<ChannelMessage> {
   return new Promise<ChannelMessage>((resolve, reject) => {
     const z = messageIdRegex.exec(m00)
@@ -2831,7 +2783,7 @@ function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: Channe
             sbCrypto.deriveKey(keys.signKey, senderPubKey, 'HMAC', false, ['sign', 'verify']).then((verifyKey) => {
               sbCrypto.verify(verifyKey, m2.sign!, m2.contents!).then((v) => {
                 if (!v) {
-                  console.log("***** signature is NOT correct message (rejecting)")
+                  console.log("***** signature is NOT correct for message (rejecting)")
                   console.log("verifyKey:")
                   console.log(Object.assign({}, verifyKey))
                   console.log("m2.sign")
@@ -3064,18 +3016,8 @@ class StorageApi {
 
   /** @private */
   #getObjectKey(fileHash: string, _salt: ArrayBuffer): Promise<CryptoKey> {
-    // was: getFileKey(fileHash: string, _salt: ArrayBuffer)
-    // also (?): getImageKey(imageHash, _salt) {
-    // console.log('getObjectKey with hash and salt:')
-    // console.log(fileHash)
-    // console.log(_salt)
     return new Promise((resolve, reject) => {
       try {
-        // console.log("Using key: ");
-        // console.log(fileHash)
-        // console.log(decodeURIComponent(fileHash))
-        // console.log(base64ToArrayBuffer(decodeURIComponent(fileHash)))
-        // const keyMaterial: CryptoKey = await sbCrypto.importKey('raw', base64ToArrayBuffer(decodeURIComponent(fileHash)), 'PBKDF2', false, ['deriveBits', 'deriveKey']);
         sbCrypto.importKey('raw', base64ToArrayBuffer(decodeURIComponent(fileHash)),
           'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
             // @psm TODO - Support deriving from PBKDF2 in sbCrypto.eriveKey function
@@ -3292,11 +3234,6 @@ class StorageApi {
         let j = jsonParseWrapper(sbCrypto.ab2str(new Uint8Array(payload)), 'L3062')
         // normal operation is to break on the JSON.parse() and continue to finally clause
         if (j.error) reject(`#processData() error: ${j.error}`)
-        if (DBG) {
-          console.log(`#processData() JSON.parse() returned:`)
-          console.log(j)
-          console.warn("should this happen?")
-        }
       } catch (e) {
         // do nothing - this is expected
       } finally {
@@ -3320,17 +3257,6 @@ class StorageApi {
         }
         if ((handleSalt) && (!compareBuffers(salt, handleSalt))) {
           console.error("WARNING: salt from server differs from local copy (will use server)")
-          console.log(` object ID: ${h.id}`)
-          console.log("server salt:")
-          console.log("data.salt as b64:");
-          console.log(arrayBufferToBase64(data.salt));
-          console.log("data.salt unprocessed:");
-          console.log(data.salt)
-          console.log("'salt' as b64:")
-          console.log(arrayBufferToBase64(salt))
-          console.log("salt unprocessed:")
-          console.log(salt);
-          console.log("local salt:")
           if (!h.salt) {
             console.log("h.salt is undefined")
           } else if (typeof h.salt === 'string') {
@@ -3400,11 +3326,6 @@ class StorageApi {
     // _sb_assert(SBValidateObject(h, 'SBObjectHandle'), "fetchData() ERROR: parameter is not an SBOBjectHandle")
     return new Promise((resolve, reject) => {
       try {
-        if (DBG) {
-          console.log("Calling fetchData():");
-          console.log(h);
-          console.log(returnType);
-        }
         if (!h) reject('SBObjectHandle is null or undefined')
         if (typeof h.verification === 'string') h.verification = new Promise<string>((resolve) => { resolve(h.verification); })
         h.verification.then((verificationToken) => {

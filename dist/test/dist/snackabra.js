@@ -682,17 +682,16 @@ class SBCrypto {
                 const iv = ((!_iv) || (_iv === null)) ? crypto.getRandomValues(new Uint8Array(12)) : _iv;
                 if (typeof data === 'string')
                     data = (new TextEncoder()).encode(data);
-                crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data).then((encrypted) => {
-                    if (returnType === 'encryptedContents') {
-                        resolve({
-                            content: ensureSafe(arrayBufferToBase64(encrypted)),
-                            iv: ensureSafe(arrayBufferToBase64(iv))
-                        });
-                    }
-                    else {
-                        resolve(encrypted);
-                    }
-                });
+                const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data);
+                if (returnType === 'encryptedContents') {
+                    resolve({
+                        content: ensureSafe(arrayBufferToBase64(encrypted)),
+                        iv: ensureSafe(arrayBufferToBase64(iv))
+                    });
+                }
+                else {
+                    resolve(encrypted);
+                }
             }
             catch (e) {
                 reject(e);
@@ -712,33 +711,14 @@ class SBCrypto {
         });
     }
     unwrap(k, o, returnType) {
-        if (DBG) {
-            console.log("SBCrypto.unwrap(), got k/o:");
-            console.log(k);
-            console.log(o);
-        }
         return new Promise(async (resolve, reject) => {
             try {
                 const { content: t, iv: iv } = encryptedContentsMakeBinary(o);
-                if (DBG) {
-                    console.log("======== calling subtle.decrypt with iv, k, t (AES-GCM):");
-                    console.log(iv);
-                    console.log(k);
-                    console.log(t);
-                    console.log("======== (end of subtle.decrypt parameters)");
-                }
-                crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t).then((d) => {
-                    if (returnType === 'string') {
-                        resolve(new TextDecoder().decode(d));
-                    }
-                    else if (returnType === 'arrayBuffer') {
-                        resolve(d);
-                    }
-                }).catch((e) => {
-                    console.error(`unwrap(): failed to decrypt - rejecting: ${e}`);
-                    console.trace();
-                    reject(e);
-                });
+                const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t);
+                if (returnType === 'string')
+                    resolve(new TextDecoder().decode(d));
+                else if (returnType === 'arrayBuffer')
+                    resolve(d);
             }
             catch (e) {
                 console.error(`unwrap(): unknown issue - rejecting: ${e}`);
@@ -1659,7 +1639,7 @@ function deCryptChannelMessage(m00, m01, keys) {
                         sbCrypto.deriveKey(keys.signKey, senderPubKey, 'HMAC', false, ['sign', 'verify']).then((verifyKey) => {
                             sbCrypto.verify(verifyKey, m2.sign, m2.contents).then((v) => {
                                 if (!v) {
-                                    console.log("***** signature is NOT correct message (rejecting)");
+                                    console.log("***** signature is NOT correct for message (rejecting)");
                                     console.log("verifyKey:");
                                     console.log(Object.assign({}, verifyKey));
                                     console.log("m2.sign");
@@ -1989,11 +1969,6 @@ class StorageApi {
                 let j = jsonParseWrapper(sbCrypto.ab2str(new Uint8Array(payload)), 'L3062');
                 if (j.error)
                     reject(`#processData() error: ${j.error}`);
-                if (DBG) {
-                    console.log(`#processData() JSON.parse() returned:`);
-                    console.log(j);
-                    console.warn("should this happen?");
-                }
             }
             catch (e) {
             }
@@ -2015,17 +1990,6 @@ class StorageApi {
                 }
                 if ((handleSalt) && (!compareBuffers(salt, handleSalt))) {
                     console.error("WARNING: salt from server differs from local copy (will use server)");
-                    console.log(` object ID: ${h.id}`);
-                    console.log("server salt:");
-                    console.log("data.salt as b64:");
-                    console.log(arrayBufferToBase64(data.salt));
-                    console.log("data.salt unprocessed:");
-                    console.log(data.salt);
-                    console.log("'salt' as b64:");
-                    console.log(arrayBufferToBase64(salt));
-                    console.log("salt unprocessed:");
-                    console.log(salt);
-                    console.log("local salt:");
                     if (!h.salt) {
                         console.log("h.salt is undefined");
                     }
@@ -2073,11 +2037,6 @@ class StorageApi {
     fetchData(h, returnType = 'arrayBuffer') {
         return new Promise((resolve, reject) => {
             try {
-                if (DBG) {
-                    console.log("Calling fetchData():");
-                    console.log(h);
-                    console.log(returnType);
-                }
                 if (!h)
                     reject('SBObjectHandle is null or undefined');
                 if (typeof h.verification === 'string')
