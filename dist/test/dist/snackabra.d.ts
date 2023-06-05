@@ -1,13 +1,13 @@
-declare const version = "1.1.x";
-export interface SBChannelHandle {
-    channelId: SBChannelId;
-    key: JsonWebKey;
-}
+declare const version = "1.2.x (beta)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
     storage_server: string;
     shard_server?: string;
+}
+export interface SBChannelHandle {
+    channelId: SBChannelId;
+    key: JsonWebKey;
 }
 interface Dictionary<T> {
     [index: string]: T;
@@ -95,39 +95,40 @@ export interface EncryptedContentsBin {
     content: ArrayBuffer;
     iv: Uint8Array;
 }
-export declare function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedContentsBin;
-export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encypted';
+export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encrypted';
 interface SBMessageContents {
+    contents: string;
+    image: string;
+    imageMetaData?: ImageMetaData;
+    image_sign?: string;
+    imageMetadata_sign?: string;
     sender_pubKey?: JsonWebKey;
     sender_username?: string;
     encrypted: boolean;
     isVerfied: boolean;
-    contents: string;
     sign: string;
-    image: string;
-    image_sign?: string;
-    imageMetadata_sign?: string;
-    imageMetaData?: ImageMetaData;
 }
 export type SBObjectType = 'f' | 'p' | 'b' | 't';
-export interface SBObjectHandle {
-    [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
-    version?: '1';
-    type: SBObjectType;
-    id: string;
-    key: string;
-    id32?: Base62Encoded;
-    key32?: Base62Encoded;
-    verification: Promise<string> | string;
-    iv?: Uint8Array | string;
-    salt?: Uint8Array | string;
-    fileName?: string;
-    dateAndTime?: string;
-    shardServer?: string;
-    fileType?: string;
-    lastModified?: number;
-    actualSize?: number;
-    savedSize?: number;
+export declare namespace Interfaces {
+    interface SBObjectHandle {
+        [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
+        version?: '1';
+        type: SBObjectType;
+        id: string;
+        key: string;
+        id32?: Base62Encoded;
+        key32?: Base62Encoded;
+        verification: Promise<string> | string;
+        iv?: Uint8Array | string;
+        salt?: Uint8Array | string;
+        fileName?: string;
+        dateAndTime?: string;
+        shardServer?: string;
+        fileType?: string;
+        lastModified?: number;
+        actualSize?: number;
+        savedSize?: number;
+    }
 }
 export interface SBObjectMetadata {
     [SB_OBJECT_HANDLE_SYMBOL]: boolean;
@@ -149,6 +150,7 @@ export declare class MessageBus {
 export declare function _sb_exception(loc: string, msg: string): void;
 export declare function _sb_resolve(val: any): any;
 export declare function _sb_assert(val: unknown, msg: string): void;
+export declare function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedContentsBin;
 export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
 export declare function _assertBase64(base64: string): boolean;
 export declare function base64ToArrayBuffer(str: string): Uint8Array;
@@ -224,7 +226,7 @@ declare class SBMessage {
     contents: SBMessageContents;
     [SB_MESSAGE_SYMBOL]: boolean;
     MAX_SB_BODY_SIZE: number;
-    constructor(channel: Channel, body?: string);
+    constructor(channel: Channel, bodyParameter?: SBMessageContents | string);
     send(): Promise<string>;
 }
 declare abstract class Channel extends SB384 {
@@ -289,9 +291,9 @@ export declare class ChannelEndpoint extends Channel {
     send(_m: SBMessage | string, _messageType?: 'string' | 'SBMessage'): Promise<string>;
     set onMessage(_f: CallableFunction);
 }
-export declare class SBObjectHandleClass {
+export declare class SBObjectHandle implements SBObjectHandle {
     #private;
-    version: string;
+    version?: string | undefined;
     iv?: Uint8Array | string;
     salt?: Uint8Array | string;
     fileName?: string;
@@ -321,11 +323,11 @@ declare class StorageApi {
     channelServer: string;
     constructor(server: string, channelServer: string, shardServer?: string);
     getObjectMetadata(buf: ArrayBuffer, type: SBObjectType): Promise<SBObjectMetadata>;
-    storeObject(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId, metadata?: SBObjectMetadata): Promise<SBObjectHandle>;
+    storeObject(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId, metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle>;
     storeRequest(fileId: string): Promise<ArrayBuffer>;
     storeData(type: string, fileId: string, iv: Uint8Array, salt: Uint8Array, storageToken: string, data: ArrayBuffer): Promise<Dictionary<any>>;
-    fetchData(h: SBObjectHandle, returnType: 'string'): Promise<string>;
-    fetchData(h: SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
+    fetchData(h: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>;
+    fetchData(h: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
     retrieveImage(imageMetaData: ImageMetaData, controlMessages: Array<ChannelMessage>, imageId?: string, imageKey?: string, imageType?: SBObjectType): Promise<Dictionary<any>>;
 }
 declare class Snackabra {

@@ -11,8 +11,8 @@ export const someKnownRooms = [
 const sb_config_workerd = {
     channel_server: 'http://localhost:3845',
     channel_ws: 'ws://localhost:3845',
-    storage_server: 'https://localhost:3843',
-    shard_server: 'https://localhost:3843',
+    storage_server: 'http://localhost:3843',
+    shard_server: 'http://localhost:3841',
 };
 export const sb_config = sb_config_workerd;
 //# sourceMappingURL=test_config.js.map

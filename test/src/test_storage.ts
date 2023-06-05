@@ -1,7 +1,7 @@
 // (c) 2023 384 (tm)
 
 import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js'
-import { Snackabra, SBObjectHandle, getRandomValues, compareBuffers } from '../dist/snackabra.js'
+import { Snackabra, Interfaces, getRandomValues, compareBuffers } from '../dist/snackabra.js'
 
 function test05a() {
     _test05(false)
@@ -11,7 +11,7 @@ function test05b() {
     _test05(true)
 }
 
-function _test05_landShard(SB: Snackabra, handleSet: Array<SBObjectHandle>, blockSet: Array<Uint8Array>, t0: number) {
+function _test05_landShard(SB: Snackabra, handleSet: Array<Interfaces.SBObjectHandle>, blockSet: Array<Uint8Array>, t0: number) {
     return new Promise<void>((resolve, _reject) => {
         console.log(`[${Date.now() - t0}] now let's try reading the land shards:`)
         let t2 = Date.now()
@@ -48,7 +48,7 @@ function _test05(testLandShard: boolean) {
             // this in fact equates to 64KB writes in current design ... don't worry about that for now
             for (let i = 0; i < blockCount; i++) blockSet.push(getRandomValues(new Uint8Array(63 * 1024)))
             console.log(`[${Date.now() - t0}] random blocks generated, start writing them to storage:`)
-            let handlePromiseSet: Array<Promise<SBObjectHandle>> = []
+            let handlePromiseSet: Array<Promise<Interfaces.SBObjectHandle>> = []
             for (let i = 0; i < blockCount; i++) handlePromiseSet.push(SB.storage.storeObject(blockSet[i], 'p', c.channelId))
             console.log(`[${Date.now() - t0}] everything has been fired off:`)
             console.log(handlePromiseSet)

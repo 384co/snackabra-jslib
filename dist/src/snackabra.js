@@ -4,90 +4,8 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.x';
-const SBKnownServers = [
-    {
-        channel_server: 'https://channel.384co.workers.dev',
-        channel_ws: 'wss://channel.384co.workers.dev',
-        storage_server: 'https://storage.384co.workers.dev',
-        shard_server: 'https://shard.3.8.4.land'
-    },
-    {
-        channel_server: 'https://r.384co.workers.dev',
-        channel_ws: 'wss://r.384co.workers.dev',
-        storage_server: 'https://s.384co.workers.dev'
-    },
-];
+const version = '1.2.x (beta)';
 var DBG = false;
-export function encryptedContentsMakeBinary(o) {
-    try {
-        let t;
-        let iv;
-        if (DBG) {
-            console.log("=+=+=+=+ processing content");
-            console.log(o.content.constructor.name);
-        }
-        if (typeof o.content === 'string') {
-            try {
-                t = base64ToArrayBuffer(decodeURIComponent(o.content));
-            }
-            catch (e) {
-                throw new Error("EncryptedContents is string format but not base64 (?)");
-            }
-        }
-        else {
-            const ocn = o.content.constructor.name;
-            _sb_assert((ocn === 'ArrayBuffer') || (ocn === 'Uint8Array'), 'undetermined content type in EncryptedContents object');
-            t = o.content;
-        }
-        if (DBG)
-            console.log("=+=+=+=+ processing nonce");
-        if (typeof o.iv === 'string') {
-            if (DBG) {
-                console.log("got iv as string:");
-                console.log(structuredClone(o.iv));
-            }
-            iv = base64ToArrayBuffer(decodeURIComponent(o.iv));
-            if (DBG) {
-                console.log("this was turned into array:");
-                console.log(structuredClone(iv));
-            }
-        }
-        else if ((o.iv.constructor.name === 'Uint8Array') || (o.iv.constructor.name === 'ArrayBuffer')) {
-            if (DBG) {
-                console.log("it's an array already");
-            }
-            iv = new Uint8Array(o.iv);
-        }
-        else {
-            if (DBG)
-                console.log("probably a dictionary");
-            try {
-                iv = new Uint8Array(Object.values(o.iv));
-            }
-            catch (e) {
-                if (DBG) {
-                    console.error("ERROR: cannot figure out format of iv (nonce), here's the input object:");
-                    console.error(o.iv);
-                }
-                _sb_assert(false, "undetermined iv (nonce) type, see console");
-            }
-        }
-        if (DBG) {
-            console.log("decided on nonce as:");
-            console.log(iv);
-        }
-        _sb_assert(iv.length == 12, `unwrap(): nonce should be 12 bytes but is not (${iv.length})`);
-        return { content: t, iv: iv };
-    }
-    catch (e) {
-        console.error('encryptedContentsMakeBinary() failed:');
-        console.error(e);
-        console.trace();
-        console.log(e.stack);
-        throw e;
-    }
-}
 export class MessageBus {
     bus = {};
     #select(event) {
@@ -171,6 +89,75 @@ async function newChannelData(keys) {
         signKey: JSON.stringify(exportable_signKey),
     };
     return { channelData: channelData, exportable_privateKey: exportable_privateKey };
+}
+export function encryptedContentsMakeBinary(o) {
+    try {
+        let t;
+        let iv;
+        if (DBG) {
+            console.log("=+=+=+=+ processing content");
+            console.log(o.content.constructor.name);
+        }
+        if (typeof o.content === 'string') {
+            try {
+                t = base64ToArrayBuffer(decodeURIComponent(o.content));
+            }
+            catch (e) {
+                throw new Error("EncryptedContents is string format but not base64 (?)");
+            }
+        }
+        else {
+            const ocn = o.content.constructor.name;
+            _sb_assert((ocn === 'ArrayBuffer') || (ocn === 'Uint8Array'), 'undetermined content type in EncryptedContents object');
+            t = o.content;
+        }
+        if (DBG)
+            console.log("=+=+=+=+ processing nonce");
+        if (typeof o.iv === 'string') {
+            if (DBG) {
+                console.log("got iv as string:");
+                console.log(structuredClone(o.iv));
+            }
+            iv = base64ToArrayBuffer(decodeURIComponent(o.iv));
+            if (DBG) {
+                console.log("this was turned into array:");
+                console.log(structuredClone(iv));
+            }
+        }
+        else if ((o.iv.constructor.name === 'Uint8Array') || (o.iv.constructor.name === 'ArrayBuffer')) {
+            if (DBG) {
+                console.log("it's an array already");
+            }
+            iv = new Uint8Array(o.iv);
+        }
+        else {
+            if (DBG)
+                console.log("probably a dictionary");
+            try {
+                iv = new Uint8Array(Object.values(o.iv));
+            }
+            catch (e) {
+                if (DBG) {
+                    console.error("ERROR: cannot figure out format of iv (nonce), here's the input object:");
+                    console.error(o.iv);
+                }
+                _sb_assert(false, "undetermined iv (nonce) type, see console");
+            }
+        }
+        if (DBG) {
+            console.log("decided on nonce as:");
+            console.log(iv);
+        }
+        _sb_assert(iv.length == 12, `unwrap(): nonce should be 12 bytes but is not (${iv.length})`);
+        return { content: t, iv: iv };
+    }
+    catch (e) {
+        console.error('encryptedContentsMakeBinary() failed:');
+        console.error(e);
+        console.trace();
+        console.log(e.stack);
+        throw e;
+    }
 }
 export function getRandomValues(buffer) {
     if (buffer.byteLength < (4096)) {
@@ -882,6 +869,19 @@ function ExceptionReject(target, _propertyKey, descriptor) {
     }
 }
 const sbCrypto = new SBCrypto();
+const SBKnownServers = [
+    {
+        channel_server: 'https://channel.384co.workers.dev',
+        channel_ws: 'wss://channel.384co.workers.dev',
+        storage_server: 'https://storage.384co.workers.dev',
+        shard_server: 'https://shard.3.8.4.land'
+    },
+    {
+        channel_server: 'https://r.384co.workers.dev',
+        channel_ws: 'wss://r.384co.workers.dev',
+        storage_server: 'https://s.384co.workers.dev'
+    },
+];
 class SB384 {
     ready;
     sb384Ready;
@@ -955,18 +955,25 @@ class SBMessage {
     channel;
     contents;
     [SB_MESSAGE_SYMBOL] = true;
-    MAX_SB_BODY_SIZE = 64 * 1024;
-    constructor(channel, body = '') {
-        _sb_assert(body.length < this.MAX_SB_BODY_SIZE, 'SBMessage(): body must be smaller than 64 KiB');
+    MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
+    constructor(channel, bodyParameter = '') {
+        if (typeof bodyParameter === 'string') {
+            this.contents = { encrypted: false, isVerfied: false, contents: bodyParameter, sign: '', image: '', imageMetaData: {} };
+        }
+        else {
+            this.contents = { encrypted: false, isVerfied: false, contents: '', sign: '', image: bodyParameter.image, imageMetaData: bodyParameter.imageMetaData };
+        }
+        let body = this.contents;
+        let bodyJson = JSON.stringify(body);
+        _sb_assert(bodyJson.length < this.MAX_SB_BODY_SIZE, `SBMessage(): body must be smaller than ${this.MAX_SB_BODY_SIZE / 1024} KiB (we got ${bodyJson.length / 1024})})`);
         this.channel = channel;
-        this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: '', imageMetaData: {} };
         this.ready = new Promise((resolve) => {
             channel.channelReady.then(async () => {
                 this.contents.sender_pubKey = this.channel.exportable_pubKey;
                 if (channel.userName)
                     this.contents.sender_username = channel.userName;
                 const signKey = this.channel.channelSignKey;
-                const sign = sbCrypto.sign(signKey, body);
+                const sign = sbCrypto.sign(signKey, body.contents);
                 const image_sign = sbCrypto.sign(signKey, this.contents.image);
                 const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData));
                 Promise.all([sign, image_sign, imageMetadata_sign]).then((values) => {
@@ -1666,9 +1673,9 @@ function deCryptChannelMessage(m00, m01, keys) {
         }
     });
 }
-export class SBObjectHandleClass {
+export class SBObjectHandle {
     version = '1';
-    #type = 'b';
+    #_type = 'b';
     #id;
     #key;
     #id32;
@@ -1688,7 +1695,7 @@ export class SBObjectHandleClass {
         if (version)
             this.version = version;
         if (type)
-            this.#type = type;
+            this.#_type = type;
         this.id = id;
         this.key = key;
         if (id32)
@@ -1744,7 +1751,7 @@ export class SBObjectHandleClass {
         _sb_assert(this.#verification, 'object handle verification is undefined');
         return this.#verification;
     }
-    get type() { return this.#type; }
+    get type() { return this.#_type; }
 }
 class StorageApi {
     server;
@@ -1755,8 +1762,6 @@ class StorageApi {
         this.channelServer = channelServer + '/api/room/';
         if (shardServer)
             this.shardServer = shardServer + '/api/v1';
-        else
-            this.shardServer = 'https://shard.3.8.4.land/api/v1';
     }
     #padBuf(buf) {
         const image_size = buf.byteLength;
@@ -1817,7 +1822,7 @@ class StorageApi {
                 resolve({ salt: new Uint8Array(par.salt), iv: new Uint8Array(par.iv) });
             })
                 .catch((e) => {
-                console.log(`ERROR: ${e}`);
+                console.warn(`**** ERROR: ${e}`);
                 reject(e);
             });
         });
@@ -2035,37 +2040,29 @@ class StorageApi {
         });
     }
     fetchData(h, returnType = 'arrayBuffer') {
-        return new Promise((resolve, reject) => {
-            try {
-                if (!h)
-                    reject('SBObjectHandle is null or undefined');
-                if (typeof h.verification === 'string')
-                    h.verification = new Promise((resolve) => { resolve(h.verification); });
-                h.verification.then((verificationToken) => {
-                    _sb_assert(verificationToken, "fetchData(): missing verification token (?)");
-                    const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server);
-                    if (DBG)
-                        console.log("fetching from server: " + useServer);
-                    SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
-                        .then((response) => {
-                        if (!response.ok)
-                            reject(new Error('Network response was not OK'));
-                        return response.arrayBuffer();
-                    })
-                        .then((payload) => {
-                        return this.#processData(payload, h);
-                    })
-                        .then((payload) => {
-                        if (returnType === 'string')
-                            resolve(sbCrypto.ab2str(new Uint8Array(payload)));
-                        else
-                            resolve(payload);
-                    });
-                });
-            }
-            catch (error) {
-                reject(error);
-            }
+        return new Promise(async (resolve, reject) => {
+            if (!h)
+                reject('SBObjectHandle is null or undefined');
+            const verificationToken = await h.verification;
+            const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server);
+            if (DBG)
+                console.log("fetching from server: " + useServer);
+            SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+                .then((response) => {
+                if (!response.ok)
+                    reject(new Error('Network response was not OK'));
+                return response.arrayBuffer();
+            })
+                .then((payload) => {
+                return this.#processData(payload, h);
+            })
+                .then((payload) => {
+                if (returnType === 'string')
+                    resolve(sbCrypto.ab2str(new Uint8Array(payload)));
+                else
+                    resolve(payload);
+            })
+                .catch((error) => { reject(error); });
         });
     }
     async retrieveImage(imageMetaData, controlMessages, imageId, imageKey, imageType) {

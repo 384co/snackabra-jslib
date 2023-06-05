@@ -21,22 +21,11 @@
 
 */
 
-const version = '1.1.x'
+const version = '1.2.x (beta)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
 
-/**
- * SBChannelHandle
- *
- * Complete descriptor of a channel. 'key' is stringified 'jwk' key.
- * The key is always private. If it matches the channelId, then it's
- * an 'owner' key.
- */
-export interface SBChannelHandle {
-  channelId: SBChannelId,
-  key: JsonWebKey,
-}
 
 export interface SBServer {
   /**
@@ -66,25 +55,16 @@ export interface SBServer {
 }
 
 /**
- * List of known servers. Nota bene: known does not mean *trusted*;
- * currently this will be mostly development servers. Please let us
- * know if there are global servers you would like us to add.
+ * SBChannelHandle
+ *
+ * Complete descriptor of a channel. 'key' is stringified 'jwk' key.
+ * The key is always private. If it matches the channelId, then it's
+ * an 'owner' key.
  */
-const SBKnownServers: Array<SBServer> = [
-  {
-    // Preview / Development Servers
-    channel_server: 'https://channel.384co.workers.dev',
-    channel_ws: 'wss://channel.384co.workers.dev',
-    storage_server: 'https://storage.384co.workers.dev',
-    shard_server: 'https://shard.3.8.4.land'
-  },
-  {
-    // This is both "384.chat" (production) and "sn.ac"
-    channel_server: 'https://r.384co.workers.dev',
-    channel_ws: 'wss://r.384co.workers.dev',
-    storage_server: 'https://s.384co.workers.dev'
-  },
-]
+export interface SBChannelHandle {
+  channelId: SBChannelId,
+  key: JsonWebKey,
+}
 
 interface WSProtocolOptions {
   version?: number,
@@ -135,10 +115,6 @@ interface ImageMetaData {
   previewNonce?: string,
   previewSalt?: string
 }
-
-/**
-@typedef {import("./snackabra.d.ts").ChannelMessage} ChannelMessage
-*/
 
 /**
    for example the incoming message will look like this (after decryption)
@@ -304,59 +280,6 @@ export interface EncryptedContentsBin {
 // set by creation of Snackabra object
 var DBG = false; // this should not be checked in as 'true'
 
-/**
- * Force EncryptedContents object to binary (interface
- * supports either string or arrays). String contents
- * implies base64 encoding.
- */
-export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedContentsBin {
-  try {
-    let t: ArrayBuffer
-    let iv: Uint8Array
-    if (DBG) {
-      console.log("=+=+=+=+ processing content")
-      console.log(o.content.constructor.name)
-    }
-    if (typeof o.content === 'string') {
-      try {
-        t = base64ToArrayBuffer(decodeURIComponent(o.content))
-      } catch (e) {
-        throw new Error("EncryptedContents is string format but not base64 (?)")
-      }
-    } else {
-      // console.log(structuredClone(o))
-      const ocn = o.content.constructor.name
-      _sb_assert((ocn === 'ArrayBuffer') || (ocn === 'Uint8Array'), 'undetermined content type in EncryptedContents object')
-      t = o.content
-    }
-    if (DBG) console.log("=+=+=+=+ processing nonce")
-    if (typeof o.iv === 'string') {
-      if (DBG) { console.log("got iv as string:"); console.log(structuredClone(o.iv)); }
-      iv = base64ToArrayBuffer(decodeURIComponent(o.iv))
-      if (DBG) { console.log("this was turned into array:"); console.log(structuredClone(iv)) }
-    } else if ((o.iv.constructor.name === 'Uint8Array') || (o.iv.constructor.name === 'ArrayBuffer')) {
-      if (DBG) { console.log("it's an array already") }
-      iv = new Uint8Array(o.iv)
-    } else {
-      if (DBG) console.log("probably a dictionary");
-      try {
-        iv = new Uint8Array(Object.values(o.iv))
-      } catch (e: any) {
-        if (DBG) { console.error("ERROR: cannot figure out format of iv (nonce), here's the input object:"); console.error(o.iv); }
-        _sb_assert(false, "undetermined iv (nonce) type, see console")
-      }
-    }
-    if (DBG) { console.log("decided on nonce as:"); console.log(iv!) }
-    _sb_assert(iv!.length == 12, `unwrap(): nonce should be 12 bytes but is not (${iv!.length})`)
-    return { content: t, iv: iv! }
-  } catch (e: any) {
-    console.error('encryptedContentsMakeBinary() failed:')
-    console.error(e)
-    console.trace()
-    console.log(e.stack)
-    throw e
-  }
-}
 
 /**
  * This is the standard (most common) channel message. It matches
@@ -381,19 +304,31 @@ interface ChannelEncryptedMessage {
 
 }
 
-export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encypted'
+export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encrypted'
 
+/**
+ * SBMessageContents
+ * 
+ * SBMessage contents are either a string, or SBMessageContents;
+ * the general case is the latter, which can have a message text,
+ * and an image. The image should be in a format such that the
+ * thumbnail is embedded ('image'), and the full image is referenced
+ * by 'imageId' (full image or document), and optionally 'previewId',
+ * which is a smaller version of the image (or whatever is in 'image'),
+ * with the presumption that apps can chose an intermediate view
+ * of whatever is in 'image'. 
+ */
 interface SBMessageContents {
+  contents: string,
+  image: string,
+  imageMetaData?: ImageMetaData,
+  image_sign?: string,
+  imageMetadata_sign?: string,
   sender_pubKey?: JsonWebKey,
   sender_username?: string,
   encrypted: boolean,
   isVerfied: boolean,
-  contents: string,
   sign: string,
-  image: string,
-  image_sign?: string,
-  imageMetadata_sign?: string,
-  imageMetaData?: ImageMetaData,
 }
 
 // these map to conventions and are different namespaces
@@ -403,35 +338,40 @@ interface SBMessageContents {
 
 export type SBObjectType = 'f' | 'p' | 'b' | 't'
 
-// this exists as both interface and class, but the class
-// is mostly used internally, and the interface is what
-// you'll use to communicate with the API
-export interface SBObjectHandle {
-  [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
-  version?: '1',
-  type: SBObjectType,
-  // for long-term storage you only need these:
-  id: string, key: string,
-  id32?: Base62Encoded, key32?: Base62Encoded, // optional: array32 format of key
-  // and currently you also need to keep track of this,
-  // but you can start sharing / communicating the
-  // object before it's resolved: among other things it
-  // serves as a 'write-through' verification
-  verification: Promise<string> | string,
-  // you'll need these in case you want to track an object
-  // across future (storage) servers, but as long as you
-  // are within the same SB servers you can request them.
-  iv?: Uint8Array | string,
-  salt?: Uint8Array | string,
-  // the following are optional and not tracked by
-  // shard servers etc, but facilitates app usage
-  fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
-  dateAndTime?: string, // optional: time of shard creation
-  shardServer?: string, // optionally direct a shard to a specific server (especially for reads)
-  fileType?: string, // optional: file type (mime)
-  lastModified?: number, // optional: last modified time (of underlying file, if any)
-  actualSize?: number, // optional: actual size of underlying file, if any
-  savedSize?: number, // optional: size of shard (may be different from actualSize)
+// TODO: we haven't modularized jslib yet, when we do this
+//       will be superfluous
+export namespace Interfaces {
+
+  // this exists as both interface and class, but the class
+  // is mostly used internally, and the interface is what
+  // you'll use to communicate with the API
+  export interface SBObjectHandle {
+    [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
+    version?: '1',
+    type: SBObjectType,
+    // for long-term storage you only need these:
+    id: string, key: string,
+    id32?: Base62Encoded, key32?: Base62Encoded, // optional: array32 format of key
+    // and currently you also need to keep track of this,
+    // but you can start sharing / communicating the
+    // object before it's resolved: among other things it
+    // serves as a 'write-through' verification
+    verification: Promise<string> | string,
+    // you'll need these in case you want to track an object
+    // across future (storage) servers, but as long as you
+    // are within the same SB servers you can request them.
+    iv?: Uint8Array | string,
+    salt?: Uint8Array | string,
+    // the following are optional and not tracked by
+    // shard servers etc, but facilitates app usage
+    fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
+    dateAndTime?: string, // optional: time of shard creation
+    shardServer?: string, // optionally direct a shard to a specific server (especially for reads)
+    fileType?: string, // optional: file type (mime)
+    lastModified?: number, // optional: last modified time (of underlying file, if any)
+    actualSize?: number, // optional: actual size of underlying file, if any
+    savedSize?: number, // optional: size of shard (may be different from actualSize)
+  }
 }
 
 export interface SBObjectMetadata {
@@ -597,6 +537,60 @@ async function newChannelData(keys?: JsonWebKey): Promise<{ channelData: Channel
 
 /******************************************************************************************************/
 //#region - SBCryptoUtils - crypto and translation stuff used by SBCrypto etc
+
+/**
+ * Force EncryptedContents object to binary (interface
+ * supports either string or arrays). String contents
+ * implies base64 encoding.
+ */
+export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedContentsBin {
+  try {
+    let t: ArrayBuffer
+    let iv: Uint8Array
+    if (DBG) {
+      console.log("=+=+=+=+ processing content")
+      console.log(o.content.constructor.name)
+    }
+    if (typeof o.content === 'string') {
+      try {
+        t = base64ToArrayBuffer(decodeURIComponent(o.content))
+      } catch (e) {
+        throw new Error("EncryptedContents is string format but not base64 (?)")
+      }
+    } else {
+      // console.log(structuredClone(o))
+      const ocn = o.content.constructor.name
+      _sb_assert((ocn === 'ArrayBuffer') || (ocn === 'Uint8Array'), 'undetermined content type in EncryptedContents object')
+      t = o.content
+    }
+    if (DBG) console.log("=+=+=+=+ processing nonce")
+    if (typeof o.iv === 'string') {
+      if (DBG) { console.log("got iv as string:"); console.log(structuredClone(o.iv)); }
+      iv = base64ToArrayBuffer(decodeURIComponent(o.iv))
+      if (DBG) { console.log("this was turned into array:"); console.log(structuredClone(iv)) }
+    } else if ((o.iv.constructor.name === 'Uint8Array') || (o.iv.constructor.name === 'ArrayBuffer')) {
+      if (DBG) { console.log("it's an array already") }
+      iv = new Uint8Array(o.iv)
+    } else {
+      if (DBG) console.log("probably a dictionary");
+      try {
+        iv = new Uint8Array(Object.values(o.iv))
+      } catch (e: any) {
+        if (DBG) { console.error("ERROR: cannot figure out format of iv (nonce), here's the input object:"); console.error(o.iv); }
+        _sb_assert(false, "undetermined iv (nonce) type, see console")
+      }
+    }
+    if (DBG) { console.log("decided on nonce as:"); console.log(iv!) }
+    _sb_assert(iv!.length == 12, `unwrap(): nonce should be 12 bytes but is not (${iv!.length})`)
+    return { content: t, iv: iv! }
+  } catch (e: any) {
+    console.error('encryptedContentsMakeBinary() failed:')
+    console.error(e)
+    console.trace()
+    console.log(e.stack)
+    throw e
+  }
+}
 
 /**
  * Fills buffer with random data
@@ -1740,6 +1734,27 @@ function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecorat
 // this is the global crypto object
 const sbCrypto = new SBCrypto();
 
+/**
+ * List of known servers. Nota bene: known does not mean *trusted*;
+ * currently this will be mostly development servers. Please let us
+ * know if there are global servers you would like us to add.
+ */
+const SBKnownServers: Array<SBServer> = [
+  {
+    // Preview / Development Servers
+    channel_server: 'https://channel.384co.workers.dev',
+    channel_ws: 'wss://channel.384co.workers.dev',
+    storage_server: 'https://storage.384co.workers.dev',
+    shard_server: 'https://shard.3.8.4.land'
+  },
+  {
+    // This is both "384.chat" (production) and "sn.ac"
+    channel_server: 'https://r.384co.workers.dev',
+    channel_ws: 'wss://r.384co.workers.dev',
+    storage_server: 'https://s.384co.workers.dev'
+  },
+]
+
 // let availableReadServers = new Promise<Array<string>>((resolve, _reject) => {
 //   const servers = [ 'http://localhost:3841', 'http://localhost:4000' ]
 //   Promise.all(servers.map(async (server) => {
@@ -1885,20 +1900,28 @@ class SBMessage {
   channel: Channel
   contents: SBMessageContents
   [SB_MESSAGE_SYMBOL] = true
-  MAX_SB_BODY_SIZE = 64 * 1024
+  MAX_SB_BODY_SIZE = 64 * 1024 * 1.5 // allow for base64 overhead plus extra
 
   /* SBMessage */
-  constructor(channel: Channel, body: string = '') {
-    _sb_assert(body.length < this.MAX_SB_BODY_SIZE, 'SBMessage(): body must be smaller than 64 KiB')
+  constructor(channel: Channel, bodyParameter: SBMessageContents | string = '' ) {
+    if (typeof bodyParameter === 'string') {
+      this.contents = { encrypted: false, isVerfied: false, contents: bodyParameter, sign: '', image: '', imageMetaData: {} }
+    } else {
+      this.contents = { encrypted: false, isVerfied: false, contents: '', sign: '', image: bodyParameter.image, imageMetaData: bodyParameter.imageMetaData }
+    }
+    let body = this.contents
+    let bodyJson = JSON.stringify(body)
+
+    _sb_assert(bodyJson.length < this.MAX_SB_BODY_SIZE,
+      `SBMessage(): body must be smaller than ${this.MAX_SB_BODY_SIZE / 1024} KiB (we got ${bodyJson.length / 1024})})`)
     this.channel = channel
-    this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: '', imageMetaData: {} }
     this.ready = new Promise<SBMessage>((resolve) => {
       // console.log(channel)
       channel.channelReady.then(async () => {
         this.contents.sender_pubKey = this.channel.exportable_pubKey!
         if (channel.userName) this.contents.sender_username = channel.userName
         const signKey = this.channel.channelSignKey
-        const sign = sbCrypto.sign(signKey, body)
+        const sign = sbCrypto.sign(signKey, body.contents)
         const image_sign = sbCrypto.sign(signKey!, this.contents.image)
         const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData))
         Promise.all([sign, image_sign, imageMetadata_sign]).then((values) => {
@@ -2858,9 +2881,9 @@ function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: Channe
  * @property {number} [savedSize] - optional: size of shard (may be different from actualSize)
  * 
  */
-export class SBObjectHandleClass {
-  version = '1';
-  #type: SBObjectType = 'b';
+export class SBObjectHandle implements SBObjectHandle {
+  version? = '1';
+  #_type: SBObjectType = 'b';
   #id?: string;
   #key?: string;
   #id32?: Base62Encoded | undefined;
@@ -2883,7 +2906,7 @@ export class SBObjectHandleClass {
     } = options;
 
     if (version) this.version = version;
-    if (type) this.#type = type;
+    if (type) this.#_type = type;
     this.id = id;
     this.key = key;
     if (id32) this.id32 = id32;
@@ -2944,7 +2967,7 @@ export class SBObjectHandleClass {
     return this.#verification!;
   }
 
-  get type(): SBObjectType { return this.#type; }
+  get type(): SBObjectType { return this.#_type; }
 
 }
 
@@ -2964,8 +2987,8 @@ class StorageApi {
     this.channelServer = channelServer + '/api/room/'
     if (shardServer)
       this.shardServer = shardServer + '/api/v1'
-    else
-      this.shardServer = 'https://shard.3.8.4.land/api/v1'
+    // else
+    //  this.shardServer = 'https://shard.3.8.4.land/api/v1'
   }
 
   /**
@@ -3047,7 +3070,7 @@ class StorageApi {
           resolve({ salt: new Uint8Array(par.salt), iv: new Uint8Array(par.iv) })
         })
         .catch((e) => {
-          console.log(`ERROR: ${e}`)
+          console.warn(`**** ERROR: ${e}`)
           reject(e)
         })
     })
@@ -3128,7 +3151,7 @@ class StorageApi {
    * @param roomId
    *
    */
-  storeObject(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId, metadata?: SBObjectMetadata): Promise<SBObjectHandle> {
+  storeObject(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId, metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle> {
     // export async function saveImage(sbImage, roomId, sendSystemMessage)
     return new Promise((resolve, reject) => {
       if (buf instanceof Uint8Array) {
@@ -3147,7 +3170,7 @@ class StorageApi {
           this.#_allocateObject(fullHash.id, type)
             .then((p) => {
               // storage server returns the salt and nonce it wants us to use
-              const r: SBObjectHandle = {
+              const r: Interfaces.SBObjectHandle = {
                 [SB_OBJECT_HANDLE_SYMBOL]: true,
                 version: '1',
                 type: type,
@@ -3163,7 +3186,7 @@ class StorageApi {
             .catch((e) => reject(e))
         })
       } else {
-        const r: SBObjectHandle = {
+        const r: Interfaces.SBObjectHandle = {
           [SB_OBJECT_HANDLE_SYMBOL]: true,
           version: '1',
           type: type,
@@ -3228,7 +3251,7 @@ class StorageApi {
   }
 
   /** @private */
-  #processData(payload: ArrayBuffer, h: SBObjectHandle): Promise<ArrayBuffer> {
+  #processData(payload: ArrayBuffer, h: Interfaces.SBObjectHandle): Promise<ArrayBuffer> {
     return new Promise((resolve, reject) => {
       try {
         let j = jsonParseWrapper(sbCrypto.ab2str(new Uint8Array(payload)), 'L3062')
@@ -3317,39 +3340,36 @@ class StorageApi {
    * @param returnType 'string' | 'arrayBuffer' - the type of data to return (default: 'arrayBuffer')
    * @returns Promise<ArrayBuffer | string> - the shard data
    */
-  fetchData(h: SBObjectHandle, returnType: 'string'): Promise<string>
-  fetchData(h: SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>
-  fetchData(h: SBObjectHandle, returnType: 'string' | 'arrayBuffer' = 'arrayBuffer'): Promise<ArrayBuffer | string> {
+  fetchData(h: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>
+  fetchData(h: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>
+  fetchData(h: Interfaces.SBObjectHandle, returnType: 'string' | 'arrayBuffer' = 'arrayBuffer'): Promise<ArrayBuffer | string> {
     // TODO: change SBObjectHandle from being an interface to being a class
     // update: we have an object class, but still using interface; still a todo here
     // how to nicely validate 'h'
     // _sb_assert(SBValidateObject(h, 'SBObjectHandle'), "fetchData() ERROR: parameter is not an SBOBjectHandle")
-    return new Promise((resolve, reject) => {
-      try {
-        if (!h) reject('SBObjectHandle is null or undefined')
-        if (typeof h.verification === 'string') h.verification = new Promise<string>((resolve) => { resolve(h.verification); })
-        h.verification.then((verificationToken) => {
-          _sb_assert(verificationToken, "fetchData(): missing verification token (?)")
-          const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
-          if (DBG) console.log("fetching from server: " + useServer)
-          SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
-            .then((response: Response) => {
-              if (!response.ok) reject(new Error('Network response was not OK'))
-              // console.log(response)
-              return response.arrayBuffer()
-            })
-            .then((payload: ArrayBuffer) => {
-              return this.#processData(payload, h)
-            })
-            .then((payload) => {
-              // _localStorage.setItem(`${h.id}_cache`, arrayBufferToBase64(payload))
-              if (returnType === 'string') resolve(sbCrypto.ab2str(new Uint8Array(payload)))
-              else resolve(payload)
-            })
-        })
-      } catch (error) {
-        reject(error)
-      }
+    // if (typeof h.verification === 'string') h.verification = new Promise<string>((resolve) => { resolve(h.verification); })
+    // _sb_assert(verificationToken, "fetchData(): missing verification token (?)")
+
+    return new Promise(async (resolve, reject) => {
+      if (!h) reject('SBObjectHandle is null or undefined')
+        const verificationToken = await h.verification
+        const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
+        if (DBG) console.log("fetching from server: " + useServer)
+        SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+          .then((response: Response) => {
+            if (!response.ok) reject(new Error('Network response was not OK'))
+            // console.log(response)
+            return response.arrayBuffer()
+          })
+          .then((payload: ArrayBuffer) => {
+            return this.#processData(payload, h)
+          })
+          .then((payload) => {
+            // _localStorage.setItem(`${h.id}_cache`, arrayBufferToBase64(payload))
+            if (returnType === 'string') resolve(sbCrypto.ab2str(new Uint8Array(payload)))
+            else resolve(payload)
+          })
+          .catch((error: Error) => { reject(error) })        
     })
   }
 
@@ -3371,7 +3391,7 @@ class StorageApi {
       _sb_assert(control_msg.verificationToken, "retrieveImage(): verificationToken missing (?)")
       _sb_assert(control_msg.id, "retrieveImage(): id missing (?)")
 
-      const obj: SBObjectHandle = {
+      const obj: Interfaces.SBObjectHandle = {
         type: type,
         id: control_msg.id!,
         key: key!,
