@@ -13,43 +13,43 @@
     "minify": "webpack --config webpack.config.js",
     "copy-js": "cp ./src/*.js ./dist",
     "pack": "npm run build && yarn pack --ignore-scripts --ignore-optional",
-    "publish": "yarn publish --non-interactive"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/snackabra/snackabra-jslib.git"
-  },
-  "keywords": [
-    "typescript",
-    "snackabra",
-    "chat",
-    "messaging",
-    "photo",
-    "file",
-    "storage",
-    "share"
-  ],
-  "author": "Magnusson Institute",
-  "license": "GPL-3.0-only",
-  "bugs": {
-    "url": "https://github.com/snackabra/snackabra-jslib/issues"
-  },
-  "homepage": "https://snackabra.readthedocs.io",
-  "files": [
-    "dist/snackabra.min.js",
-    "dist/src/snackabra.d.ts",
-    "dist/src/snackabra.d.ts.map",
-    "dist/src/snackabra.js",
-    "dist/src/snackabra.js.map",
-    "src/snackabra.ts"
-  ],
-  "sideEffects": false,
-  "devDependencies": {
-    "@rollup/plugin-terser": "^0.4.0",
-    "concurrently": "^6.0.0",
-    "nodemon": "^2.0.14",
-    "typescript": "^5.0.4",
-    "webpack": "^5.75.0",
-    "webpack-cli": "^5.0.1"
-  }
+    "publish": "npm publish"
+},
+"repository": {
+  "type": "git",
+  "url": "git+https://github.com/snackabra/snackabra-jslib.git"
+},
+"keywords": [
+  "typescript",
+  "snackabra",
+  "chat",
+  "messaging",
+  "photo",
+  "file",
+  "storage",
+  "share"
+],
+"author": "Magnusson Institute",
+"license": "GPL-3.0-only",
+"bugs": {
+  "url": "https://github.com/snackabra/snackabra-jslib/issues"
+},
+"homepage": "https://snackabra.readthedocs.io",
+"files": [
+  "dist/snackabra.min.js",
+  "dist/src/snackabra.d.ts",
+  "dist/src/snackabra.d.ts.map",
+  "dist/src/snackabra.js",
+  "dist/src/snackabra.js.map",
+  "src/snackabra.ts"
+],
+"sideEffects": false,
+"devDependencies": {
+  "@rollup/plugin-terser": "^0.4.0",
+  "concurrently": "^6.0.0",
+  "nodemon": "^2.0.14",
+  "typescript": "^5.0.4",
+  "webpack": "^5.75.0",
+  "webpack-cli": "^5.0.1"
+}
 }
