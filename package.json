@@ -15,6 +15,7 @@
     "pack": "npm run build && npm pack",
     "publish": "echo 'looks like it published'"
   },
+  
   "repository": {
     "type": "git",
     "url": "git+https://github.com/snackabra/snackabra-jslib.git"
