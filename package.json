@@ -12,8 +12,7 @@
     "watch-ts": "tsc -p tsconfig.json -w",
     "minify": "webpack --config webpack.config.js",
     "copy-js": "cp ./src/*.js ./dist",
-    "pack": "npm run build && yarn pack --ignore-scripts --ignore-optional",
-    "publish": "npm publish"
+    "pack": "npm run build && yarn pack --ignore-scripts --ignore-optional"
   },
   "repository": {
     "type": "git",
