@@ -1,6 +1,6 @@
 {
   "name": "snackabra",
-  "version": "1.1.17",
+  "version": "1.1.18",
   "description": "Snackabra Core Library ('jslib')",
   "main": "dist/snackabra.min.js",
   "types": "dist/src/snackabra.d.ts",
@@ -15,7 +15,6 @@
     "pack": "npm run build && npm pack",
     "publish": "echo 'looks like it published'"
   },
-  
   "repository": {
     "type": "git",
     "url": "git+https://github.com/snackabra/snackabra-jslib.git"
