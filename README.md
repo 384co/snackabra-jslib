@@ -20,6 +20,8 @@ Source and related projects: <https://github.com/snackabra>
 
 ## Build
 
+(Note: we use yarn 3.6.0 or later)
+
 ```bash
 # first time:
 yarn install

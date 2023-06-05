@@ -1806,8 +1806,6 @@ const SBKnownServers: Array<SBServer> = [
 
 //#endregion - SETUP and STARTUP stuff
 
-
-
 /******************************************************************************************************/
 //#region - SB384 Class
 

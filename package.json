@@ -1,6 +1,6 @@
 {
   "name": "snackabra",
-  "version": "1.1.17",
+  "version": "1.1.16",
   "description": "Snackabra Core Library ('jslib')",
   "main": "dist/snackabra.min.js",
   "types": "dist/src/snackabra.d.ts",
@@ -12,7 +12,8 @@
     "watch-ts": "tsc -p tsconfig.json -w",
     "minify": "webpack --config webpack.config.js",
     "copy-js": "cp ./src/*.js ./dist",
-    "pack": "npm run build && yarn pack --ignore-scripts --ignore-optional"
+    "pack": "npm run build && yarn pack --ignore-scripts --ignore-optional",
+    "publish": "npm publish --tag latest --access public"
   },
   "repository": {
     "type": "git",
