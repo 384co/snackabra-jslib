@@ -2,7 +2,7 @@
 
 import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js'
 import { assert } from './test_utils.js'
-import { Snackabra, ChannelMessage, SBMessage, SBChannelHandle, ChannelEndpoint, ChannelSocket } from '../dist/snackabra.js'
+import { Snackabra, ChannelMessage, SBMessage, SBChannelHandle, ChannelEndpoint, ChannelSocket } from '../../src/snackabra.js'
 // import { SB } from './snackabra'
 
 // enable this to add (console.log) detailed trace output on ALL channels

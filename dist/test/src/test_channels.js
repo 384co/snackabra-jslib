@@ -1,6 +1,6 @@
 import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js';
 import { assert } from './test_utils.js';
-import { Snackabra, SBMessage, ChannelEndpoint } from '../dist/snackabra.js';
+import { Snackabra, SBMessage, ChannelEndpoint } from '../../src/snackabra.js';
 const TRACE_CHANNELS = jslibVerbose;
 function logTest(msg) {
     const z = getElement('channel_tests');

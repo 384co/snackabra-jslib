@@ -1,4 +1,3 @@
-import { SBServer } from '../dist/snackabra.js';
 export declare const autoRun = false;
 export declare const jslibVerbose = false;
 export declare const serverPassword = "password";

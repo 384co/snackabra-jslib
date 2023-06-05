@@ -1,5 +1,5 @@
 import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js';
-import { Snackabra, getRandomValues, compareBuffers } from '../dist/snackabra.js';
+import { Snackabra, getRandomValues, compareBuffers } from '../../src/snackabra.js';
 function test05a() {
     _test05(false);
 }
