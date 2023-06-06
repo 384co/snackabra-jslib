@@ -1,6 +1,6 @@
 {
   "name": "snackabra",
-  "version": "1.1.18",
+  "version": "1.1.20",
   "description": "Snackabra Core Library ('jslib')",
   "main": "dist/snackabra.min.js",
   "types": "dist/src/snackabra.d.ts",
@@ -12,8 +12,7 @@
     "watch-ts": "tsc -p tsconfig.json -w",
     "minify": "webpack --config webpack.config.js",
     "copy-js": "cp ./src/*.js ./dist",
-    "pack": "npm run build && npm pack",
-    "publish": "npm publish --tag latest"
+    "pack": "npm run build && npm pack"
   },
   "repository": {
     "type": "git",
