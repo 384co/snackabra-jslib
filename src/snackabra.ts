@@ -21,7 +21,8 @@
 
 */
 
-const version = '1.1.17'
+// const version = '1.1.17'
+const version = require('../package.json').version
 
 /******************************************************************************************************/
 //#region Interfaces - Types

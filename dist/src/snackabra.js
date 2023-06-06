@@ -1031,11 +1031,13 @@ class Channel extends SB384 {
                 headers: { 'Content-Type': 'application/json' },
             })
                 .then((response) => {
-                _sb_assert(response.ok, "ChannelEndpoint(): failed to get channel keys (network response not ok)");
+                if (!response.ok)
+                    reject("ChannelEndpoint(): failed to get channel keys (network response not ok)");
                 return response.json();
             })
                 .then(async (data) => {
-                _sb_assert(!data.error, "ChannelEndpoint(): failed to get channel keys (error in response)");
+                if (data.error)
+                    reject("ChannelEndpoint(): failed to get channel keys (error in response)");
                 await this.#loadKeys(data);
                 this.#ChannelReadyFlag = true;
                 resolve(this);
