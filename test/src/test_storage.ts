@@ -1,7 +1,7 @@
 // (c) 2023 384 (tm)
 
 import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js'
-import { Snackabra, Interfaces, getRandomValues, compareBuffers } from '../../src/snackabra.js'
+import { Snackabra, Interfaces, getRandomValues, compareBuffers } from './snackabra.js'
 
 function test05a() {
     _test05(false)

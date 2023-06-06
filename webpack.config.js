@@ -1,7 +1,7 @@
 module.exports = {
-    entry: './dist/src/snackabra.js', // the entry point of your application
+    entry: './dist/snackabra.js', // the entry point of your application
     mode: 'production',
-    watch: true,
+    // watch: true,
     optimization: {
         minimize: true
     },

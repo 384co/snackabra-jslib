@@ -1,6 +1,6 @@
 // (c) 2023 384 (tm)
 
-import { Interfaces } from "../../dist/src/snackabra.js";
+import { Interfaces } from "./snackabra.js";
 
 export const videoShards: Array<Interfaces.SBObjectHandle> = [
     {
