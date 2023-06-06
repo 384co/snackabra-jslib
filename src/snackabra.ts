@@ -21,7 +21,7 @@
 
 */
 
-const version = '1.2.x (beta)'
+const version = '1.1.17'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -2049,13 +2049,14 @@ abstract class Channel extends SB384 {
           headers: { 'Content-Type': 'application/json' },
         })
         .then((response: Response) => {
-          _sb_assert(response.ok, "ChannelEndpoint(): failed to get channel keys (network response not ok)")
+          if (!response.ok)
+            reject("ChannelEndpoint(): failed to get channel keys (network response not ok)");
           return response.json() as unknown as ChannelKeyStrings // continues processing below
         })
         .then(async (data) => {
-          _sb_assert(!data.error, "ChannelEndpoint(): failed to get channel keys (error in response)")
+          if (data.error) 
+            reject("ChannelEndpoint(): failed to get channel keys (error in response)");
           await this.#loadKeys(data)
-
           // now we're ready
           this.#ChannelReadyFlag = true
           resolve(this)
