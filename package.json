@@ -9,11 +9,12 @@
     "build": "npm run build:jslib && npm run build:test && npm run minify && npm run copy-js",
     "build:jslib": "tsc -p ./jslib/tsconfig.json",
     "build:test": "tsc -p ./test/tsconfig.json && echo \"tests built\"",
-    "watch": "concurrently -k -p \"[{name}]\" -n \"JSLib, Test, Minify\" -c \"green.bold,cyan.bold,magenta.bold,white.bold\" \"npm run nodemon:jslib\" \"npm run nodemon:test\" \"npm run minify\"",
+    "watch": "concurrently -k -p \"[{name}]\" -n \"JSLib, Test, Minify, Copy Files\" -c \"green.bold,cyan.bold,magenta.bold,white.bold\" \"npm run nodemon:jslib\" \"npm run nodemon:test\" \"npm run minify\" \"npm run watch:copy\"",
     "nodemon:jslib": "nodemon --watch jslib/src/snackabra.ts -L -e ts --ignore node_modules/ --exec \"npm run build:jslib\"",
     "nodemon:test": "nodemon --watch test/src/*.ts -L -e ts --ignore node_modules/ --exec \"npm run build:test\"",
-    "minify": "webpack --config webpack.config.js",
-    "copy-js": "cp ./jslib/build/* ./jslib/src/snackabra.ts ./dist",
+    "minify": "webpack --config webpack.config.js --watch",
+    "watch:copy" :"nodemon --watch test/src/*.ts -L -e ts  --ignore node_modules/ --exec \"npm run copy-js\"",
+    "copy-js": "cp ./jslib/build/* ./jslib/src/snackabra.ts ./dist && echo \"Copied JS files to dist/\"",
     "clean": "rm -rf jslib/build/* test/build/*"
   },
   "repository": {
