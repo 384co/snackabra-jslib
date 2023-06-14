@@ -91,5 +91,5 @@
     
   },
   "include": [ "src/*.ts" ],
-  "exclude": [ "build" ]
+  "exclude": [ "build", "src/snackabra.*" ]
 }

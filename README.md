@@ -30,6 +30,9 @@ yarn install
 yarn start
 ```
 
+Note the main jslib file is in ''jslib/src/snackabra.ts''.
+It gets built into ''jslib/build'' and copied into ''./dist''.
+
 ## Usage in browsers
 
 Directly in your html:

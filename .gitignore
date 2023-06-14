@@ -16,3 +16,7 @@ tmp/
 .DS_Store
 .yarn/
 .yarn
+node_modules
+node_modules/.yarn-integrity
+node_modules/*
+node_modules/
