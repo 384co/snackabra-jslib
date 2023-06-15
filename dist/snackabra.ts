@@ -23,7 +23,7 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.22 (pre)'
+const version = '1.1.22 build 012 (pre)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -281,7 +281,7 @@ export interface EncryptedContentsBin {
 
 // set by creation of Snackabra object
 var DBG = false; // this should not be checked in as 'true'
-
+var DBG2 = false; // internal detailed debugging
 
 /**
  * This is the standard (most common) channel message. It matches
@@ -565,16 +565,16 @@ export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedCont
       _sb_assert((ocn === 'ArrayBuffer') || (ocn === 'Uint8Array'), 'undetermined content type in EncryptedContents object')
       t = o.content
     }
-    if (DBG) console.log("=+=+=+=+ processing nonce")
+    if (DBG2) console.log("=+=+=+=+ processing nonce")
     if (typeof o.iv === 'string') {
-      if (DBG) { console.log("got iv as string:"); console.log(structuredClone(o.iv)); }
+      if (DBG2) { console.log("got iv as string:"); console.log(structuredClone(o.iv)); }
       iv = base64ToArrayBuffer(decodeURIComponent(o.iv))
-      if (DBG) { console.log("this was turned into array:"); console.log(structuredClone(iv)) }
+      if (DBG2) { console.log("this was turned into array:"); console.log(structuredClone(iv)) }
     } else if ((o.iv.constructor.name === 'Uint8Array') || (o.iv.constructor.name === 'ArrayBuffer')) {
-      if (DBG) { console.log("it's an array already") }
+      if (DBG2) { console.log("it's an array already") }
       iv = new Uint8Array(o.iv)
     } else {
-      if (DBG) console.log("probably a dictionary");
+      if (DBG2) console.log("probably a dictionary");
       try {
         iv = new Uint8Array(Object.values(o.iv))
       } catch (e: any) {
@@ -582,7 +582,7 @@ export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedCont
         _sb_assert(false, "undetermined iv (nonce) type, see console")
       }
     }
-    if (DBG) { console.log("decided on nonce as:"); console.log(iv!) }
+    if (DBG2) { console.log("decided on nonce as:"); console.log(iv!) }
     _sb_assert(iv!.length == 12, `unwrap(): nonce should be 12 bytes but is not (${iv!.length})`)
     return { content: t, iv: iv! }
   } catch (e: any) {
@@ -1908,7 +1908,7 @@ class SBMessage {
   MAX_SB_BODY_SIZE = 64 * 1024 * 1.5 // allow for base64 overhead plus extra
 
   /* SBMessage */
-  constructor(channel: Channel, bodyParameter: SBMessageContents | string = '' ) {
+  constructor(channel: Channel, bodyParameter: SBMessageContents | string = '') {
     if (typeof bodyParameter === 'string') {
       this.contents = { encrypted: false, isVerfied: false, contents: bodyParameter, sign: '', image: '', imageMetaData: {} }
     } else {
@@ -2056,7 +2056,7 @@ abstract class Channel extends SB384 {
           return response.json() as unknown as ChannelKeyStrings // continues processing below
         })
         .then(async (data) => {
-          if (data.error) 
+          if (data.error)
             reject("ChannelEndpoint(): failed to get channel keys (error in response)");
           await this.#loadKeys(data)
           // now we're ready
@@ -2169,7 +2169,7 @@ abstract class Channel extends SB384 {
   async #callApi(path: string): Promise<any>
   async #callApi(path: string, body: any): Promise<any>
   async #callApi(path: string, body?: any): Promise<any> {
-    if (DBG) console.log(path)
+    if (DBG) console.log("#callApi:", path)
     if (!this.#ChannelReadyFlag) {
       console.log("ChannelApi.#callApi: channel not ready (we will wait)")
       await (this.channelReady)
@@ -2257,14 +2257,14 @@ abstract class Channel extends SB384 {
               if (v.match(regex)) {
                 const message = jsonParseWrapper(data[v], "L3318")
                 if (message.hasOwnProperty('encrypted_contents')) {
-                  if (DBG) console.log(message)
+                  if (DBG) console.log("Received message: ", message)
                   return message;
                 }
               }
             })
             .map((v) => {
               const message = jsonParseWrapper(data[v], "L3327")
-              if (DBG) console.log(v, message.encrypted_contents, this.keys)
+              if (DBG2) console.log(v, message.encrypted_contents, this.keys)
               return deCryptChannelMessage(v, message.encrypted_contents, this.keys)
             }))
             .then((decryptedMessageArray) => {
@@ -2494,7 +2494,9 @@ export class ChannelSocket extends Channel {
   }
 
   #channelSocketReadyFactory() {
+    console.log("++++ CREATING ChannelSocket.readyPromise()")
     return new Promise<ChannelSocket>((resolve, reject) => {
+      console.log("++++ STARTED ChannelSocket.readyPromise()")
       this.#resolveFirstMessage = resolve
       const url = this.#ws.url
       if (DBG) { console.log("++++++++ readyPromise() has url:"); console.log(url); }
@@ -2534,6 +2536,18 @@ export class ChannelSocket extends Channel {
         console.log('ChannelSocket() error: ', e)
         reject('ChannelSocket creation error (see log)')
       })
+      // let us set a timeout to catch and make sure this thing resoles within 0.5 seconds
+      // todo: add as a decorator for ready-template style constructors
+      setTimeout(() => {
+        if (!this.#ChannelSocketReadyFlag) {
+          console.warn("ChannelSocket() - this socket is not resolving ...")
+          console.log(this)
+          reject('ChannelSocket() - this socket is not resolving ...')
+        } else {
+          console.log("ChannelSocket() - this socket resoled") 
+          console.log(this)
+        }
+      }, 500)
     })
 
   }
@@ -2580,7 +2594,7 @@ export class ChannelSocket extends Channel {
       if (Object.keys(m01)[0] === 'encrypted_contents') {
         console.log("++++++++ #processMessage: received message:")
         console.log(m01.encrypted_contents.content)
-    
+
         // check if this message is one that we've recently sent
         const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(m01.encrypted_contents.content))
         const ack_id = arrayBufferToBase64(hash)
@@ -2601,11 +2615,11 @@ export class ChannelSocket extends Channel {
         if ((iv_b64) && (_assertBase64(iv_b64)) && (iv_b64.length == 16)) {
           m01.encrypted_contents.iv = base64ToArrayBuffer(iv_b64)
           deCryptChannelMessage(m00, m01.encrypted_contents, this.keys)
-          .then((m) => {
-            if (this.#traceSocket) console.log(Object.assign({}, m))
-            this.#onMessage(m)
-          })
-          .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message') })
+            .then((m) => {
+              if (this.#traceSocket) console.log(Object.assign({}, m))
+              this.#onMessage(m)
+            })
+            .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message') })
         } else {
           console.error('#processMessage: - iv is malformed, should be 16-char b64 string (ignoring)')
         }
@@ -2705,34 +2719,34 @@ export class ChannelSocket extends Channel {
                 console.log(Object.assign({}, message.contents))
               }
               sbCrypto.wrap(this.keys.encryptionKey, JSON.stringify(message.contents), 'string')
-              .then((wrappedMessage) => {
-                const m = JSON.stringify({ encrypted_contents: wrappedMessage })
-                console.log("++++++++ ChannelSocket.send(): sending message:")
-                console.log(wrappedMessage.content as string)
-                crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content as string))
-                .then((hash) => {
-                  const messageHash = arrayBufferToBase64(hash)
-                  console.log("Which has hash:")
-                  console.log(messageHash)
-                  // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
-                  this.#ack.set(messageHash, resolve)
-                  this.#ws.websocket!.send(m)
-                  // TODO: not sure why we needed separate 'ack' interaction, just resolve on seeing message back?
-                  // this.#ws.websocket!.send(JSON.stringify(ackPayload));
-                  setTimeout(() => {
-                    if (this.#ack.has(messageHash)) {
-                      this.#ack.delete(messageHash)
-                      const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`
-                      console.error(msg)
-                      reject(msg)
-                    } else {
-                      // normal behavior
-                      if (this.#traceSocket) console.log("++++++++ ChannelSocket.send() completed sending")
-                      resolve("success")
-                    }
-                  }, this.#ws.timeout)
+                .then((wrappedMessage) => {
+                  const m = JSON.stringify({ encrypted_contents: wrappedMessage })
+                  console.log("++++++++ ChannelSocket.send(): sending message:")
+                  console.log(wrappedMessage.content as string)
+                  crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content as string))
+                    .then((hash) => {
+                      const messageHash = arrayBufferToBase64(hash)
+                      console.log("Which has hash:")
+                      console.log(messageHash)
+                      // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
+                      this.#ack.set(messageHash, resolve)
+                      this.#ws.websocket!.send(m)
+                      // TODO: not sure why we needed separate 'ack' interaction, just resolve on seeing message back?
+                      // this.#ws.websocket!.send(JSON.stringify(ackPayload));
+                      setTimeout(() => {
+                        if (this.#ack.has(messageHash)) {
+                          this.#ack.delete(messageHash)
+                          const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`
+                          console.error(msg)
+                          reject(msg)
+                        } else {
+                          // normal behavior
+                          if (this.#traceSocket) console.log("++++++++ ChannelSocket.send() completed sending")
+                          resolve("success")
+                        }
+                      }, this.#ws.timeout)
+                    })
                 })
-              })
               break
             case 3: // CLOSED
             case 0: // CONNECTING
@@ -2890,7 +2904,7 @@ function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: Channe
  * 
  */
 export class SBObjectHandle implements SBObjectHandle {
-  version? = '1';
+  version?= '1';
   #_type: SBObjectType = 'b';
   #id?: string;
   #key?: string;
@@ -3017,7 +3031,7 @@ class StorageApi {
     let finalArray = _appendBuffer(buf, (new Uint8Array(_target - image_size)).buffer);
     // set the (original) size in the last 4 bytes
     (new DataView(finalArray)).setUint32(_target - 4, image_size)
-    if (DBG) {
+    if (DBG2) {
       console.log("#padBuf bytes:");
       console.log(finalArray.slice(-4))
     }
@@ -3035,10 +3049,10 @@ class StorageApi {
     var _size = new DataView(tail).getUint32(0)
     const _little_endian = new DataView(tail).getUint32(0, true)
     if (_little_endian < _size) {
-      if (DBG) console.warn("#unpadData - size of shard encoded as little endian (fixed upon read)")
+      if (DBG2) console.warn("#unpadData - size of shard encoded as little endian (fixed upon read)")
       _size = _little_endian
     }
-    if (DBG) {
+    if (DBG2) {
       console.log(`#unpadData - size of object is ${_size}`)
       // console.log(tail)
     }
@@ -3163,11 +3177,11 @@ class StorageApi {
     // export async function saveImage(sbImage, roomId, sendSystemMessage)
     return new Promise((resolve, reject) => {
       if (buf instanceof Uint8Array) {
-        if (DBG) console.log('converting Uint8Array to ArrayBuffer')
+        if (DBG2) console.log('converting Uint8Array to ArrayBuffer')
         buf = new Uint8Array(buf).buffer
       }
       if (!(buf instanceof ArrayBuffer) && buf.constructor.name != 'ArrayBuffer') {
-        if (DBG) console.log('buf must be an ArrayBuffer:'); console.log(buf);
+        if (DBG2) console.log('buf must be an ArrayBuffer:'); console.log(buf);
         reject('buf must be an ArrayBuffer')
       }
       const bufSize = (buf as ArrayBuffer).byteLength
@@ -3270,7 +3284,7 @@ class StorageApi {
       } finally {
         const data = extractPayload(payload)
         if (DBG) {
-          console.log("Payload is:")
+          console.log("Payload (#processData) is:")
           console.log(data)
         }
         // payload includes nonce and salt
@@ -3305,7 +3319,7 @@ class StorageApi {
           console.log("handleSalt unprocessed:")
           console.log(handleSalt)
         }
-        if (DBG) {
+        if (DBG2) {
           console.log("will use nonce and salt of:")
           console.log(`iv: ${arrayBufferToBase64(iv)}`)
           console.log(`salt : ${arrayBufferToBase64(salt)}`)
@@ -3316,7 +3330,7 @@ class StorageApi {
           // const encrypted_image = sbCrypto.ab2str(new Uint8Array(data.image))
           // const encrypted_image = new Uint8Array(data.image)
           const encrypted_image = data.image;
-          if (DBG) {
+          if (DBG2) {
             console.log("data.image:      "); console.log(data.image)
             console.log("encrypted_image: "); console.log(encrypted_image)
           }
@@ -3328,7 +3342,7 @@ class StorageApi {
             //   console.error('(Image error: ' + img.error + ')');
             //   throw new Error('Failed to fetch data - authentication or formatting error');
             // }
-            if (DBG) { console.log(" unwrapped img: "); console.log(img) }
+            if (DBG) { console.log("#processData(), unwrapped img: "); console.log(img) }
             resolve(img)
           })
         })
@@ -3360,24 +3374,24 @@ class StorageApi {
 
     return new Promise(async (resolve, reject) => {
       if (!h) reject('SBObjectHandle is null or undefined')
-        const verificationToken = await h.verification
-        const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
-        if (DBG) console.log("fetching from server: " + useServer)
-        SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
-          .then((response: Response) => {
-            if (!response.ok) reject(new Error('Network response was not OK'))
-            // console.log(response)
-            return response.arrayBuffer()
-          })
-          .then((payload: ArrayBuffer) => {
-            return this.#processData(payload, h)
-          })
-          .then((payload) => {
-            // _localStorage.setItem(`${h.id}_cache`, arrayBufferToBase64(payload))
-            if (returnType === 'string') resolve(sbCrypto.ab2str(new Uint8Array(payload)))
-            else resolve(payload)
-          })
-          .catch((error: Error) => { reject(error) })        
+      const verificationToken = await h.verification
+      const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
+      if (DBG) console.log("fetchData(), fetching from server: " + useServer)
+      SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+        .then((response: Response) => {
+          if (!response.ok) reject(new Error('Network response was not OK'))
+          // console.log(response)
+          return response.arrayBuffer()
+        })
+        .then((payload: ArrayBuffer) => {
+          return this.#processData(payload, h)
+        })
+        .then((payload) => {
+          // _localStorage.setItem(`${h.id}_cache`, arrayBufferToBase64(payload))
+          if (returnType === 'string') resolve(sbCrypto.ab2str(new Uint8Array(payload)))
+          else resolve(payload)
+        })
+        .catch((error: Error) => { reject(error) })
     })
   }
 
@@ -3458,6 +3472,7 @@ class Snackabra {
   // #defaultIdentity = new Identity();
   // defaultIdentity?: Identity
   #preferredServer?: SBServer
+  #version = version
 
   /**
   * @param args - optional object with the names of the matching servers, for example
@@ -3467,6 +3482,7 @@ class Snackabra {
   * @param DEBUG - optional boolean to enable debug logging
   */
   constructor(args?: SBServer, DEBUG: boolean = false) {
+    console.log(`************ CREATING Snackabra object generation: ${this.version} **************`)
     if (args) {
       this.#preferredServer = Object.assign({}, args)
       this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined)
@@ -3492,8 +3508,11 @@ class Snackabra {
    * @returns a channel object
    */
   connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
-    if ((DBG) && (key)) console.log(key)
-    if ((DBG) && (channelId)) console.log(channelId)
+    if (DBG) {
+      console.log("++++ Snackabra.connect() ++++")
+      if (key) console.log(key)
+      if (channelId) console.log(channelId)
+    }
     return new Promise<ChannelSocket>(async (resolve) => {
       if (this.#preferredServer)
         // if we have a preferred server then we do not have to wait for 'ready'
@@ -3575,6 +3594,10 @@ class Snackabra {
     return sbCrypto;
   }
 
+  get version(): string {
+    return this.#version;
+  }
+
 
 } /* class Snackabra */
 
@@ -3610,5 +3633,5 @@ export var SB = {
 
 if (!(globalThis as any).SB)
   (globalThis as any).SB = SB;
-console.log(`************ SNACKABRA jslib loaded ${(globalThis as any).SB.version} **************`)
+  console.log(`************ SNACKABRA jslib loaded ${(globalThis as any).SB.version} **************`)
 //#endregion - exporting stuff

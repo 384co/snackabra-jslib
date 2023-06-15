@@ -4,8 +4,9 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.22 (pre)';
+const version = '1.1.22 build 012 (pre)';
 var DBG = false;
+var DBG2 = false;
 export class MessageBus {
     bus = {};
     #select(event) {
@@ -111,27 +112,27 @@ export function encryptedContentsMakeBinary(o) {
             _sb_assert((ocn === 'ArrayBuffer') || (ocn === 'Uint8Array'), 'undetermined content type in EncryptedContents object');
             t = o.content;
         }
-        if (DBG)
+        if (DBG2)
             console.log("=+=+=+=+ processing nonce");
         if (typeof o.iv === 'string') {
-            if (DBG) {
+            if (DBG2) {
                 console.log("got iv as string:");
                 console.log(structuredClone(o.iv));
             }
             iv = base64ToArrayBuffer(decodeURIComponent(o.iv));
-            if (DBG) {
+            if (DBG2) {
                 console.log("this was turned into array:");
                 console.log(structuredClone(iv));
             }
         }
         else if ((o.iv.constructor.name === 'Uint8Array') || (o.iv.constructor.name === 'ArrayBuffer')) {
-            if (DBG) {
+            if (DBG2) {
                 console.log("it's an array already");
             }
             iv = new Uint8Array(o.iv);
         }
         else {
-            if (DBG)
+            if (DBG2)
                 console.log("probably a dictionary");
             try {
                 iv = new Uint8Array(Object.values(o.iv));
@@ -144,7 +145,7 @@ export function encryptedContentsMakeBinary(o) {
                 _sb_assert(false, "undetermined iv (nonce) type, see console");
             }
         }
-        if (DBG) {
+        if (DBG2) {
             console.log("decided on nonce as:");
             console.log(iv);
         }
@@ -1121,7 +1122,7 @@ class Channel extends SB384 {
     }
     async #callApi(path, body) {
         if (DBG)
-            console.log(path);
+            console.log("#callApi:", path);
         if (!this.#ChannelReadyFlag) {
             console.log("ChannelApi.#callApi: channel not ready (we will wait)");
             await (this.channelReady);
@@ -1181,14 +1182,14 @@ class Channel extends SB384 {
                         const message = jsonParseWrapper(data[v], "L3318");
                         if (message.hasOwnProperty('encrypted_contents')) {
                             if (DBG)
-                                console.log(message);
+                                console.log("Received message: ", message);
                             return message;
                         }
                     }
                 })
                     .map((v) => {
                     const message = jsonParseWrapper(data[v], "L3327");
-                    if (DBG)
+                    if (DBG2)
                         console.log(v, message.encrypted_contents, this.keys);
                     return deCryptChannelMessage(v, message.encrypted_contents, this.keys);
                 }))
@@ -1389,7 +1390,9 @@ export class ChannelSocket extends Channel {
         this.ready = this.channelSocketReady = this.#channelSocketReadyFactory();
     }
     #channelSocketReadyFactory() {
+        console.log("++++ CREATING ChannelSocket.readyPromise()");
         return new Promise((resolve, reject) => {
+            console.log("++++ STARTED ChannelSocket.readyPromise()");
             this.#resolveFirstMessage = resolve;
             const url = this.#ws.url;
             if (DBG) {
@@ -1437,6 +1440,17 @@ export class ChannelSocket extends Channel {
                 console.log('ChannelSocket() error: ', e);
                 reject('ChannelSocket creation error (see log)');
             });
+            setTimeout(() => {
+                if (!this.#ChannelSocketReadyFlag) {
+                    console.warn("ChannelSocket() - this socket is not resolving ...");
+                    console.log(this);
+                    reject('ChannelSocket() - this socket is not resolving ...');
+                }
+                else {
+                    console.log("ChannelSocket() - this socket resoled");
+                    console.log(this);
+                }
+            }, 500);
         });
     }
     async #processMessage(msg) {
@@ -1778,7 +1792,7 @@ class StorageApi {
             _target = (Math.ceil((image_size + 4) / 1048576)) * 1048576;
         let finalArray = _appendBuffer(buf, (new Uint8Array(_target - image_size)).buffer);
         (new DataView(finalArray)).setUint32(_target - 4, image_size);
-        if (DBG) {
+        if (DBG2) {
             console.log("#padBuf bytes:");
             console.log(finalArray.slice(-4));
         }
@@ -1789,11 +1803,11 @@ class StorageApi {
         var _size = new DataView(tail).getUint32(0);
         const _little_endian = new DataView(tail).getUint32(0, true);
         if (_little_endian < _size) {
-            if (DBG)
+            if (DBG2)
                 console.warn("#unpadData - size of shard encoded as little endian (fixed upon read)");
             _size = _little_endian;
         }
-        if (DBG) {
+        if (DBG2) {
             console.log(`#unpadData - size of object is ${_size}`);
         }
         return data_buffer.slice(0, _size);
@@ -1883,12 +1897,12 @@ class StorageApi {
     storeObject(buf, type, roomId, metadata) {
         return new Promise((resolve, reject) => {
             if (buf instanceof Uint8Array) {
-                if (DBG)
+                if (DBG2)
                     console.log('converting Uint8Array to ArrayBuffer');
                 buf = new Uint8Array(buf).buffer;
             }
             if (!(buf instanceof ArrayBuffer) && buf.constructor.name != 'ArrayBuffer') {
-                if (DBG)
+                if (DBG2)
                     console.log('buf must be an ArrayBuffer:');
                 console.log(buf);
                 reject('buf must be an ArrayBuffer');
@@ -1984,7 +1998,7 @@ class StorageApi {
             finally {
                 const data = extractPayload(payload);
                 if (DBG) {
-                    console.log("Payload is:");
+                    console.log("Payload (#processData) is:");
                     console.log(data);
                 }
                 const iv = new Uint8Array(data.iv);
@@ -2018,14 +2032,14 @@ class StorageApi {
                     console.log("handleSalt unprocessed:");
                     console.log(handleSalt);
                 }
-                if (DBG) {
+                if (DBG2) {
                     console.log("will use nonce and salt of:");
                     console.log(`iv: ${arrayBufferToBase64(iv)}`);
                     console.log(`salt : ${arrayBufferToBase64(salt)}`);
                 }
                 this.#getObjectKey(h.key, salt).then((image_key) => {
                     const encrypted_image = data.image;
-                    if (DBG) {
+                    if (DBG2) {
                         console.log("data.image:      ");
                         console.log(data.image);
                         console.log("encrypted_image: ");
@@ -2034,7 +2048,7 @@ class StorageApi {
                     sbCrypto.unwrap(image_key, { content: encrypted_image, iv: iv }, 'arrayBuffer').then((padded_img) => {
                         const img = this.#unpadData(padded_img);
                         if (DBG) {
-                            console.log(" unwrapped img: ");
+                            console.log("#processData(), unwrapped img: ");
                             console.log(img);
                         }
                         resolve(img);
@@ -2050,7 +2064,7 @@ class StorageApi {
             const verificationToken = await h.verification;
             const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server);
             if (DBG)
-                console.log("fetching from server: " + useServer);
+                console.log("fetchData(), fetching from server: " + useServer);
             SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
                 .then((response) => {
                 if (!response.ok)
@@ -2104,7 +2118,9 @@ class Snackabra {
     #storage;
     #channel;
     #preferredServer;
+    #version = version;
     constructor(args, DEBUG = false) {
+        console.log(`************ CREATING Snackabra object generation: ${this.version} **************`);
         if (args) {
             this.#preferredServer = Object.assign({}, args);
             this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined);
@@ -2115,10 +2131,13 @@ class Snackabra {
         }
     }
     connect(onMessage, key, channelId) {
-        if ((DBG) && (key))
-            console.log(key);
-        if ((DBG) && (channelId))
-            console.log(channelId);
+        if (DBG) {
+            console.log("++++ Snackabra.connect() ++++");
+            if (key)
+                console.log(key);
+            if (channelId)
+                console.log(channelId);
+        }
         return new Promise(async (resolve) => {
             if (this.#preferredServer)
                 resolve(new ChannelSocket(this.#preferredServer, onMessage, key, channelId));
@@ -2157,6 +2176,9 @@ class Snackabra {
     }
     get crypto() {
         return sbCrypto;
+    }
+    get version() {
+        return this.#version;
     }
 }
 export { Channel, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version };

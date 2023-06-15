@@ -1,4 +1,4 @@
-declare const version = "1.1.22 (pre)";
+declare const version = "1.1.22 build 012 (pre)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -338,6 +338,7 @@ declare class Snackabra {
     get channel(): Channel;
     get storage(): StorageApi;
     get crypto(): SBCrypto;
+    get version(): string;
 }
 export type { ChannelData, ChannelKeyStrings };
 export { Channel, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version };
