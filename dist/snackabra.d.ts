@@ -1,4 +1,4 @@
-declare const version = "1.1.22 build 012 (pre)";
+declare const version = "1.1.22 build 014 (pre)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -170,7 +170,7 @@ export declare function simpleRandomString(n: number, code: string): string;
 export declare function cleanBase32mi(s: string): string;
 export declare function partition(str: string, n: number): void;
 export declare function jsonParseWrapper(str: string | null, loc: string): any;
-export interface SBPayload {
+interface SBPayload {
     [index: string]: ArrayBuffer;
 }
 export declare function extractPayloadV1(payload: ArrayBuffer): SBPayload;
@@ -340,8 +340,8 @@ declare class Snackabra {
     get crypto(): SBCrypto;
     get version(): string;
 }
-export type { ChannelData, ChannelKeyStrings };
-export { Channel, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version };
+export type { ChannelData, ChannelKeyStrings, SBPayload, };
+export { Channel, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version, };
 export declare var SB: {
     Snackabra: typeof Snackabra;
     SBMessage: typeof SBMessage;

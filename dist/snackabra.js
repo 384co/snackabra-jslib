@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.22 build 012 (pre)';
+const version = '1.1.22 build 014 (pre)';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -1474,8 +1474,8 @@ export class ChannelSocket extends Channel {
                 console.log(m01.encrypted_contents.content);
                 const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(m01.encrypted_contents.content));
                 const ack_id = arrayBufferToBase64(hash);
-                console.log("Received message with hash:");
-                console.log(ack_id);
+                if (DBG2)
+                    console.log("Received message with hash:", ack_id);
                 const r = this.#ack.get(ack_id);
                 if (r) {
                     if (this.#traceSocket)
@@ -1489,8 +1489,12 @@ export class ChannelSocket extends Channel {
                     m01.encrypted_contents.iv = base64ToArrayBuffer(iv_b64);
                     deCryptChannelMessage(m00, m01.encrypted_contents, this.keys)
                         .then((m) => {
-                        if (this.#traceSocket)
+                        if (this.#traceSocket) {
+                            console.log("++++++++ #processMessage: passing to message handler:");
                             console.log(Object.assign({}, m));
+                            console.log("registered message handler:");
+                            console.log(this.#onMessage);
+                        }
                         this.#onMessage(m);
                     })
                         .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message'); });
@@ -2181,7 +2185,7 @@ class Snackabra {
         return this.#version;
     }
 }
-export { Channel, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version };
+export { Channel, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version, };
 export var SB = {
     Snackabra: Snackabra,
     SBMessage: SBMessage,

@@ -23,7 +23,7 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.22 build 012 (pre)'
+const version = '1.1.22 build 014 (pre)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -1083,7 +1083,7 @@ export function jsonParseWrapper(str: string | null, loc: string) {
 }
 
 /** Essentially a dictionary where each entry is an arraybuffer. */
-export interface SBPayload {
+interface SBPayload {
   [index: string]: ArrayBuffer;
 }
 
@@ -2598,8 +2598,7 @@ export class ChannelSocket extends Channel {
         // check if this message is one that we've recently sent
         const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(m01.encrypted_contents.content))
         const ack_id = arrayBufferToBase64(hash)
-        console.log("Received message with hash:")
-        console.log(ack_id)
+        if (DBG2) console.log("Received message with hash:", ack_id)
         const r = this.#ack.get(ack_id)
         if (r) {
           if (this.#traceSocket) console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`)
@@ -2616,7 +2615,12 @@ export class ChannelSocket extends Channel {
           m01.encrypted_contents.iv = base64ToArrayBuffer(iv_b64)
           deCryptChannelMessage(m00, m01.encrypted_contents, this.keys)
             .then((m) => {
-              if (this.#traceSocket) console.log(Object.assign({}, m))
+              if (this.#traceSocket) {
+                console.log("++++++++ #processMessage: passing to message handler:")
+                console.log(Object.assign({}, m))
+                console.log("registered message handler:")
+                console.log(this.#onMessage)
+              }
               this.#onMessage(m)
             })
             .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message') })
@@ -3605,7 +3609,8 @@ class Snackabra {
 //#region - exporting stuff
 export type {
   ChannelData,
-  ChannelKeyStrings
+  ChannelKeyStrings,
+  SBPayload,
 }
 
 export {
@@ -3617,7 +3622,7 @@ export {
   SB384,
   arrayBufferToBase64,
   sbCrypto,
-  version
+  version,
 };
 
 export var SB = {
