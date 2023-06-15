@@ -2423,6 +2423,8 @@ abstract class Channel extends SB384 {
 } /* class ChannelAPI */
 //#region - class ChannelAPI - TODO implement these methods
 
+// catch and call out if this is missing
+function noMessageHandler(_m: ChannelMessage):void { _sb_assert(false, "NO MESSAGE HANDLER"); }
 
 /**
  * ChannelSocket
@@ -2434,7 +2436,7 @@ export class ChannelSocket extends Channel {
 
   #ws: WSProtocolOptions
   #sbServer: SBServer
-  #onMessage: (m: ChannelMessage) => void  // the user message handler
+  #onMessage = noMessageHandler // the user message handler
   #ack: Map<string, (value: string | PromiseLike<string>) => void> = new Map()
   #traceSocket: boolean = false // should not be true in production
   #resolveFirstMessage: (value: ChannelSocket | PromiseLike<ChannelSocket>) => void = () => { _sb_exception('L2461', 'this should never be called') }
@@ -2479,9 +2481,18 @@ export class ChannelSocket extends Channel {
    */
   constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string) {
     super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
+    if (DBG) {
+      console.log("ChannelSocket.constructor()")
+      console.log("ChannelSocket.constructor(): sbServer:", sbServer)
+      console.log("ChannelSocket.constructor(): onMessage:", onMessage)
+      console.log("ChannelSocket.constructor(): key:", key)
+      console.log("ChannelSocket.constructor(): channelId:", channelId)
+      console.log("'pre' init value of onMessage:", this.onMessage)
+    }
     _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
+    _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
     const url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
-    this.#onMessage = onMessage
+    this.onMessage = onMessage
     this.#sbServer = sbServer
     this.#ws = {
       url: url,
@@ -2619,9 +2630,9 @@ export class ChannelSocket extends Channel {
                 console.log("++++++++ #processMessage: passing to message handler:")
                 console.log(Object.assign({}, m))
                 console.log("registered message handler:")
-                console.log(this.#onMessage)
+                console.log(Object.assign({}, this.onMessage))
               }
-              this.#onMessage(m)
+              this.onMessage(m)
             })
             .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message') })
         } else {
@@ -2631,11 +2642,11 @@ export class ChannelSocket extends Channel {
         // other (future) message types would be parsed here
         console.warn("++++++++ #processMessage: can't decipher message, passing along unchanged:")
         console.log(Object.assign({}, message))
-        this.#onMessage(message)
+        this.onMessage(message)
       }
     } catch (e) {
       console.log(`++++++++ #processMessage: caught exception while decyphering (${e}), passing it along unchanged`)
-      this.#onMessage(message)
+      this.onMessage(message)
       // console.error(`#processmessage: cannot handle locked channels yet (${e})`)
       // TODO: locked key might never resolve (if we don't have it)
       // TODO: ... generally speaking need to test/fix locked channels
@@ -2689,7 +2700,7 @@ export class ChannelSocket extends Channel {
   }
 
   set onMessage(f: (m: ChannelMessage) => void) { this.#onMessage = f }
-  get onMessage() { return this.#onMessage }
+  @Ready get onMessage() { return this.#onMessage }
 
   /** Enables debug output */
   set enableTrace(b: boolean) {

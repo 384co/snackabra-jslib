@@ -1364,22 +1364,32 @@ __decorate([
 __decorate([
     Ready
 ], Channel.prototype, "budd", null);
+function noMessageHandler(_m) { _sb_assert(false, "NO MESSAGE HANDLER"); }
 export class ChannelSocket extends Channel {
     ready;
     channelSocketReady;
     #ChannelSocketReadyFlag = false;
     #ws;
     #sbServer;
-    #onMessage;
+    #onMessage = noMessageHandler;
     #ack = new Map();
     #traceSocket = false;
     #resolveFirstMessage = () => { _sb_exception('L2461', 'this should never be called'); };
     #firstMessageEventHandlerReference = (_e) => { _sb_exception('L2462', 'this should never be called'); };
     constructor(sbServer, onMessage, key, channelId) {
         super(sbServer, key, channelId);
+        if (DBG) {
+            console.log("ChannelSocket.constructor()");
+            console.log("ChannelSocket.constructor(): sbServer:", sbServer);
+            console.log("ChannelSocket.constructor(): onMessage:", onMessage);
+            console.log("ChannelSocket.constructor(): key:", key);
+            console.log("ChannelSocket.constructor(): channelId:", channelId);
+            console.log("'pre' init value of onMessage:", this.onMessage);
+        }
         _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided');
+        _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided');
         const url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket';
-        this.#onMessage = onMessage;
+        this.onMessage = onMessage;
         this.#sbServer = sbServer;
         this.#ws = {
             url: url,
@@ -1493,9 +1503,9 @@ export class ChannelSocket extends Channel {
                             console.log("++++++++ #processMessage: passing to message handler:");
                             console.log(Object.assign({}, m));
                             console.log("registered message handler:");
-                            console.log(this.#onMessage);
+                            console.log(Object.assign({}, this.onMessage));
                         }
-                        this.#onMessage(m);
+                        this.onMessage(m);
                     })
                         .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message'); });
                 }
@@ -1506,12 +1516,12 @@ export class ChannelSocket extends Channel {
             else {
                 console.warn("++++++++ #processMessage: can't decipher message, passing along unchanged:");
                 console.log(Object.assign({}, message));
-                this.#onMessage(message);
+                this.onMessage(message);
             }
         }
         catch (e) {
             console.log(`++++++++ #processMessage: caught exception while decyphering (${e}), passing it along unchanged`);
-            this.#onMessage(message);
+            this.onMessage(message);
         }
     }
     #insideFirstMessageHandler(e) {
@@ -1618,6 +1628,9 @@ export class ChannelSocket extends Channel {
     }
     get exportable_owner_pubKey() { return this.keys.ownerKey; }
 }
+__decorate([
+    Ready
+], ChannelSocket.prototype, "onMessage", null);
 __decorate([
     VerifyParameters
 ], ChannelSocket.prototype, "send", null);
