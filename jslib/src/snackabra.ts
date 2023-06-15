@@ -2481,18 +2481,10 @@ export class ChannelSocket extends Channel {
    */
   constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string) {
     super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
-    if (DBG) {
-      console.log("ChannelSocket.constructor()")
-      console.log("ChannelSocket.constructor(): sbServer:", sbServer)
-      console.log("ChannelSocket.constructor(): onMessage:", onMessage)
-      console.log("ChannelSocket.constructor(): key:", key)
-      console.log("ChannelSocket.constructor(): channelId:", channelId)
-      console.log("'pre' init value of onMessage:", this.onMessage)
-    }
     _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
     _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
     const url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
-    this.onMessage = onMessage
+    this.#onMessage = onMessage
     this.#sbServer = sbServer
     this.#ws = {
       url: url,
@@ -2630,8 +2622,7 @@ export class ChannelSocket extends Channel {
                 console.log("++++++++ #processMessage: passing to message handler:")
                 console.log(Object.assign({}, m))
               }
-              const messageHandler = this.#onMessage // trust me, leave this
-              messageHandler(m)
+              this.#onMessage(m)
             })
             .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message') })
         } else {
