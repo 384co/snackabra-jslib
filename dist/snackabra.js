@@ -1460,7 +1460,7 @@ export class ChannelSocket extends Channel {
                     console.log("ChannelSocket() - this socket resoled");
                     console.log(this);
                 }
-            }, 500);
+            }, 2000);
         });
     }
     async #processMessage(msg) {
@@ -1502,10 +1502,9 @@ export class ChannelSocket extends Channel {
                         if (this.#traceSocket) {
                             console.log("++++++++ #processMessage: passing to message handler:");
                             console.log(Object.assign({}, m));
-                            console.log("registered message handler:");
-                            console.log(Object.assign({}, this.onMessage));
                         }
-                        this.onMessage(m);
+                        const messageHandler = this.#onMessage;
+                        messageHandler(m);
                     })
                         .catch(() => { console.warn('Error decrypting message, dropping (ignoring) message'); });
                 }
