@@ -1268,6 +1268,8 @@ class Channel extends SB384 {
                 if (!storage)
                     storage = Infinity;
                 if (targetChannel) {
+                    if (this.#channelId == targetChannel)
+                        throw new Error("[budd()]: You can't specify the same channel as targetChannel");
                     if (keys)
                         throw new Error("[budd()]: You can't specify both a target channel and keys");
                     resolve(this.#callApi(`/budd?targetChannel=${targetChannel}&transferBudget=${storage}`));

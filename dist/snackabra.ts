@@ -2362,11 +2362,11 @@ abstract class Channel extends SB384 {
    * "budd" will spin a channel off an existing one.
    * You need to provide one of the following combinations of info:
    * 
-   * - nothing (special case, create new channel and transfer all storage budget)
-   * - just storage amount (creates new channel with that amount)
-   * - just a target channel (moves all storage budget to that channel)
-   * - just keys (creates new channel with those keys and transfers all storage budget)
-   * - keys and storage amount (creates new channel with those keys and that storage amount)
+   * - nothing: create new channel and transfer all storage budget
+   * - just storage amount: creates new channel with that amount
+   * - just a target channel: moves all storage budget to that channel
+   * - just keys: creates new channel with those keys and transfers all storage budget:
+   * - keys and storage amount: creates new channel with those keys and that storage amount
    * 
    * In the first (special) case you can just call budd(), in the other
    * cases you need to fill out the options object.
@@ -2376,6 +2376,12 @@ abstract class Channel extends SB384 {
    * 
    * Note: if you're specifying the target channel, then the return values will
    * not include the private key (that return value will be empty).
+   * 
+   * Same channels as mother and target will be a no-op, regardless of other
+   * parameters.
+   * 
+   * Future: negative amount of storage leaves that amount behind, the rest is transferred
+   * 
    */
   budd(): Promise<SBChannelHandle> // clone and full plunder
   budd(options:
@@ -2392,10 +2398,12 @@ abstract class Channel extends SB384 {
     }): Promise<SBChannelHandle> {
     let { keys, storage, targetChannel } = options ?? {};
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
+      
       try {
         if (!storage) storage = Infinity;
         if (targetChannel) {
           // just a straight up transfer of budget
+          if (this.#channelId == targetChannel) throw new Error("[budd()]: You can't specify the same channel as targetChannel")
           if (keys) throw new Error("[budd()]: You can't specify both a target channel and keys");
           resolve(this.#callApi(`/budd?targetChannel=${targetChannel}&transferBudget=${storage}`))
         } else {
