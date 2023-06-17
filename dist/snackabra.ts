@@ -23,7 +23,7 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.22 build 014 (pre)'
+const version = '1.1.22 build 015 (pre)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -549,7 +549,7 @@ export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedCont
   try {
     let t: ArrayBuffer
     let iv: Uint8Array
-    if (DBG) {
+    if (DBG2) {
       console.log("=+=+=+=+ processing content")
       console.log(o.content.constructor.name)
     }

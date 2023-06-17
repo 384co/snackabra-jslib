@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.22 build 014 (pre)';
+const version = '1.1.22 build 015 (pre)';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -95,7 +95,7 @@ export function encryptedContentsMakeBinary(o) {
     try {
         let t;
         let iv;
-        if (DBG) {
+        if (DBG2) {
             console.log("=+=+=+=+ processing content");
             console.log(o.content.constructor.name);
         }
