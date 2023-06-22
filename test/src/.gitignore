@@ -1,1 +1,5 @@
 test_config.ts
+snackabra.ts
+
+note also that "test_config.ts" is needed in this directory,
+and is not version controlled either at this time

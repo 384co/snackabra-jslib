@@ -23,7 +23,7 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.22 build 015 (pre)'
+const version = '1.1.22 build 03 (pre)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -1272,17 +1272,24 @@ class SBCrypto {  /*************************************************************
   }
 
   /** @private */
-  async #generateChannelHash(channelBytes: ArrayBuffer): Promise<string> {
-    const MAX_REHASH_ITERATIONS = 160
-    const b62regex = /^[0-9A-Za-z]+$/;
-    let count = 0
-    let hash = arrayBufferToBase64(channelBytes)
-    while (!b62regex.test(hash)) {
-      if (count++ > MAX_REHASH_ITERATIONS) throw new Error(`generateChannelHash() - exceeded ${MAX_REHASH_ITERATIONS} iterations:`)
-      channelBytes = await crypto.subtle.digest('SHA-384', channelBytes)
-      hash = arrayBufferToBase64(channelBytes)
+  async #generateChannelHash(channelBytes: ArrayBuffer): Promise<SBChannelId> {
+    try {
+      const MAX_REHASH_ITERATIONS = 160
+      const b62regex = /^[0-9A-Za-z]+$/;
+      let count = 0
+      let hash = arrayBufferToBase64(channelBytes)
+      while (!b62regex.test(hash)) {
+        if (count++ > MAX_REHASH_ITERATIONS) throw new Error(`generateChannelHash() - exceeded ${MAX_REHASH_ITERATIONS} iterations:`)
+        channelBytes = await crypto.subtle.digest('SHA-384', channelBytes)
+        hash = arrayBufferToBase64(channelBytes)
+      }
+      return arrayBufferToBase64(channelBytes)
+    } catch (e) {
+      console.error("generateChannelHash() failed", e)
+      console.error("tried working from channelBytes:")
+      console.error(channelBytes)
+      throw new Error(`generateChannelHash() exception (${e})`)
     }
-    return arrayBufferToBase64(channelBytes)
   }
 
   // For compatibilty with various versions, we accept any of the first 160 hashes.
@@ -1316,14 +1323,16 @@ class SBCrypto {  /*************************************************************
    * is accomplished by simply re-hashing until the result is valid. This 
    * reduces the entropy of the channel ID by a neglible amount. 
    */
-  async generateChannelId(owner_key: JsonWebKey | null): Promise<SBChannelId | string> {
+  async generateChannelId(owner_key?: JsonWebKey): Promise<SBChannelId> {
+    if (!owner_key)
+      throw new Error('generateChannelId() - missing owner key')
     if (owner_key && owner_key.x && owner_key.y) {
       const xBytes = base64ToArrayBuffer(decodeB64Url(owner_key!.x!))
       const yBytes = base64ToArrayBuffer(decodeB64Url(owner_key!.y!))
       const channelBytes = _appendBuffer(xBytes, yBytes)
       return await this.#generateChannelHash(channelBytes)
     } else {
-      return 'InvalidJsonWebKey'; // invalid owner key
+      throw new Error('generateChannelId() - invalid owner key (JsonWebKey) - missing x and/or y')
     }
   }
 
@@ -1358,16 +1367,12 @@ class SBCrypto {  /*************************************************************
    *
    * Generates standard ``ECDH`` keys using ``P-384``.
    */
-  generateKeys() {
-    return new Promise<CryptoKeyPair>(async (resolve, reject) => {
-      try {
-        resolve(await crypto.subtle.generateKey({
-          name: 'ECDH', namedCurve: 'P-384'
-        }, true, ['deriveKey']));
-      } catch (e) {
-        reject(e);
-      }
-    });
+  async generateKeys() {
+    try {
+      return await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-384' }, true, ['deriveKey']);
+    } catch (e) {
+      throw new Error('generateKeys() exception (' + e + ')');
+    }
   }
 
   /**
@@ -1375,24 +1380,42 @@ class SBCrypto {  /*************************************************************
    *
    * Import keys
    */
-  importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey> {
-    const keyAlgorithms = {
-      ECDH: { name: 'ECDH', namedCurve: 'P-384' },
-      AES: { name: 'AES-GCM' },
-      PBKDF2: 'PBKDF2'
-    }
-    if (format === 'jwk') {
-      return (crypto.subtle.importKey('jwk', key as JsonWebKey, keyAlgorithms[type], extractable, keyUsages))
-    } else {
-      return (crypto.subtle.importKey(format, key as BufferSource, keyAlgorithms[type], extractable, keyUsages))
+  async importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey> {
+    try {
+      const keyAlgorithms = {
+        ECDH: { name: 'ECDH', namedCurve: 'P-384' },
+        AES: { name: 'AES-GCM' },
+        PBKDF2: 'PBKDF2'
+      }
+      if (format === 'jwk') {
+        // sanity check it's a JsonWebKey and not a BufferSource or something else
+        if ((key as JsonWebKey).kty === undefined) throw new Error('importKey() - invalid JsonWebKey');
+        return (await crypto.subtle.importKey('jwk', key as JsonWebKey, keyAlgorithms[type], extractable, keyUsages))
+      } else {
+        return (await crypto.subtle.importKey(format, key as BufferSource, keyAlgorithms[type], extractable, keyUsages))
+      }
+    } catch (e) {
+      console.error(`... importKey() error: ${e}:`)
+      console.log(format)
+      console.log(key)
+      console.log(type)
+      console.log(extractable)
+      console.log(keyUsages)
+      throw new Error('importKey() exception (' + e + ')');
     }
   }
 
   /**
    * SBCrypto.exportKey()
    */
-  exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey> {
-    return crypto.subtle.exportKey(format, key)
+  async exportKey(format: 'jwk', key: CryptoKey) {
+    try {
+      return await crypto.subtle.exportKey(format, key)
+    } catch (e) {
+      console.error("... exportKey() error ... key provided (tried to export to 'jwk'):")
+      console.error(key)
+      throw new Error('exportKey() error (' + e + ')');
+    }
   }
 
   /**
@@ -1854,7 +1877,13 @@ class SB384 {
     this.ready = new Promise<SB384>(async (resolve, reject) => {
       try {
         if (key) {
-          // we are given a key
+          if (!key.d) {
+            // make sure key.d is present in the key, or it's probably a public key
+            const msg = 'ERROR creating SB384 object: invalid key (must be a PRIVATE key)'
+            console.error(msg)
+            reject(msg)
+          }
+          // we're given a key, and try to use it
           this.#exportable_privateKey = key
           const pk = sbCrypto.extractPubKey(key)
           _sb_assert(pk, 'unable to extract public key')
@@ -1864,18 +1893,15 @@ class SB384 {
           // generate a fresh ID
           const keyPair = await sbCrypto.generateKeys()
           this.#privateKey = keyPair.privateKey
-          // this.#keyPair = keyPair
-          const v = await Promise.all([
-            sbCrypto.exportKey('jwk', keyPair.publicKey),
-            sbCrypto.exportKey('jwk', keyPair.privateKey)
-          ])
-          this.#exportable_pubKey = v[0]
-          this.#exportable_privateKey = v[1]
+          this.#exportable_pubKey = await sbCrypto.exportKey('jwk', keyPair.publicKey)
+          this.#exportable_privateKey = await sbCrypto.exportKey('jwk', keyPair.privateKey)
         }
         this.#ownerChannelId = await sbCrypto.generateChannelId(this.#exportable_pubKey)
         this.#SB384ReadyFlag = true
         resolve(this)
-      } catch (e) { reject('ERROR creating SB384 object: ' + WrapError(e)) }
+      } catch (e) {
+        reject('ERROR creating SB384 object failed: ' + WrapError(e))
+      }
     })
     this.sb384Ready = this.ready
   }
@@ -2302,19 +2328,24 @@ abstract class Channel extends SB384 {
     return this.#callApi('/storageRequest?size=' + byteLength)
   }
 
-  // TODO: test this guy, i doubt if it's working post-re-factor
+  /**
+   * Channel.lock()
+   * 
+   * Locks the channel, so that new visitors need an "ack" to join..
+   * 
+   */
   @Ready lock() {
-    console.trace("WARNING: lock() on channel api has not been tested/debugged fully ..")
+    console.warn("WARNING: lock() on channel api has not been tested/debugged fully ..")
     return new Promise(async (resolve, reject) => {
       if (this.keys.lockedKey == null && this.admin) {
         const _locked_key: CryptoKey = await crypto.subtle.generateKey({
           name: 'AES-GCM', length: 256
         }, true, ['encrypt', 'decrypt']);
         const _exportable_locked_key: Dictionary<any> = await crypto.subtle.exportKey('jwk', _locked_key);
-        this.#callApi('lockRoom')
+        this.#callApi('/lockRoom')
           .then((data: Dictionary<any>) => {
             if (data.locked) {
-              this.acceptVisitor(JSON.stringify(this.exportable_pubKey))
+              this.acceptVisitor(JSON.stringify(this.exportable_pubKey!))
                 .then(() => {
                   resolve({ locked: data.locked, lockedKey: _exportable_locked_key })
                 })
@@ -2330,11 +2361,14 @@ abstract class Channel extends SB384 {
   // TODO: test this guy, i doubt if it's working post-re-factor
   @Ready acceptVisitor(pubKey: string) {
     console.warn("WARNING: acceptVisitor() on channel api has not been tested/debugged fully ..")
+    // todo: assert that you're owner
     return new Promise(async (resolve, reject) => {
-      if (!this.keys.privateKey)
+      if (!this.privateKey /* this.keys.privateKey */)
         reject(new Error("acceptVisitor(): no private key"))
-      const shared_key = await sbCrypto.deriveKey(this.keys.privateKey!,
-        await sbCrypto.importKey('jwk', jsonParseWrapper(pubKey, 'L2276'), 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']);
+      const shared_key = await sbCrypto.deriveKey(
+        this.privateKey /* this.keys.privateKey! */,
+        await sbCrypto.importKey('jwk', jsonParseWrapper(pubKey, 'L2276'), 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']
+      );
       const _encrypted_locked_key = await sbCrypto.encrypt(sbCrypto.str2ab(JSON.stringify(this.keys.lockedKey!)), shared_key)
       resolve(this.#callApi('/acceptVisitor',
         {
@@ -2398,7 +2432,7 @@ abstract class Channel extends SB384 {
     }): Promise<SBChannelHandle> {
     let { keys, storage, targetChannel } = options ?? {};
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
-      
+
       try {
         if (!storage) storage = Infinity;
         if (targetChannel) {
@@ -2432,7 +2466,7 @@ abstract class Channel extends SB384 {
 //#region - class ChannelAPI - TODO implement these methods
 
 // catch and call out if this is missing
-function noMessageHandler(_m: ChannelMessage):void { _sb_assert(false, "NO MESSAGE HANDLER"); }
+function noMessageHandler(_m: ChannelMessage): void { _sb_assert(false, "NO MESSAGE HANDLER"); }
 
 /**
  * ChannelSocket
@@ -2555,7 +2589,7 @@ export class ChannelSocket extends Channel {
           console.log(this)
           reject('ChannelSocket() - this socket is not resolving ...')
         } else {
-          console.log("ChannelSocket() - this socket resoled") 
+          console.log("ChannelSocket() - this socket resoled")
           console.log(this)
         }
       }, 2000)
@@ -3509,11 +3543,12 @@ class Snackabra {
    * Connects to :term:`Channel Name` on this SB config.
    * Returns a channel socket promise right away, but it
    * will not be ready until the ``ready`` promise is resolved.
+   * 
    * Note that if you have a preferred server then the channel
    * object will be returned right away, but the ``ready`` promise
    * will still be pending. If you do not have a preferred server,
-   * then the ``ready`` promise will be resolved when a least
-   * one of the known servers is ready.
+   * then the ``ready`` promise will be resolved when at least
+   * one of the known servers is responding and ready.
    * 
    * @param channelName - the name of the channel to connect to
    * @param key - optional key to use for encryption/decryption
@@ -3647,5 +3682,5 @@ export var SB = {
 
 if (!(globalThis as any).SB)
   (globalThis as any).SB = SB;
-  console.log(`************ SNACKABRA jslib loaded ${(globalThis as any).SB.version} **************`)
+console.log(`************ SNACKABRA jslib loaded ${(globalThis as any).SB.version} **************`)
 //#endregion - exporting stuff

@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.22 build 015 (pre)';
+const version = '1.1.22 build 03 (pre)';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -553,17 +553,25 @@ class SBCrypto {
         }
     }
     async #generateChannelHash(channelBytes) {
-        const MAX_REHASH_ITERATIONS = 160;
-        const b62regex = /^[0-9A-Za-z]+$/;
-        let count = 0;
-        let hash = arrayBufferToBase64(channelBytes);
-        while (!b62regex.test(hash)) {
-            if (count++ > MAX_REHASH_ITERATIONS)
-                throw new Error(`generateChannelHash() - exceeded ${MAX_REHASH_ITERATIONS} iterations:`);
-            channelBytes = await crypto.subtle.digest('SHA-384', channelBytes);
-            hash = arrayBufferToBase64(channelBytes);
+        try {
+            const MAX_REHASH_ITERATIONS = 160;
+            const b62regex = /^[0-9A-Za-z]+$/;
+            let count = 0;
+            let hash = arrayBufferToBase64(channelBytes);
+            while (!b62regex.test(hash)) {
+                if (count++ > MAX_REHASH_ITERATIONS)
+                    throw new Error(`generateChannelHash() - exceeded ${MAX_REHASH_ITERATIONS} iterations:`);
+                channelBytes = await crypto.subtle.digest('SHA-384', channelBytes);
+                hash = arrayBufferToBase64(channelBytes);
+            }
+            return arrayBufferToBase64(channelBytes);
         }
-        return arrayBufferToBase64(channelBytes);
+        catch (e) {
+            console.error("generateChannelHash() failed", e);
+            console.error("tried working from channelBytes:");
+            console.error(channelBytes);
+            throw new Error(`generateChannelHash() exception (${e})`);
+        }
     }
     async #testChannelHash(channelBytes, channel_id) {
         const MAX_REHASH_ITERATIONS = 160;
@@ -578,6 +586,8 @@ class SBCrypto {
         return true;
     }
     async generateChannelId(owner_key) {
+        if (!owner_key)
+            throw new Error('generateChannelId() - missing owner key');
         if (owner_key && owner_key.x && owner_key.y) {
             const xBytes = base64ToArrayBuffer(decodeB64Url(owner_key.x));
             const yBytes = base64ToArrayBuffer(decodeB64Url(owner_key.y));
@@ -585,7 +595,7 @@ class SBCrypto {
             return await this.#generateChannelHash(channelBytes);
         }
         else {
-            return 'InvalidJsonWebKey';
+            throw new Error('generateChannelId() - invalid owner key (JsonWebKey) - missing x and/or y');
         }
     }
     async verifyChannelId(owner_key, channel_id) {
@@ -613,33 +623,49 @@ class SBCrypto {
             return false;
         }
     }
-    generateKeys() {
-        return new Promise(async (resolve, reject) => {
-            try {
-                resolve(await crypto.subtle.generateKey({
-                    name: 'ECDH', namedCurve: 'P-384'
-                }, true, ['deriveKey']));
-            }
-            catch (e) {
-                reject(e);
-            }
-        });
-    }
-    importKey(format, key, type, extractable, keyUsages) {
-        const keyAlgorithms = {
-            ECDH: { name: 'ECDH', namedCurve: 'P-384' },
-            AES: { name: 'AES-GCM' },
-            PBKDF2: 'PBKDF2'
-        };
-        if (format === 'jwk') {
-            return (crypto.subtle.importKey('jwk', key, keyAlgorithms[type], extractable, keyUsages));
+    async generateKeys() {
+        try {
+            return await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-384' }, true, ['deriveKey']);
         }
-        else {
-            return (crypto.subtle.importKey(format, key, keyAlgorithms[type], extractable, keyUsages));
+        catch (e) {
+            throw new Error('generateKeys() exception (' + e + ')');
         }
     }
-    exportKey(format, key) {
-        return crypto.subtle.exportKey(format, key);
+    async importKey(format, key, type, extractable, keyUsages) {
+        try {
+            const keyAlgorithms = {
+                ECDH: { name: 'ECDH', namedCurve: 'P-384' },
+                AES: { name: 'AES-GCM' },
+                PBKDF2: 'PBKDF2'
+            };
+            if (format === 'jwk') {
+                if (key.kty === undefined)
+                    throw new Error('importKey() - invalid JsonWebKey');
+                return (await crypto.subtle.importKey('jwk', key, keyAlgorithms[type], extractable, keyUsages));
+            }
+            else {
+                return (await crypto.subtle.importKey(format, key, keyAlgorithms[type], extractable, keyUsages));
+            }
+        }
+        catch (e) {
+            console.error(`... importKey() error: ${e}:`);
+            console.log(format);
+            console.log(key);
+            console.log(type);
+            console.log(extractable);
+            console.log(keyUsages);
+            throw new Error('importKey() exception (' + e + ')');
+        }
+    }
+    async exportKey(format, key) {
+        try {
+            return await crypto.subtle.exportKey(format, key);
+        }
+        catch (e) {
+            console.error("... exportKey() error ... key provided (tried to export to 'jwk'):");
+            console.error(key);
+            throw new Error('exportKey() error (' + e + ')');
+        }
     }
     deriveKey(privateKey, publicKey, type, extractable, keyUsages) {
         return new Promise(async (resolve, reject) => {
@@ -895,6 +921,11 @@ class SB384 {
         this.ready = new Promise(async (resolve, reject) => {
             try {
                 if (key) {
+                    if (!key.d) {
+                        const msg = 'ERROR creating SB384 object: invalid key (must be a PRIVATE key)';
+                        console.error(msg);
+                        reject(msg);
+                    }
                     this.#exportable_privateKey = key;
                     const pk = sbCrypto.extractPubKey(key);
                     _sb_assert(pk, 'unable to extract public key');
@@ -904,19 +935,15 @@ class SB384 {
                 else {
                     const keyPair = await sbCrypto.generateKeys();
                     this.#privateKey = keyPair.privateKey;
-                    const v = await Promise.all([
-                        sbCrypto.exportKey('jwk', keyPair.publicKey),
-                        sbCrypto.exportKey('jwk', keyPair.privateKey)
-                    ]);
-                    this.#exportable_pubKey = v[0];
-                    this.#exportable_privateKey = v[1];
+                    this.#exportable_pubKey = await sbCrypto.exportKey('jwk', keyPair.publicKey);
+                    this.#exportable_privateKey = await sbCrypto.exportKey('jwk', keyPair.privateKey);
                 }
                 this.#ownerChannelId = await sbCrypto.generateChannelId(this.#exportable_pubKey);
                 this.#SB384ReadyFlag = true;
                 resolve(this);
             }
             catch (e) {
-                reject('ERROR creating SB384 object: ' + WrapError(e));
+                reject('ERROR creating SB384 object failed: ' + WrapError(e));
             }
         });
         this.sb384Ready = this.ready;
@@ -1223,14 +1250,14 @@ class Channel extends SB384 {
         return this.#callApi('/storageRequest?size=' + byteLength);
     }
     lock() {
-        console.trace("WARNING: lock() on channel api has not been tested/debugged fully ..");
+        console.warn("WARNING: lock() on channel api has not been tested/debugged fully ..");
         return new Promise(async (resolve, reject) => {
             if (this.keys.lockedKey == null && this.admin) {
                 const _locked_key = await crypto.subtle.generateKey({
                     name: 'AES-GCM', length: 256
                 }, true, ['encrypt', 'decrypt']);
                 const _exportable_locked_key = await crypto.subtle.exportKey('jwk', _locked_key);
-                this.#callApi('lockRoom')
+                this.#callApi('/lockRoom')
                     .then((data) => {
                     if (data.locked) {
                         this.acceptVisitor(JSON.stringify(this.exportable_pubKey))
@@ -1249,9 +1276,9 @@ class Channel extends SB384 {
     acceptVisitor(pubKey) {
         console.warn("WARNING: acceptVisitor() on channel api has not been tested/debugged fully ..");
         return new Promise(async (resolve, reject) => {
-            if (!this.keys.privateKey)
+            if (!this.privateKey)
                 reject(new Error("acceptVisitor(): no private key"));
-            const shared_key = await sbCrypto.deriveKey(this.keys.privateKey, await sbCrypto.importKey('jwk', jsonParseWrapper(pubKey, 'L2276'), 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']);
+            const shared_key = await sbCrypto.deriveKey(this.privateKey, await sbCrypto.importKey('jwk', jsonParseWrapper(pubKey, 'L2276'), 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']);
             const _encrypted_locked_key = await sbCrypto.encrypt(sbCrypto.str2ab(JSON.stringify(this.keys.lockedKey)), shared_key);
             resolve(this.#callApi('/acceptVisitor', {
                 pubKey: pubKey, lockedKey: JSON.stringify(_encrypted_locked_key)

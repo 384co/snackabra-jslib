@@ -1,4 +1,4 @@
-declare const version = "1.1.22 build 015 (pre)";
+declare const version = "1.1.22 build 03 (pre)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -185,7 +185,7 @@ declare class SBCrypto {
         key: string;
     }>;
     extractPubKey(privateKey: JsonWebKey): JsonWebKey | null;
-    generateChannelId(owner_key: JsonWebKey | null): Promise<SBChannelId | string>;
+    generateChannelId(owner_key?: JsonWebKey): Promise<SBChannelId>;
     verifyChannelId(owner_key: JsonWebKey | null, channel_id: SBChannelId): Promise<boolean>;
     generateKeys(): Promise<CryptoKeyPair>;
     importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
