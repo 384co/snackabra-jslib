@@ -720,7 +720,8 @@ class SBCrypto {
         return await crypto.subtle
             .exportKey(format, key)
             .catch(() => {
-            console.warn(`... exportKey() protested, this just means we treat this as undefined`);
+            if (DBG)
+                console.warn(`... exportKey() protested, this just means we treat this as undefined`);
             return undefined;
         });
     }
@@ -1153,16 +1154,20 @@ class Channel extends SB384 {
     }
     async #setKeys(k) {
         this.#channelKeys = k;
-        console.log("set channelkeys to 'k':");
-        console.log(k);
+        if (DBG) {
+            console.log("set channelkeys to 'k':");
+            console.log(k);
+        }
         _sb_assert(this.#channelKeys, "Channel.importKeys: no channel keys (?)");
         _sb_assert(this.#channelKeys.publicSignKey, "Channel.importKeys: no public sign key (?)");
         _sb_assert(this.privateKey, "Channel.importKeys: no private key (?)");
         this.#channelSignKey = await sbCrypto.deriveKey(this.privateKey, this.#channelKeys.publicSignKey, 'HMAC', false, ['sign', 'verify']);
     }
     async #loadKeys(keyStrings) {
-        console.log("loading keys:");
-        console.log(keyStrings);
+        if (DBG) {
+            console.log("loading keys:");
+            console.log(keyStrings);
+        }
         await this.#setKeys(await sbCrypto.channelKeyStringsToCryptoKeys(keyStrings));
     }
     get keys() { return this.#channelKeys; }
@@ -1190,7 +1195,8 @@ class Channel extends SB384 {
     getOldMessages(currentMessagesLength = 100, paginate = false) {
         return new Promise(async (resolve, reject) => {
             if (!this.#ChannelReadyFlag) {
-                console.log("Channel.getOldMessages: channel not ready (we will wait)");
+                if (DBG)
+                    console.log("Channel.getOldMessages: channel not ready (we will wait)");
                 await (this.channelReady);
                 if (!this.#channelKeys)
                     reject("Channel.getOldMessages: no channel keys (?) despite waiting");
@@ -1205,7 +1211,7 @@ class Channel extends SB384 {
                     reject(new Error('Network response was not OK'));
                 return response.json();
             }).then((messages) => {
-                if (true) {
+                if (DBG) {
                     console.log("getOldMessages");
                     console.log(messages);
                 }
@@ -1502,9 +1508,11 @@ export class ChannelSocket extends Channel {
         this.ready = this.channelSocketReady = this.#channelSocketReadyFactory();
     }
     #channelSocketReadyFactory() {
-        console.log("++++ CREATING ChannelSocket.readyPromise()");
+        if (DBG)
+            console.log("++++ CREATING ChannelSocket.readyPromise()");
         return new Promise((resolve, reject) => {
-            console.log("++++ STARTED ChannelSocket.readyPromise()");
+            if (DBG)
+                console.log("++++ STARTED ChannelSocket.readyPromise()");
             this.#resolveFirstMessage = resolve;
             const url = this.#ws.url;
             if (DBG) {
@@ -1559,8 +1567,10 @@ export class ChannelSocket extends Channel {
                     reject('ChannelSocket() - this socket is not resolving ...');
                 }
                 else {
-                    console.log("ChannelSocket() - this socket resoled");
-                    console.log(this);
+                    if (DBG) {
+                        console.log("ChannelSocket() - this socket resolved");
+                        console.log(this);
+                    }
                 }
             }, 2000);
         });
@@ -1582,8 +1592,10 @@ export class ChannelSocket extends Channel {
         try {
             const m01 = Object.entries(message)[0][1];
             if (Object.keys(m01)[0] === 'encrypted_contents') {
-                console.log("++++++++ #processMessage: received message:");
-                console.log(m01.encrypted_contents.content);
+                if (DBG) {
+                    console.log("++++++++ #processMessage: received message:");
+                    console.log(m01.encrypted_contents.content);
+                }
                 const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(m01.encrypted_contents.content));
                 const ack_id = arrayBufferToBase64(hash);
                 if (DBG2)
@@ -1636,10 +1648,13 @@ export class ChannelSocket extends Channel {
         const blocker = this.#insideFirstMessageHandler.bind(this);
         this.#ws.websocket.addEventListener('message', blocker);
         this.#ws.websocket.removeEventListener('message', this.#firstMessageEventHandlerReference);
-        console.log("++++++++ readyPromise() received ChannelKeysMessage:");
-        console.log(e);
+        if (DBG) {
+            console.log("++++++++ readyPromise() received ChannelKeysMessage:");
+            console.log(e);
+        }
         const message = jsonParseWrapper(e.data, 'L2239');
-        console.log(message);
+        if (DBG)
+            console.log(message);
         _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)');
         this.motd = message.motd;
         this.locked = message.roomLocked;
@@ -1670,7 +1685,7 @@ export class ChannelSocket extends Channel {
     get onMessage() { return this.#onMessage; }
     set enableTrace(b) {
         this.#traceSocket = b;
-        console.log(`Tracing ${b ? 'en' : 'dis'}abled`);
+        console.log(`==== jslib ChannelSocket: Tracing ${b ? 'en' : 'dis'}abled ====`);
     }
     send(msg) {
         let message = typeof msg === 'string' ? new SBMessage(this, msg) : msg;
@@ -1703,8 +1718,10 @@ export class ChannelSocket extends Channel {
                                 crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content))
                                     .then((hash) => {
                                     const messageHash = arrayBufferToBase64(hash);
-                                    console.log("Which has hash:");
-                                    console.log(messageHash);
+                                    if (DBG) {
+                                        console.log("Which has hash:");
+                                        console.log(messageHash);
+                                    }
                                     this.#ack.set(messageHash, resolve);
                                     this.#ws.websocket.send(m);
                                     setTimeout(() => {
@@ -2238,7 +2255,7 @@ class Snackabra {
     #preferredServer;
     #version = version;
     constructor(args, DEBUG = false) {
-        console.log(`************ CREATING Snackabra object generation: ${this.version} **************`);
+        console.log(`==== CREATING Snackabra object generation: ${this.version} ====`);
         if (args) {
             this.#preferredServer = Object.assign({}, args);
             this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined);
@@ -2312,5 +2329,5 @@ export var SB = {
 };
 if (!globalThis.SB)
     globalThis.SB = SB;
-console.log(`************ SNACKABRA jslib loaded ${globalThis.SB.version} **************`);
+console.log(`==== SNACKABRA jslib loaded ${globalThis.SB.version} ====`);
 //# sourceMappingURL=snackabra.js.map
