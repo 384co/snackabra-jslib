@@ -127,7 +127,9 @@ async function _test10(owner: boolean) {
         getElement(buttonName).onclick = (async () => {
             messageCount++
             let additionalMessageSent = false
-            let sbm = new SBMessage(c, `---- test10 message number ${messageCount} from ${userName} ----}`)
+            let sbm = new SBMessage(c, `---- test10 message number ${messageCount} from ${userName} ----}`,
+                (owner && globalState.visitorSocket) ? await globalState.visitorKeys : undefined,
+            )
             logTest(`==== sending message number ${messageCount} as ${userName} (on console)`)
             console.log(sbm)
             c.send(sbm)
