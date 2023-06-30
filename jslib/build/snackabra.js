@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.22 build 03 (pre)';
+const version = '1.1.22 build 19 (pre)';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -1125,6 +1125,7 @@ class Channel extends SB384 {
     #channelApi = '';
     #channelServer = '';
     constructor(sbServer, key, channelId) {
+        console.log("CONSTRUCTOR new channel");
         _sb_assert(channelId, "Channel(): as of jslib 1.1.x the channelId must be provided");
         super(key);
         this.#sbServer = sbServer;
@@ -1378,6 +1379,8 @@ class Channel extends SB384 {
     budd(options) {
         let { keys, storage, targetChannel } = options ?? {};
         return new Promise(async (resolve, reject) => {
+            if ((options) && (options.hasOwnProperty('storage')) && (options.storage === undefined))
+                reject("If you omit 'storage' it defaults to Infinity, but you cannot set 'storage' to undefined");
             try {
                 if (!storage)
                     storage = Infinity;
@@ -1645,6 +1648,7 @@ export class ChannelSocket extends Channel {
         console.warn(e);
     }
     #firstMessageEventHandler(e) {
+        console.log("FIRST MESSAGE HANDLER CALLED");
         const blocker = this.#insideFirstMessageHandler.bind(this);
         this.#ws.websocket.addEventListener('message', blocker);
         this.#ws.websocket.removeEventListener('message', this.#firstMessageEventHandlerReference);
@@ -1662,7 +1666,7 @@ export class ChannelSocket extends Channel {
         _sb_assert(this.keys.ownerPubKeyX === exportable_owner_pubKey.x, 'ChannelSocket.readyPromise(): owner key mismatch??');
         _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)');
         this.owner = sbCrypto.compareKeys(exportable_owner_pubKey, this.exportable_pubKey);
-        this.admin = this.owner;
+        this.admin = false;
         this.#ws.websocket.addEventListener('message', this.#processMessage.bind(this));
         this.#ws.websocket.removeEventListener('message', blocker);
         if (DBG)

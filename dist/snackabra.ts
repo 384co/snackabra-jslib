@@ -23,7 +23,7 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.22 build 03 (pre)'
+const version = '1.1.22 build 19 (pre)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -2221,6 +2221,7 @@ abstract class Channel extends SB384 {
   abstract send(message: SBMessage): Promise<string>
 
   constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
+    console.log("CONSTRUCTOR new channel")
     _sb_assert(channelId, "Channel(): as of jslib 1.1.x the channelId must be provided")
     super(key)
     this.#sbServer = sbServer
@@ -2571,7 +2572,7 @@ abstract class Channel extends SB384 {
    * - keys and storage amount: creates new channel with those keys and that storage amount
    * 
    * In the first (special) case you can just call budd(), in the other
-   * cases you need to fill out the options object.
+   * cases you need to fill out the 'options' object.
    * 
    * Another way to remember the above: all combinations are valid except
    * both a target channel and assigning keys.
@@ -2581,6 +2582,9 @@ abstract class Channel extends SB384 {
    * 
    * Same channels as mother and target will be a no-op, regardless of other
    * parameters.
+   * 
+   * Note: if you provide a value for 'storage', it cannot be undefined. If you
+   * wish it to be Infinity, then you need to omit the property from options.
    * 
    * Future: negative amount of storage leaves that amount behind, the rest is transferred
    * 
@@ -2600,7 +2604,9 @@ abstract class Channel extends SB384 {
     }): Promise<SBChannelHandle> {
     let { keys, storage, targetChannel } = options ?? {};
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
-
+      if ((options) && (options.hasOwnProperty('storage')) && (options.storage === undefined))
+        // this catches the case where callee intended storage to have a value but somehow it didn't
+        reject("If you omit 'storage' it defaults to Infinity, but you cannot set 'storage' to undefined")
       try {
         if (!storage) storage = Infinity;
         if (targetChannel) {
@@ -2852,6 +2858,7 @@ export class ChannelSocket extends Channel {
 
   // we use (bound) message handlers orchestrate who handles first message (and only once)
   #firstMessageEventHandler(e: MessageEvent) {
+    console.log("FIRST MESSAGE HANDLER CALLED")
     const blocker = this.#insideFirstMessageHandler.bind(this)
     this.#ws.websocket!.addEventListener('message', blocker)
     this.#ws.websocket!.removeEventListener('message', this.#firstMessageEventHandlerReference)
@@ -2868,10 +2875,13 @@ export class ChannelSocket extends Channel {
     _sb_assert(this.keys.ownerPubKeyX === exportable_owner_pubKey.x, 'ChannelSocket.readyPromise(): owner key mismatch??')
     _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)')
     // this sets us as owner only if the keys match
+
     this.owner = sbCrypto.compareKeys(exportable_owner_pubKey, this.exportable_pubKey!)
     // TODO: we have mostly lost the "admin" concept (need adminData?)
     // this.adminData = await this.api.getAdminData()
-    this.admin = this.owner
+    // @psm: we want to reserve 'admin' for future SSO use
+    // this.admin = this.owner
+    this.admin = false
     // once we've gotten our keys, we substitute the main message handler
     this.#ws.websocket!.addEventListener('message', this.#processMessage.bind(this))
     this.#ws.websocket!.removeEventListener('message', blocker)
