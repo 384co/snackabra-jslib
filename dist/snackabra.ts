@@ -23,7 +23,7 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.22 build 19 (pre)'
+const version = '1.1.22 build 21 (pre)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -483,7 +483,7 @@ function WrapError(e: any) {
 }
 
 /** @private */
-export function _sb_exception(loc: string, msg: string) {
+function _sb_exception(loc: string, msg: string) {
   const m = '<< SB lib error (' + loc + ': ' + msg + ') >>';
   // for now disabling this to keep node testing less noisy
   // console.error(m);
@@ -494,20 +494,21 @@ export function _sb_exception(loc: string, msg: string) {
 // (basically the "anti" of resolve, if it's *not* a promise then
 // it becomes one
 /** @private */
-export function _sb_resolve(val: any) {
-  if (val.then) {
-    // it's already a promise
-    // console.log('it is a promise')
-    return val;
-  } else {
-    // console.log('it was not a promise')
-    return new Promise((resolve) => resolve(val));
-  }
-}
+
+// function _sb_resolve(val: any) {
+//   if (val.then) {
+//     // it's already a promise
+//     // console.log('it is a promise')
+//     return val;
+//   } else {
+//     // console.log('it was not a promise')
+//     return new Promise((resolve) => resolve(val));
+//   }
+// }
 
 // internal - handle assertions
 /** @private */
-export function _sb_assert(val: unknown, msg: string) {
+function _sb_assert(val: unknown, msg: string) {
   if (!(val)) {
     const m = `<< SB assertion error: ${msg} >>`;
     // debugger;
@@ -647,7 +648,7 @@ const b64_regex = /^([A-Za-z0-9+/_\-=]*)$/
  * Returns 'true' if (and only if) string is well-formed base64.
  * Works same on browsers and nodejs.
  */
-export function _assertBase64(base64: string) {
+function _assertBase64(base64: string) {
   // return (b64_regex.exec(base64)?.[0] === base64);
   const z = b64_regex.exec(base64)
   if (z) return (z[0] === base64); else return false;
@@ -967,7 +968,7 @@ export function isBase62Encoded(value: string): value is Base62Encoded {
  * @return {ArrayBuffer} new buffer
  *
  */
-export function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | ArrayBuffer): ArrayBuffer {
+function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | ArrayBuffer): ArrayBuffer {
   const tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
   tmp.set(new Uint8Array(buffer1), 0);
   tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
@@ -1092,7 +1093,7 @@ export function jsonParseWrapper(str: string | null, loc: string) {
 }
 
 /** Essentially a dictionary where each entry is an arraybuffer. */
-interface SBPayload {
+export interface SBPayload {
   [index: string]: ArrayBuffer;
 }
 
@@ -1413,7 +1414,7 @@ class SBCrypto {  /*************************************************************
       const channelBytes = _appendBuffer(xBytes, yBytes)
       return await this.#generateHash(channelBytes)
     } else {
-      throw new Error('generateChannelId() - invalid key (JsonWebKey) - missing x and/or y')
+      throw new Error('sb384Hash() - invalid key (JsonWebKey) - missing x and/or y')
     }
   }
 
@@ -1488,8 +1489,11 @@ class SBCrypto {  /*************************************************************
       }
       if (format === 'jwk') {
         // sanity check it's a JsonWebKey and not a BufferSource or something else
-        if ((key as JsonWebKey).kty === undefined) throw new Error('importKey() - invalid JsonWebKey');
-        importedKey = await crypto.subtle.importKey('jwk', key as JsonWebKey, keyAlgorithms[type], extractable, keyUsages)
+        const jsonKey = key as JsonWebKey
+        if (jsonKey.kty === undefined) throw new Error('importKey() - invalid JsonWebKey');
+        if (jsonKey.alg === 'ECDH')
+          jsonKey.alg = undefined; // todo: this seems to be a Deno mismatch w crypto standards?
+        importedKey = await crypto.subtle.importKey('jwk', jsonKey, keyAlgorithms[type], extractable, keyUsages)
       } else {
         importedKey = await crypto.subtle.importKey(format, key as BufferSource, keyAlgorithms[type], extractable, keyUsages)
       }
@@ -2759,16 +2763,16 @@ export class ChannelSocket extends Channel {
       // todo: add as a decorator for ready-template style constructors
       setTimeout(() => {
         if (!this.#ChannelSocketReadyFlag) {
-          console.warn("ChannelSocket() - this socket is not resolving ...")
+          console.warn("ChannelSocket() - this socket is not resolving (waited 10s) ...")
           console.log(this)
-          reject('ChannelSocket() - this socket is not resolving ...')
+          reject('ChannelSocket() - this socket is not resolving (waited 10s) ...')
         } else {
           if (DBG) {
             console.log("ChannelSocket() - this socket resolved")
             console.log(this)
           }
         }
-      }, 2000)
+      }, 10000)
     })
 
   }
@@ -3338,7 +3342,7 @@ class StorageApi {
           SBFetch(this.channelServer + roomId + '/storageRequest?size=' + data.byteLength)
             .then((r) => r.json())
             .then((storageTokenReq) => {
-              if (storageTokenReq.hasOwnProperty('error')) reject('storage token request error')
+              if (storageTokenReq.hasOwnProperty('error')) reject(`storage token request error (${storageTokenReq.error})`)
               let storageToken = JSON.stringify(storageTokenReq)
               this.storeData(type, image_id, iv, salt, storageToken, data)
                 .then((resp_json) => {
@@ -3704,12 +3708,12 @@ class Snackabra {
   * @param DEBUG - optional boolean to enable debug logging
   */
   constructor(args?: SBServer, DEBUG: boolean = false) {
-    console.log(`==== CREATING Snackabra object generation: ${this.version} ====`)
+    console.warn(`==== CREATING Snackabra object generation: ${this.version} ====`)
     if (args) {
       this.#preferredServer = Object.assign({}, args)
       this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined)
       if (DEBUG) DBG = true
-      if (DBG) console.log("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
+      if (DBG) console.warn("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
     }
 
   }
@@ -3830,7 +3834,7 @@ class Snackabra {
 export type {
   ChannelData,
   ChannelKeyStrings,
-  SBPayload,
+  ImageMetaData
 }
 
 export {
@@ -3858,5 +3862,5 @@ export var SB = {
 
 if (!(globalThis as any).SB)
   (globalThis as any).SB = SB;
-console.log(`==== SNACKABRA jslib loaded ${(globalThis as any).SB.version} ====`)
+console.warn(`==== SNACKABRA jslib loaded ${(globalThis as any).SB.version} ====`); // we warn for benefit of Deno
 //#endregion - exporting stuff

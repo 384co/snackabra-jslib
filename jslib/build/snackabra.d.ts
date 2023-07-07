@@ -1,4 +1,4 @@
-declare const version = "1.1.22 build 19 (pre)";
+declare const version = "1.1.22 build 21 (pre)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -150,12 +150,8 @@ export declare class MessageBus {
     unsubscribe(event: string, handler: CallableFunction): void;
     publish(event: string, ...args: unknown[]): void;
 }
-export declare function _sb_exception(loc: string, msg: string): void;
-export declare function _sb_resolve(val: any): any;
-export declare function _sb_assert(val: unknown, msg: string): void;
 export declare function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedContentsBin;
 export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
-export declare function _assertBase64(base64: string): boolean;
 export declare function base64ToArrayBuffer(str: string): Uint8Array;
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
 declare function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array | null, variant?: 'b64' | 'url'): string;
@@ -167,13 +163,12 @@ export declare function arrayBuffer32ToBase62(buffer: ArrayBuffer): string;
 export declare function base62ToBase64(s: string): string;
 export declare function base64ToBase62(s: string): string;
 export declare function isBase62Encoded(value: string): value is Base62Encoded;
-export declare function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | ArrayBuffer): ArrayBuffer;
 export declare function simpleRand256(): number;
 export declare function simpleRandomString(n: number, code: string): string;
 export declare function cleanBase32mi(s: string): string;
 export declare function partition(str: string, n: number): void;
 export declare function jsonParseWrapper(str: string | null, loc: string): any;
-interface SBPayload {
+export interface SBPayload {
     [index: string]: ArrayBuffer;
 }
 export declare function extractPayloadV1(payload: ArrayBuffer): SBPayload;
@@ -355,7 +350,7 @@ declare class Snackabra {
     get crypto(): SBCrypto;
     get version(): string;
 }
-export type { ChannelData, ChannelKeyStrings, SBPayload, };
+export type { ChannelData, ChannelKeyStrings, ImageMetaData };
 export { Channel, SBMessage, Snackabra, SBCrypto, SB384, arrayBufferToBase64, sbCrypto, version, };
 export declare var SB: {
     Snackabra: typeof Snackabra;

@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.22 build 19 (pre)';
+const version = '1.1.22 build 21 (pre)';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -50,19 +50,11 @@ function WrapError(e) {
     else
         return new Error(String(e));
 }
-export function _sb_exception(loc, msg) {
+function _sb_exception(loc, msg) {
     const m = '<< SB lib error (' + loc + ': ' + msg + ') >>';
     throw new Error(m);
 }
-export function _sb_resolve(val) {
-    if (val.then) {
-        return val;
-    }
-    else {
-        return new Promise((resolve) => resolve(val));
-    }
-}
-export function _sb_assert(val, msg) {
+function _sb_assert(val, msg) {
     if (!(val)) {
         const m = `<< SB assertion error: ${msg} >>`;
         throw new Error(m);
@@ -184,7 +176,7 @@ export function getRandomValues(buffer) {
 }
 const messageIdRegex = /([A-Za-z0-9+/_\-=]{64})([01]{42})/;
 const b64_regex = /^([A-Za-z0-9+/_\-=]*)$/;
-export function _assertBase64(base64) {
+function _assertBase64(base64) {
     const z = b64_regex.exec(base64);
     if (z)
         return (z[0] === base64);
@@ -372,7 +364,7 @@ export function base64ToBase62(s) {
 export function isBase62Encoded(value) {
     return base62Regex.test(value);
 }
-export function _appendBuffer(buffer1, buffer2) {
+function _appendBuffer(buffer1, buffer2) {
     const tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
     tmp.set(new Uint8Array(buffer1), 0);
     tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
@@ -651,7 +643,7 @@ class SBCrypto {
             return await this.#generateHash(channelBytes);
         }
         else {
-            throw new Error('generateChannelId() - invalid key (JsonWebKey) - missing x and/or y');
+            throw new Error('sb384Hash() - invalid key (JsonWebKey) - missing x and/or y');
         }
     }
     async compareHashWithKey(hash, key) {
@@ -696,9 +688,12 @@ class SBCrypto {
                 PBKDF2: 'PBKDF2'
             };
             if (format === 'jwk') {
-                if (key.kty === undefined)
+                const jsonKey = key;
+                if (jsonKey.kty === undefined)
                     throw new Error('importKey() - invalid JsonWebKey');
-                importedKey = await crypto.subtle.importKey('jwk', key, keyAlgorithms[type], extractable, keyUsages);
+                if (jsonKey.alg === 'ECDH')
+                    jsonKey.alg = undefined;
+                importedKey = await crypto.subtle.importKey('jwk', jsonKey, keyAlgorithms[type], extractable, keyUsages);
             }
             else {
                 importedKey = await crypto.subtle.importKey(format, key, keyAlgorithms[type], extractable, keyUsages);
@@ -1565,9 +1560,9 @@ export class ChannelSocket extends Channel {
             });
             setTimeout(() => {
                 if (!this.#ChannelSocketReadyFlag) {
-                    console.warn("ChannelSocket() - this socket is not resolving ...");
+                    console.warn("ChannelSocket() - this socket is not resolving (waited 10s) ...");
                     console.log(this);
-                    reject('ChannelSocket() - this socket is not resolving ...');
+                    reject('ChannelSocket() - this socket is not resolving (waited 10s) ...');
                 }
                 else {
                     if (DBG) {
@@ -1575,7 +1570,7 @@ export class ChannelSocket extends Channel {
                         console.log(this);
                     }
                 }
-            }, 2000);
+            }, 10000);
         });
     }
     async #processMessage(msg) {
@@ -1992,7 +1987,7 @@ class StorageApi {
                         .then((r) => r.json())
                         .then((storageTokenReq) => {
                         if (storageTokenReq.hasOwnProperty('error'))
-                            reject('storage token request error');
+                            reject(`storage token request error (${storageTokenReq.error})`);
                         let storageToken = JSON.stringify(storageTokenReq);
                         this.storeData(type, image_id, iv, salt, storageToken, data)
                             .then((resp_json) => {
@@ -2259,14 +2254,14 @@ class Snackabra {
     #preferredServer;
     #version = version;
     constructor(args, DEBUG = false) {
-        console.log(`==== CREATING Snackabra object generation: ${this.version} ====`);
+        console.warn(`==== CREATING Snackabra object generation: ${this.version} ====`);
         if (args) {
             this.#preferredServer = Object.assign({}, args);
             this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined);
             if (DEBUG)
                 DBG = true;
             if (DBG)
-                console.log("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
+                console.warn("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
         }
     }
     connect(onMessage, key, channelId) {
@@ -2333,5 +2328,5 @@ export var SB = {
 };
 if (!globalThis.SB)
     globalThis.SB = SB;
-console.log(`==== SNACKABRA jslib loaded ${globalThis.SB.version} ====`);
+console.warn(`==== SNACKABRA jslib loaded ${globalThis.SB.version} ====`);
 //# sourceMappingURL=snackabra.js.map
