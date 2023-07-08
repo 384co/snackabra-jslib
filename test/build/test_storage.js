@@ -1,5 +1,12 @@
-import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js';
-import { Snackabra, getRandomValues, compareBuffers } from './snackabra.js';
+import { sb_config, autoRun, globalState } from './test_config.js';
+import { getRandomValues, compareBuffers } from './snackabra.js';
+function checkForChannel() {
+    if (globalState.channelHandle == null) {
+        console.error('**** you need to run a channel test first (need a channel)');
+        return false;
+    }
+    return true;
+}
 function test05a() {
     _test05(false);
 }
@@ -28,78 +35,79 @@ function _test05_landShard(SB, handleSet, blockSet, t0) {
     });
 }
 function _test05(testLandShard) {
+    if (!checkForChannel())
+        return;
     try {
         const blockCount = 8;
         const sbServer = sb_config;
         console.log(`testing storing ${blockCount}x64KB blocks against servers:`);
         console.log(sbServer);
-        const SB = new Snackabra(sb_config, jslibVerbose);
-        SB.create(sbServer, serverPassword).then((c) => {
-            let t0 = Date.now();
-            console.log('starting timer. SB object ready.');
-            let blockSet = [];
-            for (let i = 0; i < blockCount; i++)
-                blockSet.push(getRandomValues(new Uint8Array(63 * 1024)));
-            console.log(`[${Date.now() - t0}] random blocks generated, start writing them to storage:`);
-            let handlePromiseSet = [];
-            for (let i = 0; i < blockCount; i++)
-                handlePromiseSet.push(SB.storage.storeObject(blockSet[i], 'p', c.channelId));
-            console.log(`[${Date.now() - t0}] everything has been fired off:`);
-            console.log(handlePromiseSet);
-            console.log(`[${Date.now() - t0}] now we send them to be stored:`);
-            Promise.all(handlePromiseSet).then((handleSet) => {
-                console.log(`[${Date.now() - t0}] we got all handles (they're all allocated)`);
-                console.log(handleSet);
-                console.log(`[${Date.now() - t0}] we'll now 'peek' into the process and first wait for all verifications:`);
-                let verificationPromiseSet = [];
-                handleSet.forEach(s => verificationPromiseSet.push(Object.assign({}, s.verification)));
-                console.log(verificationPromiseSet);
-                Promise.all(verificationPromiseSet).then((verificationSet) => {
-                    console.log(`[${Date.now() - t0}] we got all of them so they've all been written:`);
-                    console.log(verificationSet);
-                    let fetchPromiseSet = [];
-                    for (let i = 0; i < blockCount; i++)
-                        fetchPromiseSet.push(SB.storage.fetchData(handleSet[i]));
-                    console.log(`[${Date.now() - t0}] that's started, we got the promises up and running:`);
-                    console.log(fetchPromiseSet);
-                    console.log(`[${Date.now() - t0}] now we wait for ALL of them to come back:`);
-                    Promise.all(fetchPromiseSet).then((returnedBlockSet) => {
-                        console.log(`[${Date.now() - t0}] they should all be back, let's check contents:`);
-                        for (let i = 0; i < blockCount; i++) {
-                            if (!compareBuffers(blockSet[i], returnedBlockSet[i])) {
-                                console.error(`ugh - buffer ${i} did not come back the same (sent, returned):`);
-                                console.log(blockSet[i]);
-                                console.log(returnedBlockSet[i]);
-                            }
+        const SB = globalState.SB;
+        const c = globalState.channelHandle;
+        let t0 = Date.now();
+        console.log('starting timer. SB object ready.');
+        let blockSet = [];
+        for (let i = 0; i < blockCount; i++)
+            blockSet.push(getRandomValues(new Uint8Array(63 * 1024)));
+        console.log(`[${Date.now() - t0}] random blocks generated, start writing them to storage:`);
+        let handlePromiseSet = [];
+        for (let i = 0; i < blockCount; i++)
+            handlePromiseSet.push(SB.storage.storeObject(blockSet[i], 'p', c.channelId));
+        console.log(`[${Date.now() - t0}] everything has been fired off:`);
+        console.log(handlePromiseSet);
+        console.log(`[${Date.now() - t0}] now we send them to be stored:`);
+        Promise.all(handlePromiseSet).then((handleSet) => {
+            console.log(`[${Date.now() - t0}] we got all handles (they're all allocated)`);
+            console.log(handleSet);
+            console.log(`[${Date.now() - t0}] we'll now 'peek' into the process and first wait for all verifications:`);
+            let verificationPromiseSet = [];
+            handleSet.forEach(s => verificationPromiseSet.push(Object.assign({}, s.verification)));
+            console.log(verificationPromiseSet);
+            Promise.all(verificationPromiseSet).then((verificationSet) => {
+                console.log(`[${Date.now() - t0}] we got all of them so they've all been written:`);
+                console.log(verificationSet);
+                let fetchPromiseSet = [];
+                for (let i = 0; i < blockCount; i++)
+                    fetchPromiseSet.push(SB.storage.fetchData(handleSet[i]));
+                console.log(`[${Date.now() - t0}] that's started, we got the promises up and running:`);
+                console.log(fetchPromiseSet);
+                console.log(`[${Date.now() - t0}] now we wait for ALL of them to come back:`);
+                Promise.all(fetchPromiseSet).then((returnedBlockSet) => {
+                    console.log(`[${Date.now() - t0}] they should all be back, let's check contents:`);
+                    for (let i = 0; i < blockCount; i++) {
+                        if (!compareBuffers(blockSet[i], returnedBlockSet[i])) {
+                            console.error(`ugh - buffer ${i} did not come back the same (sent, returned):`);
+                            console.log(blockSet[i]);
+                            console.log(returnedBlockSet[i]);
                         }
-                        console.log(`[${Date.now() - t0}] if there were no errors, everything worked!`);
-                        console.log(`[${Date.now() - t0}] now let's try reading everything a SECOND time:`);
-                        let t1 = Date.now();
-                        let fetchPromiseSet2 = [];
+                    }
+                    console.log(`[${Date.now() - t0}] if there were no errors, everything worked!`);
+                    console.log(`[${Date.now() - t0}] now let's try reading everything a SECOND time:`);
+                    let t1 = Date.now();
+                    let fetchPromiseSet2 = [];
+                    for (let i = 0; i < blockCount; i++)
+                        fetchPromiseSet2.push(SB.storage.fetchData(handleSet[i]));
+                    console.log(`[${Date.now() - t0}] that's started, we got the promises up and running:`);
+                    console.log(fetchPromiseSet2);
+                    console.log(`[${Date.now() - t0}] now we wait for ALL of them to come back:`);
+                    Promise.all(fetchPromiseSet2).then((returnedBlockSet2) => {
+                        console.log(`[${Date.now() - t0}] they should all be back (delta time ${Date.now() - t1}), let's check contents:`);
                         for (let i = 0; i < blockCount; i++)
-                            fetchPromiseSet2.push(SB.storage.fetchData(handleSet[i]));
-                        console.log(`[${Date.now() - t0}] that's started, we got the promises up and running:`);
-                        console.log(fetchPromiseSet2);
-                        console.log(`[${Date.now() - t0}] now we wait for ALL of them to come back:`);
-                        Promise.all(fetchPromiseSet2).then((returnedBlockSet2) => {
-                            console.log(`[${Date.now() - t0}] they should all be back (delta time ${Date.now() - t1}), let's check contents:`);
-                            for (let i = 0; i < blockCount; i++)
-                                if (!compareBuffers(blockSet[i], returnedBlockSet2[i]))
-                                    console.error(`ugh - buffer ${i} did not come back the same`);
-                            console.log(`[${Date.now() - t0}] if there were no errors, everything worked again!`);
-                            if (testLandShard) {
-                                console.log(`[${Date.now() - t0}] calling land shards FIRST time:`);
+                            if (!compareBuffers(blockSet[i], returnedBlockSet2[i]))
+                                console.error(`ugh - buffer ${i} did not come back the same`);
+                        console.log(`[${Date.now() - t0}] if there were no errors, everything worked again!`);
+                        if (testLandShard) {
+                            console.log(`[${Date.now() - t0}] calling land shards FIRST time:`);
+                            _test05_landShard(SB, handleSet, blockSet, t0).then(() => {
+                                console.log(`[${Date.now() - t0}] calling land shards SECOND time:`);
                                 _test05_landShard(SB, handleSet, blockSet, t0).then(() => {
-                                    console.log(`[${Date.now() - t0}] calling land shards SECOND time:`);
+                                    console.log(`[${Date.now() - t0}] calling land shards THIRD time:`);
                                     _test05_landShard(SB, handleSet, blockSet, t0).then(() => {
-                                        console.log(`[${Date.now() - t0}] calling land shards THIRD time:`);
-                                        _test05_landShard(SB, handleSet, blockSet, t0).then(() => {
-                                            console.log(`[${Date.now() - t0}] COMPLETELY DONE`);
-                                        });
+                                        console.log(`[${Date.now() - t0}] COMPLETELY DONE`);
                                     });
                                 });
-                            }
-                        });
+                            });
+                        }
                     });
                 });
             });
@@ -112,7 +120,7 @@ function _test05(testLandShard) {
 import { videoShards } from './video_shards.js';
 function test07() {
     let i = 0;
-    const SB = new Snackabra(sb_config, jslibVerbose);
+    const SB = globalState.SB;
     for (const [fileName, shard] of Object.entries(videoShards)) {
         i++;
         SB.storage.fetchData(shard).then((data) => {

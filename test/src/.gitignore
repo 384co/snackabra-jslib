@@ -1,5 +1,6 @@
-test_config.ts
 snackabra.ts
 
-# note that "test_config.ts" is needed in this directory,
-# and is not version controlled either at this time
+# whatever server(s) you configure in test_config.ts, you will need to
+# set the appropriate password(s) in server_password.ts
+server_password.ts
+test_server_password.ts

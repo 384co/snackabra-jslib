@@ -1,6 +1,6 @@
-import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js';
-import { assert } from './test_utils.js';
-import { Snackabra, SBMessage, ChannelEndpoint, SB384 } from './snackabra.js';
+import { sb_config, autoRun, jslibVerbose, serverPassword, globalState } from './test_config.js';
+import { assert, getElement } from './test_utils.js';
+import { SBMessage, ChannelEndpoint } from './snackabra.js';
 const TRACE_CHANNELS = jslibVerbose;
 function logTest(msg) {
     const z = getElement('channel_tests');
@@ -12,47 +12,9 @@ function logTest(msg) {
         console.log('test_channels: ' + msg);
     }
 }
-function getElement(s) {
-    const z = document.getElementById(s);
-    if (z == null) {
-        assert(false, `failed to find DOM element '${s}'`);
-        return {};
-    }
-    else {
-        return z;
-    }
-}
-console.log("\n\n-- test_channels loaded --\n\n");
-logTest("#### creating SB for use in channel tests (see console) ####");
-const globalSB = new Snackabra(sb_config, jslibVerbose);
-console.log(globalSB);
-const globalState = {
-    channelHandle: null,
-    visitorHandle: null,
-    channelEndpoint: null,
-    secondEndpoint: null,
-    channelSocket: null,
-    visitorSocket: null,
-    visitorKeys: (new SB384()).ready.then((x) => x.exportable_privateKey),
-    test14: false,
-    noDependency: true,
-};
 console.log("#### you can track all 'window.globalState' variables in the console: ####");
 window.globalState = globalState;
 console.log(globalState);
-async function _test09() {
-    console.log("... creating channels using these servers:");
-    console.log(sb_config);
-    const newChannel = await globalSB.create(sb_config, serverPassword);
-    logTest("... a new channel created:");
-    console.log(newChannel);
-    return newChannel;
-}
-async function test09() {
-    globalState.channelHandle = await _test09();
-    console.log('... global channel handle is:');
-    console.log(globalState.channelHandle);
-}
 function ownerMessageHandler(m) {
     console.log('++++ test 10 OWNER got message (on globalState.channelhandle):');
     console.log(m);
@@ -61,14 +23,22 @@ function visitorMessageHandler(m) {
     console.log('++++ test 10 VISITOR got message (on globalState.channelhandle):');
     console.log(m);
 }
-async function _test10(owner) {
+async function channel_test09() {
+    console.log("... creating channels using these servers:");
+    console.log(sb_config);
+    const newChannel = await globalState.SB.create(sb_config, serverPassword);
+    globalState.channelHandle = newChannel;
+    logTest("... global channel handle is:");
+    console.log(globalState.channelHandle);
+}
+async function _channel_test10(owner) {
     const userName = owner ? "TestBot OWNER" : "TestBot VISITOR";
     const buttonName = owner ? "anotherOwnerMessage" : "anotherVisitorMessage";
     return new Promise(async (resolve, reject) => {
         assert(globalState.channelHandle, "global channelHandle is null");
         let c = owner
-            ? await globalSB.connect(ownerMessageHandler, globalState.channelHandle.key, globalState.channelHandle.channelId)
-            : await globalSB.connect(visitorMessageHandler, await globalState.visitorKeys, globalState.channelHandle.channelId);
+            ? await globalState.SB.connect(ownerMessageHandler, globalState.channelHandle.key, globalState.channelHandle.channelId)
+            : await globalState.SB.connect(visitorMessageHandler, await globalState.visitorKeys, globalState.channelHandle.channelId);
         c.enableTrace = TRACE_CHANNELS;
         c.userName = userName;
         if (owner) {
@@ -120,30 +90,33 @@ async function _test10(owner) {
         }, 500);
     });
 }
-async function test10() {
-    await _test10(true);
+async function channel_test10() {
+    await _channel_test10(true);
 }
-async function test11() {
+async function channel_test11() {
+    assert(globalState.channelHandle, "global channelHandle is null");
     const channelEndpoint = new ChannelEndpoint(sb_config, globalState.channelHandle.key, globalState.channelHandle.channelId);
     await channelEndpoint.ready;
     globalState.channelEndpoint = channelEndpoint;
+    assert(globalState.channelEndpoint, "... somehow globalState channelEndpoint is still null?");
     logTest("global channel (api) is ready");
     console.log(globalState.channelEndpoint);
 }
-async function test12() {
+async function channel_test12() {
     const storageLimit = await globalState.channelEndpoint.getStorageLimit();
     logTest(`storage limit is ${storageLimit.storageLimit}`);
     console.log(`storage limit is:`);
     console.log(storageLimit);
 }
-async function test13() {
+async function channel_test13() {
     const newChannel = await globalState.channelEndpoint.budd();
     logTest(`new channel is ${newChannel.channelId}`);
     console.log('swapping global channel handle to new channel');
     globalState.channelHandle = newChannel;
     globalState.channelEndpoint = null;
+    globalState.channel_test13 = true;
 }
-async function test14() {
+async function channel_test14() {
     const channelEndpoint = new ChannelEndpoint(sb_config, globalState.channelHandle.key, globalState.channelHandle.channelId);
     globalState.channelEndpoint = channelEndpoint;
     let { storageLimit } = await globalState.channelEndpoint.getStorageLimit();
@@ -157,9 +130,9 @@ async function test14() {
     logTest(`new channel is tracking mother ${motherChannel}`);
     ({ storageLimit } = await newChannelApi.getStorageLimit());
     logTest(`new channel budget is ${storageLimit}`);
-    globalState.test14 = true;
+    globalState.channel_test14 = true;
 }
-async function test15() {
+async function channel_test15() {
     const testAmount = 64 * 1024 * 1024;
     logTest(`RUNNING TEST 15: move ${testAmount / (1024 * 1024)} MiB to new budded channel`);
     let { storageLimit } = await globalState.channelEndpoint.getStorageLimit();
@@ -183,17 +156,29 @@ async function test15() {
         return '';
     }
 }
-async function test16() {
+async function channel_test16() {
     console.log("We will use visitor keys:");
     console.log(await globalState.visitorKeys);
-    await _test10(false);
+    await _channel_test10(false);
 }
-async function test17() {
+async function channel_test17() {
     await globalState.channelSocket.lock();
 }
-async function test18() {
+async function channel_test18() {
     const lockStatus = await globalState.channelSocket.isLocked();
     console.log(`channel is locked: ${lockStatus}`);
+}
+async function channel_test19() {
+    assert(globalState.channelEndpoint, "global channelEndpoint is null");
+    const allData = await globalState.channelEndpoint.downloadData();
+    logTest("++++ Channel 'downloadData' results ('all data') in console");
+    console.log(allData);
+}
+async function channel_test20() {
+    assert(globalState.channelEndpoint, "global channelEndpoint is null");
+    const allData = await globalState.channelEndpoint.getOldMessages();
+    logTest("++++ Channel 'getOldMessages' results ('all data') in console");
+    console.log(allData);
 }
 function installTestButton(name, id, func) {
     const button = document.createElement('button');
@@ -209,17 +194,25 @@ function installTestButton(name, id, func) {
     else
         console.log('testButtons not found');
 }
+const depMap = new Map([
+    ['channelHandle', 9],
+    ['channelEndpoint', 11],
+    ['channel_test13', 13],
+    ['channel_test14', 14],
+]);
 const arrayOfTests = [
-    { id: 9, name: 'create a channel', func: test09, dependency: 'noDependency', depFunc: null },
-    { id: 10, name: 'connect to socket\nas OWNER', func: test10, dependency: 'channelHandle', depFunc: 9 },
-    { id: 11, name: 'test channel api (without socket)', func: test11, dependency: 'channelHandle', depFunc: 9 },
-    { id: 12, name: 'get api endpoint and some\nbasic capacity (budding) tests', func: test12, dependency: 'channelEndpoint', depFunc: 11 },
-    { id: 13, name: '"budd" a new channel', func: test13, dependency: 'channelEndpoint', depFunc: 11 },
-    { id: 14, name: 'create a small\nbudded channel', func: test14, dependency: 'channelHandle', depFunc: 13 },
-    { id: 15, name: 'move 64MB to new\nbudded channel', func: test15, dependency: 'test14', depFunc: 14 },
-    { id: 16, name: 'connect to socket\nas VISITOR', func: test16, dependency: 'channelHandle', depFunc: 9 },
-    { id: 17, name: 'lock channel', func: test17, dependency: 'channelSocket', depFunc: 10 },
-    { id: 18, name: 'check lock status', func: test18, dependency: 'channelSocket', depFunc: 10 },
+    { id: 9, name: 'create a channel', func: channel_test09, dependency: null },
+    { id: 10, name: 'connect to socket\nas OWNER', func: channel_test10, dependency: 'channelHandle' },
+    { id: 11, name: 'test channel api (without socket)', func: channel_test11, dependency: 'channelHandle' },
+    { id: 12, name: 'get api endpoint and some\nbasic capacity (budding) channel_tests', func: channel_test12, dependency: 'channelEndpoint' },
+    { id: 13, name: '"budd" a new channel', func: channel_test13, dependency: 'channelEndpoint' },
+    { id: 14, name: 'create a small\nbudded channel', func: channel_test14, dependency: 'channel_test13' },
+    { id: 15, name: 'move 64MB to new\nbudded channel', func: channel_test15, dependency: 'channel_test14' },
+    { id: 16, name: 'connect to socket\nas VISITOR', func: channel_test16, dependency: 'channelHandle' },
+    { id: 17, name: 'lock channel', func: channel_test17, dependency: 'channelSocket' },
+    { id: 18, name: 'check lock status', func: channel_test18, dependency: 'channelSocket' },
+    { id: 19, name: 'download data', func: channel_test19, dependency: 'channelEndpoint' },
+    { id: 20, name: 'old messages', func: channel_test20, dependency: 'channelEndpoint' },
 ];
 async function runTest(id) {
     const test = arrayOfTests.find((t) => t.id === id);
@@ -228,30 +221,33 @@ async function runTest(id) {
     console.log(`starting test ${id}: ${test.name}`);
     const dependencyMet = globalState[test.dependency] !== null;
     if (!dependencyMet) {
-        console.log(`... but first running test ${test.depFunc} (dependency '${test.dependency}' not met)`);
-        if (test.depFunc) {
-            await runTest(test.depFunc);
-            assert(test.dependency, `... dependency for test ${id} not met after running dependency function`);
+        const depFunc = depMap.get(test.dependency);
+        console.log(`... but first running test ${depFunc} (dependency '${test.dependency}' not met)`);
+        if (depFunc) {
+            const r = await runTest(depFunc);
+            assert(r, `runTest(${id}): failing because dependency function ([${depFunc}]) failed.`);
+            assert(test.dependency, `... dependency for test ${id} not met after running dependency function (?)`);
         }
         else {
             throw new Error(`ERROR: test ${id} has no dependency function, but dependency '${test.dependency}' not met (?)`);
         }
     }
     logTest(`==== running test ${id}: ${test.name} ====`);
-    test.func()
-        .then((r) => {
-        if ((r) && r.includes('ERROR')) {
-            logTest(`******  ERROR: test ${id} failed: ${r}  ******`);
-        }
-        else {
-            logTest(`++++ test ${id} passed ++++`);
-        }
-    })
+    const r = await test
+        .func()
         .catch((e) => {
         logTest(`******  ERROR: test ${id} failed (${e})  ******`);
         console.warn(e);
-        return;
+        return false;
     });
+    if ((r) && r.includes('ERROR')) {
+        logTest(`******  ERROR: test ${id} failed: ${r}  ******`);
+        return false;
+    }
+    else {
+        logTest(`++++ test ${id} passed ++++`);
+        return true;
+    }
 }
 for (const test of arrayOfTests) {
     installTestButton(test.name, test.id, () => runTest(test.id));

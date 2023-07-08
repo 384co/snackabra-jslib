@@ -15,3 +15,14 @@ export function assert(expr: any, msg: string = ''): boolean {
   }
 }
 
+// guarantees that it's not null
+export function getElement(s: string): HTMLElement {
+  const z: HTMLElement | null = document.getElementById(s)
+  if (z == null) {
+      assert(false, `failed to find DOM element '${s}'`)
+      return {} as HTMLElement
+  } else {
+      return z
+  }
+}
+

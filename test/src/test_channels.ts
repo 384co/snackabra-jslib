@@ -1,8 +1,8 @@
 // (c) 2023 384 (tm)
 
-import { sb_config, autoRun, jslibVerbose, serverPassword } from './test_config.js'
-import { assert } from './test_utils.js'
-import { Snackabra, ChannelMessage, SBMessage, SBChannelHandle, ChannelEndpoint, ChannelSocket, SB384 } from './snackabra.js'
+import { sb_config, autoRun, jslibVerbose, serverPassword, globalState } from './test_config.js'
+import { assert, getElement } from './test_utils.js'
+import { ChannelMessage, SBMessage, ChannelEndpoint } from './snackabra.js'
 
 // enable this to add (console.log) detailed trace output on ALL channels
 const TRACE_CHANNELS = jslibVerbose
@@ -17,48 +17,6 @@ function logTest(msg: string) {
     }
 }
 
-// guarantees that it's not null
-function getElement(s: string): HTMLElement {
-    const z: HTMLElement | null = document.getElementById(s)
-    if (z == null) {
-        assert(false, `failed to find DOM element '${s}'`)
-        return {} as HTMLElement
-    } else {
-        return z
-    }
-}
-
-console.log("\n\n-- test_channels loaded --\n\n")
-logTest("#### creating SB for use in channel tests (see console) ####")
-const globalSB = new Snackabra(sb_config, jslibVerbose)
-console.log(globalSB);
-
-type GlobalState = {
-    channelHandle: SBChannelHandle | null, // used as 'main' handle, for OWNER
-    visitorHandle: SBChannelHandle | null, // same as above, for VISITOR
-    channelEndpoint: ChannelEndpoint | null,
-    secondEndpoint: ChannelEndpoint | null,
-    channelSocket: ChannelSocket | null, // used as 'main' socket, for OWNER
-    visitorSocket: ChannelSocket | null, // same as above, for VISITOR
-    visitorKeys: Promise<JsonWebKey>,
-    test14: boolean,
-    noDependency: true,
-    // other global dependencies
-};
-
-const globalState: GlobalState = {
-    channelHandle: null,
-    visitorHandle: null,
-    channelEndpoint: null,
-    secondEndpoint: null,
-    channelSocket: null,
-    visitorSocket: null,
-    visitorKeys: (new SB384()).ready.then((x: SB384) => x.exportable_privateKey),
-    test14: false,
-    noDependency: true,
-    // other global dependencies initialized to null or default value
-};
-
 console.log("#### you can track all 'window.globalState' variables in the console: ####");
 (window as any).globalState = globalState;
 console.log(globalState);
@@ -71,20 +29,6 @@ console.log(globalState);
 // });
 
 // create channel
-async function _test09() {
-    console.log("... creating channels using these servers:")
-    console.log(sb_config)
-    const newChannel = await globalSB.create(sb_config, serverPassword)
-    logTest("... a new channel created:")
-    console.log(newChannel)
-    return newChannel
-}
-
-async function test09() {
-    globalState.channelHandle = await _test09()
-    console.log('... global channel handle is:')
-    console.log(globalState.channelHandle)
-}
 
 function ownerMessageHandler(m: ChannelMessage) {
     console.log('++++ test 10 OWNER got message (on globalState.channelhandle):')
@@ -96,8 +40,17 @@ function visitorMessageHandler(m: ChannelMessage) {
     console.log(m)
 }
 
+async function channel_test09() {
+    console.log("... creating channels using these servers:")
+    console.log(sb_config)
+    const newChannel = await globalState!.SB!.create(sb_config, serverPassword)
+    globalState.channelHandle = newChannel
+    logTest("... global channel handle is:")
+    console.log(globalState.channelHandle)
+}
+
 // connect to socket - as OWNER (if true) or VISITOR
-async function _test10(owner: boolean) {
+async function _channel_test10(owner: boolean) {
     // we return a promise, test isn't done until message being sent is confirmed
 
     const userName = owner ? "TestBot OWNER" : "TestBot VISITOR";
@@ -106,8 +59,8 @@ async function _test10(owner: boolean) {
     return new Promise(async (resolve, reject) => {
         assert(globalState.channelHandle, "global channelHandle is null")
         let c = owner
-            ? await globalSB.connect(ownerMessageHandler, globalState.channelHandle!.key, globalState.channelHandle!.channelId)
-            : await globalSB.connect(visitorMessageHandler, await globalState.visitorKeys, globalState.channelHandle!.channelId)
+            ? await globalState!.SB!.connect(ownerMessageHandler, globalState.channelHandle!.key, globalState.channelHandle!.channelId)
+            : await globalState!.SB!.connect(visitorMessageHandler, await globalState.visitorKeys, globalState.channelHandle!.channelId)
         c.enableTrace = TRACE_CHANNELS
         c.userName = userName // optional
 
@@ -148,12 +101,12 @@ async function _test10(owner: boolean) {
 
         // say hello to everybody! upon success it will return "success"
         let firstMessageWasSent = false
-        ; (new SBMessage(c, "Hello from ${userName} TestBot!")).send()
-            .then((c) => {
-                console.log(`test message sent from ${userName}! (${c})`)
-                firstMessageWasSent = true
-                resolve("first message was directly sent from ${userName}")
-            })
+            ; (new SBMessage(c, "Hello from ${userName} TestBot!")).send()
+                .then((c) => {
+                    console.log(`test message sent from ${userName}! (${c})`)
+                    firstMessageWasSent = true
+                    resolve("first message was directly sent from ${userName}")
+                })
 
         // now we wait for the message to come back, and based on timer, throw an error if it doesn't
         setTimeout(() => {
@@ -167,21 +120,22 @@ async function _test10(owner: boolean) {
     })
 }
 
-async function test10() {
-    await _test10(true)
+async function channel_test10() {
+    await _channel_test10(true)
 }
 
-
 // test channel api (without socket)
-async function test11() {
+async function channel_test11() {
+    assert(globalState.channelHandle, "global channelHandle is null")
     const channelEndpoint = new ChannelEndpoint(sb_config, globalState.channelHandle!.key, globalState.channelHandle!.channelId)
     await channelEndpoint.ready
     globalState.channelEndpoint = channelEndpoint
+    assert(globalState.channelEndpoint, "... somehow globalState channelEndpoint is still null?")
     logTest("global channel (api) is ready")
     console.log(globalState.channelEndpoint)
 }
 
-async function test12() {
+async function channel_test12() {
     const storageLimit = await globalState.channelEndpoint!.getStorageLimit()
     logTest(`storage limit is ${storageLimit.storageLimit}`)
     console.log(`storage limit is:`)
@@ -189,17 +143,18 @@ async function test12() {
 }
 
 // create a new channel, strip current one
-async function test13() {
-    const newChannel = await globalState.channelEndpoint !.budd()
+async function channel_test13() {
+    const newChannel = await globalState.channelEndpoint!.budd()
     logTest(`new channel is ${newChannel.channelId}`)
     console.log('swapping global channel handle to new channel')
     globalState.channelHandle = newChannel
     globalState.channelEndpoint = null
+    globalState.channel_test13 = true
+
 }
 
-
 // given a channel handle, create a new channel with a 64MB budget
-async function test14() {
+async function channel_test14() {
     // this is a new class, for operating against a channel without having
     // to set up a socket, message handlers, etc.
     const channelEndpoint = new ChannelEndpoint(sb_config, globalState.channelHandle!.key, globalState.channelHandle!.channelId)
@@ -231,7 +186,7 @@ async function test14() {
     ({ storageLimit } = await newChannelApi.getStorageLimit())
     logTest(`new channel budget is ${storageLimit}`)
 
-    globalState.test14 = true
+    globalState.channel_test14 = true
 
     // // and now we want to move another 64 MB from mother to the new channel
     // // we use mother's api, since that's where the verification (ownership) is needed
@@ -242,7 +197,7 @@ async function test14() {
     // logTest(`new channel budget after a 'bump' is ${storageLimit}`)
 }
 
-async function test15() {
+async function channel_test15() {
     const testAmount = 64 * 1024 * 1024
     logTest(`RUNNING TEST 15: move ${testAmount / (1024 * 1024)} MiB to new budded channel`)
 
@@ -270,21 +225,36 @@ async function test15() {
     }
 }
 
-async function test16() {
+async function channel_test16() {
     console.log("We will use visitor keys:")
     console.log(await globalState.visitorKeys)
-    await _test10(false)
+    await _channel_test10(false)
 }
 
-async function test17() {
+async function channel_test17() {
     // lock the channel
     await globalState.channelSocket!.lock()
 }
 
-async function test18() {
+async function channel_test18() {
     // check lock status of channel and report it
     const lockStatus = await globalState.channelSocket!.isLocked()
     console.log(`channel is locked: ${lockStatus}`)
+}
+
+async function channel_test19() {
+    // call the "downloadData" api endpoint on a channel
+    assert(globalState.channelEndpoint, "global channelEndpoint is null")
+    const allData = await globalState.channelEndpoint!.downloadData();
+    logTest("++++ Channel 'downloadData' results ('all data') in console")
+    console.log(allData)
+}
+
+async function channel_test20() {
+    assert(globalState.channelEndpoint, "global channelEndpoint is null")
+    const allData = await globalState.channelEndpoint!.getOldMessages();
+    logTest("++++ Channel 'getOldMessages' results ('all data') in console")
+    console.log(allData)
 }
 
 
@@ -302,49 +272,65 @@ function installTestButton(name: string, id: number, func: () => void) {
     else console.log('testButtons not found')
 }
 
+const depMap = new Map<string, number>([
+    ['channelHandle', 9],
+    ['channelEndpoint', 11],
+    ['channel_test13', 13],
+    ['channel_test14', 14],
+  ]);
+  
+
 const arrayOfTests = [
-    { id: 9, name: 'create a channel', func: test09, dependency: 'noDependency', depFunc: null },
-    { id: 10, name: 'connect to socket\nas OWNER', func: test10, dependency: 'channelHandle', depFunc: 9 },
-    { id: 11, name: 'test channel api (without socket)', func: test11, dependency: 'channelHandle', depFunc: 9 },
-    { id: 12, name: 'get api endpoint and some\nbasic capacity (budding) tests', func: test12, dependency: 'channelEndpoint', depFunc: 11 },
-    { id: 13, name: '"budd" a new channel', func: test13, dependency: 'channelEndpoint', depFunc: 11 },
-    { id: 14, name: 'create a small\nbudded channel', func: test14, dependency: 'channelHandle', depFunc: 13 },
-    { id: 15, name: 'move 64MB to new\nbudded channel', func: test15, dependency: 'test14', depFunc: 14 },
-    { id: 16, name: 'connect to socket\nas VISITOR', func: test16, dependency: 'channelHandle', depFunc: 9 },
-    { id: 17, name: 'lock channel', func: test17, dependency: 'channelSocket', depFunc: 10 },
-    { id: 18, name: 'check lock status', func: test18, dependency: 'channelSocket', depFunc: 10 },
+    { id: 9, name: 'create a channel', func: channel_test09, dependency: null },
+    { id: 10, name: 'connect to socket\nas OWNER', func: channel_test10, dependency: 'channelHandle' },
+    { id: 11, name: 'test channel api (without socket)', func: channel_test11, dependency: 'channelHandle' },
+    { id: 12, name: 'get api endpoint and some\nbasic capacity (budding) channel_tests', func: channel_test12, dependency: 'channelEndpoint' },
+    { id: 13, name: '"budd" a new channel', func: channel_test13, dependency: 'channelEndpoint' },
+    { id: 14, name: 'create a small\nbudded channel', func: channel_test14, dependency: 'channel_test13' },
+    { id: 15, name: 'move 64MB to new\nbudded channel', func: channel_test15, dependency: 'channel_test14' },
+    { id: 16, name: 'connect to socket\nas VISITOR', func: channel_test16, dependency: 'channelHandle' },
+    { id: 17, name: 'lock channel', func: channel_test17, dependency: 'channelSocket' },
+    { id: 18, name: 'check lock status', func: channel_test18, dependency: 'channelSocket' },
+    { id: 19, name: 'download data', func: channel_test19, dependency: 'channelEndpoint' },
+    { id: 20, name: 'old messages', func: channel_test20, dependency: 'channelEndpoint' },
+
 ];
 
-async function runTest(id: number) {
+// result is true if NP, false if there was an issue
+async function runTest(id: number): Promise<boolean> {
     const test = arrayOfTests.find((t) => t.id === id);
     if (!test)
         throw new Error(`ERROR: test ${id} not found`);
     console.log(`starting test ${id}: ${test.name}`)
     const dependencyMet = globalState[test.dependency as keyof typeof globalState] !== null;
     if (!dependencyMet) {
-        console.log(`... but first running test ${test.depFunc} (dependency '${test.dependency}' not met)`);
-        if (test.depFunc) {
-            await runTest(test.depFunc)
-            assert(test.dependency, `... dependency for test ${id} not met after running dependency function`)
+        const depFunc = depMap.get(test.dependency!)
+        console.log(`... but first running test ${depFunc} (dependency '${test.dependency}' not met)`);
+        if (depFunc) {
+            const r = await runTest(depFunc)
+            assert(r, `runTest(${id}): failing because dependency function ([${depFunc}]) failed.`)
+            assert(test.dependency, `... dependency for test ${id} not met after running dependency function (?)`)
         } else {
             throw new Error(`ERROR: test ${id} has no dependency function, but dependency '${test.dependency}' not met (?)`)
         }
     }
     // should have what we need now
     logTest(`==== running test ${id}: ${test.name} ====`);
-    test.func()
-        .then((r) => {
-            if ((r) && (r as string).includes('ERROR')) {
-                logTest(`******  ERROR: test ${id} failed: ${r}  ******`)
-            } else {
-                logTest(`++++ test ${id} passed ++++`)
-            }
-        })
+    const r = await test
+        .func()
         .catch((e) => {
             logTest(`******  ERROR: test ${id} failed (${e})  ******`)
             console.warn(e)
-            return
+            return false
         })
+    if ((r) && (r as string).includes('ERROR')) {
+        logTest(`******  ERROR: test ${id} failed: ${r}  ******`)
+        return false
+    } else {
+        logTest(`++++ test ${id} passed ++++`)
+        // console.log(JSON.stringify(globalState))
+        return true
+    }
 }
 
 // install buttons for all tests

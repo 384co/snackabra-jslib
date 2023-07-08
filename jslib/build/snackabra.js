@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.22 build 21 (pre)';
+const version = '1.1.23 build 04';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -1281,8 +1281,9 @@ class Channel extends SB384 {
     downloadData() {
         return new Promise((resolve, reject) => {
             this.#callApi('/downloadData')
-                .then((response) => { return response.json(); })
                 .then((data) => {
+                console.log("From downloadData:");
+                console.log(data);
                 Promise.all(Object
                     .keys(data)
                     .filter((v) => {
@@ -1844,12 +1845,14 @@ export class SBObjectHandle {
     savedSize;
     constructor(options) {
         const { version, type, id, key, id32, key32, verification, iv, salt, fileName, dateAndTime, shardServer, fileType, lastModified, actualSize, savedSize, } = options;
-        if (version)
-            this.version = version;
         if (type)
             this.#_type = type;
-        this.id = id;
-        this.key = key;
+        if (version)
+            this.version = version;
+        if (id)
+            this.id = id;
+        if (key)
+            this.key = key;
         if (id32)
             this.id32 = id32;
         if (key32)
@@ -1865,20 +1868,6 @@ export class SBObjectHandle {
         this.lastModified = lastModified;
         this.actualSize = actualSize;
         this.savedSize = savedSize;
-    }
-    #setId32() {
-        if (this.#id) {
-            const bindID = this.#id;
-            async () => {
-                const verification = await Promise.resolve(this.verification);
-                const fullID = this.#id + verification.split('.').join('');
-                crypto.subtle.digest('SHA-256', new TextEncoder().encode(fullID)).then((hash) => {
-                    if (bindID !== this.#id)
-                        return;
-                    this.#id32 = arrayBuffer32ToBase62(hash);
-                });
-            };
-        }
     }
     set id(value) { _assertBase64(value); this.#id = value; this.#id32 = base64ToBase62(value); }
     get id() { _sb_assert(this.#id, 'object handle identifier is undefined'); return this.#id; }
@@ -1898,7 +1887,7 @@ export class SBObjectHandle {
     }
     get id32() { _sb_assert(this.#id32, 'object handle id (32) is undefined'); return this.#id32; }
     get key32() { _sb_assert(this.#key32, 'object handle key (32) is undefined'); return this.#key32; }
-    set verification(value) { this.#verification = value; this.#setId32(); }
+    set verification(value) { this.#verification = value; }
     get verification() {
         _sb_assert(this.#verification, 'object handle verification is undefined');
         return this.#verification;
@@ -2053,6 +2042,8 @@ class StorageApi {
                             type: type,
                             id: fullHash.id,
                             key: fullHash.key,
+                            id32: base64ToBase62(fullHash.id),
+                            key32: base64ToBase62(fullHash.key),
                             iv: p.iv,
                             salt: p.salt,
                             actualSize: bufSize,

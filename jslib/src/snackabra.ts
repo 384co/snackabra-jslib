@@ -23,7 +23,7 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.22 build 21 (pre)'
+const version = '1.1.23 build 04'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -1394,10 +1394,8 @@ class SBCrypto {  /*************************************************************
   /**
    * SBCrypto.sb384Hash()
    * 
-   * Takes a JsonWebKey and creates the SB384Hash
+   * Takes a JsonWebKey and creates the SB384Hash. Returns
    * 
-   * @param json_key 
-   * @returns 
    */
   async sb384Hash(key?: JsonWebKey | CryptoKey): Promise<SB384Hash | undefined> {
     if (key instanceof CryptoKey)
@@ -2291,7 +2289,7 @@ abstract class Channel extends SB384 {
   // @Memoize @Ready get capacity() { return this.#capacity }
 
   /**
-   * getLastMessageTimes
+   * Channel.getLastMessageTimes
    */
   getLastMessageTimes() {
     // xTODO: convert to new API call model
@@ -2312,7 +2310,7 @@ abstract class Channel extends SB384 {
   }
 
   /**
-   * getOldMessages
+   * Channel.getOldMessages
    * 
    * Will return most recent messages from the channel.
    * 
@@ -2434,18 +2432,19 @@ abstract class Channel extends SB384 {
    */
   @Ready setMOTD(motd: string) { return this.#callApi('/motd', { motd: motd }) }
   /**
-   * getAdminData
+   * Channel.getAdminData
    */
   @Ready getAdminData(): Promise<ChannelAdminData> { return this.#callApi('/getAdminData') }
 
   /**
-   * downloadData
+   * Channel.downloadData
    */
   @Ready downloadData() {
     return new Promise((resolve, reject) => {
       this.#callApi('/downloadData')
-        .then((response: Response) => { return response.json(); })
         .then((data: Dictionary<any>) => {
+          console.log("From downloadData:")
+          console.log(data);
           Promise.all(Object
             .keys(data)
             .filter((v) => {
@@ -3085,8 +3084,6 @@ async function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: 
  * Basic object handle for a shard (all storage).
  * 
  * To RETRIEVE a shard, you need id and verification.
- * Next generation shard servers will only require id32.
- * Same goes for shard mirrors.
  * 
  * To DECRYPT a shard, you need key, iv, and salt. Current
  * generation of shard servers will provide (iv, salt) upon
@@ -3153,13 +3150,15 @@ export class SBObjectHandle implements SBObjectHandle {
       shardServer, fileType, lastModified, actualSize, savedSize,
     } = options;
 
-    if (version) this.version = version;
-    if (type) this.#_type = type;
-    this.id = id;
-    this.key = key;
-    if (id32) this.id32 = id32;
-    if (key32) this.key32 = key32;
+    if (type) this.#_type = type
+    if (version) this.version = version
+
+    if (id) this.id = id;
+    if (key) this.key = key;
+    if (id32) this.id32 = id32
+    if (key32) this.key32 = key32
     if (verification) this.#verification = verification;
+
     this.iv = iv;
     this.salt = salt;
     this.fileName = fileName;
@@ -3172,20 +3171,21 @@ export class SBObjectHandle implements SBObjectHandle {
 
   }
 
-  // create id32 - if (and when) we have enough info
-  #setId32() {
-    if (this.#id) {
-      const bindID = this.#id;
-      async () => {
-        const verification = await Promise.resolve(this.verification);
-        const fullID = this.#id + verification.split('.').join(''); // backwards compatible
-        crypto.subtle.digest('SHA-256', new TextEncoder().encode(fullID)).then((hash) => {
-          if (bindID !== this.#id) return; // if id has changed, don't set
-          this.#id32 = arrayBuffer32ToBase62(hash);
-        });
-      }
-    }
-  }
+  // // ToDo: this is no longer the future mechanism, we will use "synonyms"
+  // // create id32 - if (and when) we have enough info
+  // #setId32() {
+  //   if (this.#id) {
+  //     const bindID = this.#id;
+  //     async () => {
+  //       const verification = await Promise.resolve(this.verification);
+  //       const fullID = this.#id + verification.split('.').join(''); // backwards compatible
+  //       crypto.subtle.digest('SHA-256', new TextEncoder().encode(fullID)).then((hash) => {
+  //         if (bindID !== this.#id) return; // if id has changed, don't set
+  //         this.#id32 = arrayBuffer32ToBase62(hash);
+  //       });
+  //     }
+  //   }
+  // }
 
   set id(value: string) { _assertBase64(value); this.#id = value; this.#id32 = base64ToBase62(value); }
   get id(): string { _sb_assert(this.#id, 'object handle identifier is undefined'); return this.#id!; }
@@ -3193,7 +3193,6 @@ export class SBObjectHandle implements SBObjectHandle {
   set key(value: string) { _assertBase64(value); this.#key = value; this.#key32 = base64ToBase62(value); }
   get key(): string { _sb_assert(this.#key, 'object handle identifier is undefined'); return this.#key!; }
 
-  // possible TODO: if id32 is set directly, confirm/enforce consistency w base64 id
   set id32(value: Base62Encoded) {
     if (!isBase62Encoded(value)) throw new Error('Invalid base62 encoded ID');
     this.#id32 = value;
@@ -3209,7 +3208,7 @@ export class SBObjectHandle implements SBObjectHandle {
   get id32(): Base62Encoded { _sb_assert(this.#id32, 'object handle id (32) is undefined'); return this.#id32!; }
   get key32(): Base62Encoded { _sb_assert(this.#key32, 'object handle key (32) is undefined'); return this.#key32!; }
 
-  set verification(value: Promise<string> | string) { this.#verification = value; this.#setId32(); }
+  set verification(value: Promise<string> | string) { this.#verification = value; /* this.#setId32(); */ }
   get verification(): Promise<string> | string {
     _sb_assert(this.#verification, 'object handle verification is undefined');
     return this.#verification!;
@@ -3424,6 +3423,8 @@ class StorageApi {
                 type: type,
                 id: fullHash.id,
                 key: fullHash.key,
+                id32: base64ToBase62(fullHash.id),
+                key32: base64ToBase62(fullHash.key),
                 iv: p.iv,
                 salt: p.salt,
                 actualSize: bufSize,

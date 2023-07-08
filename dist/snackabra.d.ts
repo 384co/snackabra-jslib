@@ -1,4 +1,4 @@
-declare const version = "1.1.22 build 21 (pre)";
+declare const version = "1.1.23 build 04";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;

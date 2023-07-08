@@ -10,4 +10,14 @@ export function assert(expr, msg = '') {
         throw new Error(m);
     }
 }
+export function getElement(s) {
+    const z = document.getElementById(s);
+    if (z == null) {
+        assert(false, `failed to find DOM element '${s}'`);
+        return {};
+    }
+    else {
+        return z;
+    }
+}
 //# sourceMappingURL=test_utils.js.map
