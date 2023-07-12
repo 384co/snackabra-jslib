@@ -1,1 +1,0 @@
-../../dist/snackabra.d.ts

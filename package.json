@@ -5,17 +5,21 @@
   "main": "dist/snackabra.min.js",
   "types": "dist/snackabra.d.ts",
   "scripts": {
-    "start": "npm run watch",
-    "build": "npm run build:jslib && npm run build:test && npm run minify && npm run copy-js",
-    "build:jslib": "tsc -p ./jslib/tsconfig.json",
-    "build:test": "tsc -p ./test/tsconfig.json && echo \"tests built\"",
-    "watch": "concurrently -k -p \"[{name}]\" -n \"JSLib, Test, Minify, Copy Files\" -c \"green.bold,cyan.bold,magenta.bold,white.bold\" \"npm run nodemon:jslib\" \"npm run nodemon:test\" \"npm run minify\" \"npm run watch:copy\"",
-    "nodemon:jslib": "nodemon --watch jslib/src/snackabra.ts -L -e ts --ignore node_modules/ --exec \"npm run build:jslib\"",
-    "nodemon:test": "nodemon --watch test/src/*.ts -L -e ts --ignore node_modules/ --exec \"npm run build:test\"",
-    "minify": "webpack --config webpack.config.js --watch",
-    "watch:copy" :"nodemon --watch test/src/*.ts -L -e ts  --ignore node_modules/ --exec \"npm run copy-js\"",
-    "copy-js": "cp ./jslib/build/* ./jslib/src/snackabra.ts ./dist && echo \"Copied JS files to dist/\"",
-    "clean": "rm -rf jslib/build/* test/build/*"
+    "start": "npm run build:watch",
+
+    "build": "npm run clean && npm run build:jslib && npm run build:test && npm run minify",
+    "build:watch": "npm run build:jslib:watch & npm run build:test:watch & npm run minify:watch",
+
+    "build:jslib": "tsc -p ./tsconfig.json",
+    "build:jslib:watch": "tsc -p -w ./tsconfig.json",
+
+    "build:test": "tsc -p ./test/tsconfig.json",
+    "build:test:watch": "tsc -p -w ./test/tsconfig.json",
+
+    "minify": "webpack --config webpack.config.js",
+    "minify:watch": "webpack --config webpack.config.js --watch",
+
+    "clean": "rm -rf dist/* test/build/*"
   },
   "repository": {
     "type": "git",
@@ -48,8 +52,6 @@
   "sideEffects": false,
   "devDependencies": {
     "@rollup/plugin-terser": "^0.4.0",
-    "concurrently": "^6.0.0",
-    "nodemon": "^2.0.14",
     "typescript": "^5.0.4",
     "webpack": "^5.75.0",
     "webpack-cli": "^5.0.1"
