@@ -28,7 +28,12 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.25 (pre) build 02'
+
+// eg: const version = '1.1.25 (pre) build 02'
+// will be labeled '1.1.25' upon publishing
+
+// working on 1.1.26
+const version = '1.1.26 (pre) build 01'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
