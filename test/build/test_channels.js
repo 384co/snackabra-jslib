@@ -31,6 +31,24 @@ async function channel_test09() {
     logTest("... global channel handle is:");
     console.log(globalState.channelHandle);
 }
+async function channel_test21() {
+    const jwk = {
+        "crv": "P-384",
+        "d": "b6Fg0yJRS-pgFGMXKgryVoPvH0hTaNEvYwjs1Cin-MPRkHSgwd-BE1EO4s6XQMrS",
+        "ext": true,
+        "key_ops": [
+            "deriveKey"
+        ],
+        "kty": "EC",
+        "x": "dHWeepJUDXNxtGqombBo1BEBpfTsCue3ep1_WX8RIh_14boaHyaXHPkcmMpPXfSQ",
+        "y": "UTkTuSYdVIl4xvpdJd9dYFYBbUlne5HOo1m-IhOqUiqFVSkdUyuhQ54x1V32QpHU"
+    };
+    console.log("... creating channel using this JWK:");
+    console.log(jwk);
+    const newChannel = await globalState.SB.create(sb_config, serverPassword, jwk);
+    logTest("... got channel handle:");
+    console.log(newChannel);
+}
 async function _channel_test10(owner) {
     const userName = owner ? "TestBot OWNER" : "TestBot VISITOR";
     const buttonName = owner ? "anotherOwnerMessage" : "anotherVisitorMessage";
@@ -213,6 +231,7 @@ const arrayOfTests = [
     { id: 18, name: 'check lock status', func: channel_test18, dependency: 'channelSocket' },
     { id: 19, name: 'download data', func: channel_test19, dependency: 'channelEndpoint' },
     { id: 20, name: 'old messages', func: channel_test20, dependency: 'channelEndpoint' },
+    { id: 21, name: 'create channel from known JWK', func: channel_test21, dependency: null },
 ];
 async function runTest(id) {
     const test = arrayOfTests.find((t) => t.id === id);
