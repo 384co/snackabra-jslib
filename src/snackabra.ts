@@ -21,9 +21,14 @@
 
 */
 
+/*
+  TODO
+  - add "server" to the channel descriptor
+*/
+
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-const version = '1.1.25 (pre) build 01'
+const version = '1.1.25 (pre) build 02'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -66,6 +71,7 @@ export interface SBServer {
 export interface SBChannelHandle {
   channelId: SBChannelId,
   key: JsonWebKey,
+  server?: string
 }
 
 interface WSProtocolOptions {
@@ -3794,7 +3800,7 @@ class Snackabra {
         if (resp.success) {
           // await this.connect(channelId, identity);
           // _localStorage.setItem(channelId, JSON.stringify(exportable_privateKey)) // TODO
-          resolve({ channelId: channelData.roomId!, key: exportable_privateKey })
+          resolve({ channelId: channelData.roomId!, key: exportable_privateKey, server: sbServer.channel_server })
         } else {
           reject(JSON.stringify(resp));
         }

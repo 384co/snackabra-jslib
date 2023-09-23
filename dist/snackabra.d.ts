@@ -1,4 +1,4 @@
-declare const version = "1.1.24 build 02";
+declare const version = "1.1.25 (pre) build 02";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -8,6 +8,7 @@ export interface SBServer {
 export interface SBChannelHandle {
     channelId: SBChannelId;
     key: JsonWebKey;
+    server?: string;
 }
 interface Dictionary<T> {
     [index: string]: T;
