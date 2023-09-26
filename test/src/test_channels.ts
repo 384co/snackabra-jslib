@@ -50,19 +50,33 @@ async function channel_test09() {
 }
 
 async function channel_test21() {
+
+    // this is test of deriving a channel (key) from a passphrase
     const jwk = {
+        "kty": "EC",
         "crv": "P-384",
-        "d": "b6Fg0yJRS-pgFGMXKgryVoPvH0hTaNEvYwjs1Cin-MPRkHSgwd-BE1EO4s6XQMrS",
+        "x": "aRI1wBYItKeJ2y1iTZDkwlgYvh9FiBRw-rYqO-ke8a-Ma8yhwB2m4SaDJDNJZZUP",
+        "y": "mxnI_yFkXLTu0F0PCSZsulxcxtCqLoN2TVdJUSCzTly9BOpasn77sT8-G9o2CKe9",
+        "d": "Xy_e7m5N26zZbliShLttkG_uEhRMD1GlvD0dXUwX6qUxHmqPGqN3_eA3wK1dSnIx",
         "ext": true,
         "key_ops": [
             "deriveKey"
-        ],
-        "kty": "EC",
-        "x": "dHWeepJUDXNxtGqombBo1BEBpfTsCue3ep1_WX8RIh_14boaHyaXHPkcmMpPXfSQ",
-        "y": "UTkTuSYdVIl4xvpdJd9dYFYBbUlne5HOo1m-IhOqUiqFVSkdUyuhQ54x1V32QpHU"
+        ]
     }
+    // const jwk = {
+    //     "crv": "P-384",
+    //     "d": "b6Fg0yJRS-pgFGMXKgryVoPvH0hTaNEvYwjs1Cin-MPRkHSgwd-BE1EO4s6XQMrS",
+    //     "ext": true,
+    //     "key_ops": [
+    //         "deriveKey"
+    //     ],
+    //     "kty": "EC",
+    //     "x": "dHWeepJUDXNxtGqombBo1BEBpfTsCue3ep1_WX8RIh_14boaHyaXHPkcmMpPXfSQ",
+    //     "y": "UTkTuSYdVIl4xvpdJd9dYFYBbUlne5HOo1m-IhOqUiqFVSkdUyuhQ54x1V32QpHU"
+    // }
     console.log("... creating channel using this JWK:")
     console.log(jwk)
+    console.log(globalState.SB)
     const newChannel = await globalState!.SB!.create(sb_config, serverPassword, jwk)
     logTest("... got channel handle:")
     console.log(newChannel)

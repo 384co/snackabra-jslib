@@ -171,8 +171,6 @@ installTestButton('read video shards', test07)
 installTestButton('multiple 4KB blocks', test05a)
 installTestButton('test mirror', test05b)
 
-
-
 function testAll() {
     // test06()
     test07()

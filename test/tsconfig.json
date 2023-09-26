@@ -1,5 +1,5 @@
 {
-  /* based of template courtesy of udacity:
+  /* based on template courtesy of udacity:
     https://github.com/udacity/cloudflare-typescript-worker-template/blob/master/tsconfig.json
    */
   "compilerOptions": {
