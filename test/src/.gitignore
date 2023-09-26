@@ -1,6 +1,0 @@
-snackabra.ts
-
-# whatever server(s) you configure in test_config.ts, you will need to
-# set the appropriate password(s) in server_password.ts
-server_password.ts
-test_server_password.ts
