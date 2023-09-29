@@ -1,4 +1,4 @@
-declare const version = "1.1.26 (pre) build 01";
+declare const version = "1.2.0 (pre) build 01";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -182,9 +182,35 @@ type knownKeysInfo = {
     pubKeyJson?: JsonWebKey;
     key?: CryptoKey;
 };
+declare enum KeyPrefix {
+    SBAES256Key = "T881",
+    SBPrivateKey = "Aj3p",
+    SBPublicKey = "pNkk"
+}
+interface SBAES256Key {
+    prefix: KeyPrefix.SBAES256Key;
+    k: Base62Encoded;
+}
+interface SBPrivateKey {
+    prefix: KeyPrefix.SBPrivateKey;
+    x: Base62Encoded;
+    y: Base62Encoded;
+    d: Base62Encoded;
+}
+interface SBPublicKey {
+    prefix: KeyPrefix.SBPublicKey;
+    x: Base62Encoded;
+    y: Base62Encoded;
+}
+export type SBKey = SBAES256Key | SBPrivateKey | SBPublicKey;
+type Key = JsonWebKey | SB384 | CryptoKey | SBKey;
 declare class SBCrypto {
     #private;
-    addKnownKey(key: JsonWebKey | SB384 | CryptoKey): Promise<void>;
+    SBKeyToJWK(key: SBKey | JsonWebKey): JsonWebKey;
+    JWKToSBKey(key: JsonWebKey): SBKey | undefined;
+    SBKeyToString(key: SBKey): string;
+    StringToSBKey(input: string): SBKey | undefined;
+    addKnownKey(key: Key): Promise<void>;
     lookupKeyGlobal(hash: SB384Hash): knownKeysInfo | undefined;
     generateIdKey(buf: ArrayBuffer): Promise<{
         id: string;

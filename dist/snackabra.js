@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.1.26 (pre) build 01';
+const version = '1.2.0 (pre) build 01';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -331,20 +331,15 @@ export function base62ToArrayBuffer32(s) {
     if (!base62Regex.test(s))
         throw new Error(`base62ToArrayBuffer32: string must match: ${base62Regex}`);
     s = s.slice(4);
-    let n = 0n;
-    for (let i = 0; i < s.length; i++) {
-        const digit = BigInt(base62.indexOf(s[i]));
-        n = n * 62n + digit;
-    }
+    let n = BigInt(0);
+    for (let i = 0; i < s.length; i++)
+        n = n * 62n + BigInt(base62.indexOf(s[i]));
     if (n > 2n ** 256n - 1n)
         throw new Error(`base62ToArrayBuffer32: value exceeds 256 bits.`);
     const buffer = new ArrayBuffer(32);
     const view = new DataView(buffer);
-    for (let i = 0; i < 8; i++) {
-        const uint32 = Number(BigInt.asUintN(32, n));
-        view.setUint32((8 - i - 1) * 4, uint32);
-        n = n >> 32n;
-    }
+    for (let i = 0; i < 8; i++, n = n >> 32n)
+        view.setUint32((8 - i - 1) * 4, Number(BigInt.asUintN(32, n)));
     return buffer;
 }
 export function arrayBuffer32ToBase62(buffer) {
@@ -510,11 +505,186 @@ export function decodeB64Url(input) {
     }
     return input;
 }
+var KeyPrefix;
+(function (KeyPrefix) {
+    KeyPrefix["SBAES256Key"] = "T881";
+    KeyPrefix["SBPrivateKey"] = "Aj3p";
+    KeyPrefix["SBPublicKey"] = "pNkk";
+})(KeyPrefix || (KeyPrefix = {}));
+function isSBKey(key) {
+    return key && Object.values(KeyPrefix).includes(key.prefix);
+}
 class SBCrypto {
     #knownKeys = new Map();
+    SBKeyToJWK(key) {
+        if (!isSBKey(key))
+            return key;
+        switch (key.prefix) {
+            case 'pNkk': {
+                return {
+                    crv: "P-384",
+                    ext: true,
+                    key_ops: [],
+                    kty: "EC",
+                    x: key.x,
+                    y: key.y
+                };
+            }
+            case 'Aj3p': {
+                return {
+                    crv: "P-384",
+                    d: key.d,
+                    ext: true,
+                    key_ops: ["deriveKey"],
+                    kty: "EC",
+                    x: key.x,
+                    y: key.y
+                };
+            }
+            case 'T881': {
+                return {
+                    k: key.k,
+                    alg: "A256GCM",
+                    key_ops: ["encrypt", "decrypt"],
+                    kty: "oct"
+                };
+            }
+            default: {
+                throw new Error(`SBKeyToJWK() - unknown key prefix: ${key.prefix}`);
+            }
+        }
+    }
+    JWKToSBKey(key) {
+        if (!key)
+            return undefined;
+        if (key.kty === "oct" && key.alg === "A256GCM" && key.k && key.k.length === 43) {
+            return {
+                prefix: KeyPrefix.SBAES256Key,
+                k: base64ToBase62(key.k)
+            };
+        }
+        if (key.kty === "EC" && key.crv === "P-384" && key.x && key.y) {
+            if (key.x.length !== 64 || key.y.length !== 64)
+                return undefined;
+            if (key.d && key.d.length === 64) {
+                return {
+                    prefix: KeyPrefix.SBPrivateKey,
+                    x: key.x,
+                    y: key.y,
+                    d: key.d
+                };
+            }
+            return {
+                prefix: KeyPrefix.SBPublicKey,
+                x: key.x,
+                y: key.y
+            };
+        }
+        return undefined;
+    }
+    SBKeyToString(key) {
+        const prefix = key.prefix;
+        switch (prefix) {
+            case KeyPrefix.SBAES256Key: {
+                const buffer = base64ToArrayBuffer(key.k);
+                return prefix + arrayBuffer32ToBase62(buffer).slice(4);
+            }
+            case KeyPrefix.SBPublicKey: {
+                const publicKey = key;
+                const combined = new Uint8Array(48 * 2);
+                combined.set(base64ToArrayBuffer(publicKey.x), 0);
+                combined.set(base64ToArrayBuffer(publicKey.y), 48);
+                return prefix +
+                    arrayBuffer32ToBase62(combined.slice(0, 32).buffer).slice(4) +
+                    arrayBuffer32ToBase62(combined.slice(32, 64).buffer).slice(4) +
+                    arrayBuffer32ToBase62(combined.slice(64, 96).buffer).slice(4);
+            }
+            case KeyPrefix.SBPrivateKey: {
+                const privateKey = key;
+                const combined = new Uint8Array(3 * 48 + 16);
+                combined.set(base64ToArrayBuffer(privateKey.x).slice(4), 0);
+                combined.set(base64ToArrayBuffer(privateKey.y).slice(4), 48);
+                combined.set(base64ToArrayBuffer(privateKey.d).slice(4), 96);
+                return prefix +
+                    arrayBuffer32ToBase62(combined.slice(0, 32).buffer).slice(4) +
+                    arrayBuffer32ToBase62(combined.slice(32, 64).buffer).slice(4) +
+                    arrayBuffer32ToBase62(combined.slice(64, 96).buffer).slice(4) +
+                    arrayBuffer32ToBase62(combined.slice(96, 128).buffer).slice(4) +
+                    arrayBuffer32ToBase62(combined.slice(128, 160).buffer).slice(4);
+            }
+            default: {
+                throw new Error("Unknown SBKey type.");
+            }
+        }
+    }
+    StringToSBKey(input) {
+        try {
+            if (input.length < 4)
+                return undefined;
+            const prefix = input.slice(0, 4);
+            const data = input.slice(4);
+            switch (prefix) {
+                case KeyPrefix.SBAES256Key: {
+                    if (data.length !== 43)
+                        return undefined;
+                    const k = base62ToArrayBuffer32("a32." + data);
+                    return {
+                        prefix: KeyPrefix.SBAES256Key,
+                        k: arrayBufferToBase64(k)
+                    };
+                }
+                case KeyPrefix.SBPublicKey: {
+                    if (data.length !== 86)
+                        return undefined;
+                    const p1 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(0, 43)));
+                    const p2 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(43, 86)));
+                    const p3 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(86)));
+                    const combined = new Uint8Array(48 * 2);
+                    combined.set(p1, 0);
+                    combined.set(p2, 32);
+                    combined.set(p3, 64);
+                    return {
+                        prefix: KeyPrefix.SBPublicKey,
+                        x: arrayBufferToBase64(combined.slice(0, 48).buffer),
+                        y: arrayBufferToBase64(combined.slice(48, 96).buffer)
+                    };
+                }
+                case KeyPrefix.SBPrivateKey: {
+                    if (data.length !== 215)
+                        return undefined;
+                    const p1 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(0, 43)));
+                    const p2 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(43, 86)));
+                    const p3 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(86, 129)));
+                    const p4 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(129, 172)));
+                    const p5 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(172, 215)));
+                    const combined = new Uint8Array(3 * 48 + 16);
+                    combined.set(p1, 0);
+                    combined.set(p2, 32);
+                    combined.set(p3, 64);
+                    combined.set(p4, 96);
+                    combined.set(p5, 128);
+                    return {
+                        prefix: KeyPrefix.SBPrivateKey,
+                        x: arrayBufferToBase64(combined.slice(0, 48).buffer),
+                        y: arrayBufferToBase64(combined.slice(48, 96).buffer),
+                        d: arrayBufferToBase64(combined.slice(96, 144).buffer)
+                    };
+                }
+                default: {
+                    return undefined;
+                }
+            }
+        }
+        catch (e) {
+            console.error("StringToSBKey() - malformed input, exception: ", e);
+            return undefined;
+        }
+    }
     async addKnownKey(key) {
         if (!key)
             return;
+        if (isSBKey(key))
+            key = await this.SBKeyToJWK(key);
         if (typeof key === 'string') {
             const hash = await sbCrypto.sb384Hash(key);
             if (!hash)
@@ -643,7 +813,7 @@ class SBCrypto {
             return await this.#generateHash(channelBytes);
         }
         else {
-            throw new Error('sb384Hash() - invalid key (JsonWebKey) - missing x and/or y');
+            throw new Error('sb384Hash() - invalid JsonWebKey (missing x and/or y)');
         }
     }
     async compareHashWithKey(hash, key) {
