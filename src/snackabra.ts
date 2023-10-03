@@ -33,7 +33,7 @@
 // will be labeled '1.1.25' upon publishing
 
 // working on 1.2.0
-const version = '1.2.0 (pre) build 01'
+const version = '1.2.0 (pre) build 02'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -64,6 +64,18 @@ export interface SBServer {
    * interface, in particular for reading.
    */
   shard_server?: string
+  /**
+   * onOpen hook to be called when the websocket is opened, we can trigger events in downstream code by using this hook.
+   */
+  onOpen?: Function,
+  /**
+   * onClose hook to be called when the websocket is closed, we can trigger events in downstream code by using this hook.
+   */
+  onClose?: Function,
+  /**
+   * onError hook to be called when the websocket has an error, we can trigger events in downstream code by using this hook.
+   */
+  onError?: Function,
 }
 
 /**
@@ -2952,6 +2964,9 @@ function noMessageHandler(_m: ChannelMessage): void { _sb_assert(false, "NO MESS
 export class ChannelSocket extends Channel {
   ready: Promise<ChannelSocket>
   channelSocketReady: Promise<ChannelSocket>
+  onOpen: Function | undefined = undefined;
+  onClose: Function | undefined = undefined;
+  onError: Function | undefined = undefined;
   #ChannelSocketReadyFlag: boolean = false // must be named <class>ReadyFlag
 
   #ws: WSProtocolOptions
@@ -3006,6 +3021,9 @@ export class ChannelSocket extends Channel {
     const url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
     this.#onMessage = onMessage
     this.#sbServer = sbServer
+    if (this.#sbServer.hasOwnProperty('onOpen')) this.onOpen = this.#sbServer.onOpen
+    if (this.#sbServer.hasOwnProperty('onClose')) this.onClose = this.#sbServer.onClose
+    if (this.#sbServer.hasOwnProperty('onError')) this.onError = this.#sbServer.onError
     this.#ws = {
       url: url,
       // websocket: new WebSocket(url),
@@ -3038,6 +3056,7 @@ export class ChannelSocket extends Channel {
           _sb_assert(this.exportable_pubKey, "ChannelSocket.readyPromise(): no exportable pub key?")
           this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) }
           if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
+          if (this.onOpen) this.onOpen()
           this.#ws.websocket!.send(JSON.stringify(this.#ws.init)) // this should trigger a response with keys
         })
       })
@@ -3046,17 +3065,22 @@ export class ChannelSocket extends Channel {
       this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
         this.#ws.closed = true
         if (!e.wasClean) {
+          if (this.onClose) this.onClose(e)
           console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.#sbServer.channel_server}`)
         } else {
           if (e.reason.includes("does not have an owner"))
             reject(`No such channel on this server (${this.#sbServer.channel_server})`)
           else console.log('ChannelSocket() was closed (cleanly): ', e.reason)
+
+          if (this.onClose) this.onClose(e)
         }
+        if (this.onClose) this.onClose(e)
         reject('wbSocket() closed before it was opened (?)')
       })
       this.#ws.websocket.addEventListener('error', (e) => {
         this.#ws.closed = true
         console.log('ChannelSocket() error: ', e)
+        if (this.onError) this.onError(e)
         reject('ChannelSocket creation error (see log)')
       })
       // let us set a timeout to catch and make sure this thing resoles within 0.5 seconds

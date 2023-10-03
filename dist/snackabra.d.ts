@@ -1,9 +1,12 @@
-declare const version = "1.2.0 (pre) build 01";
+declare const version = "1.2.0 (pre) build 02";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
     storage_server: string;
     shard_server?: string;
+    onOpen?: Function;
+    onClose?: Function;
+    onError?: Function;
 }
 export interface SBChannelHandle {
     channelId: SBChannelId;
@@ -315,6 +318,9 @@ export declare class ChannelSocket extends Channel {
     #private;
     ready: Promise<ChannelSocket>;
     channelSocketReady: Promise<ChannelSocket>;
+    onOpen: Function | undefined;
+    onClose: Function | undefined;
+    onError: Function | undefined;
     constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string);
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set onMessage(f: (m: ChannelMessage) => void);

@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.2.0 (pre) build 01';
+const version = '1.2.0 (pre) build 02';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -1653,6 +1653,9 @@ function noMessageHandler(_m) { _sb_assert(false, "NO MESSAGE HANDLER"); }
 export class ChannelSocket extends Channel {
     ready;
     channelSocketReady;
+    onOpen = undefined;
+    onClose = undefined;
+    onError = undefined;
     #ChannelSocketReadyFlag = false;
     #ws;
     #sbServer;
@@ -1668,6 +1671,12 @@ export class ChannelSocket extends Channel {
         const url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket';
         this.#onMessage = onMessage;
         this.#sbServer = sbServer;
+        if (this.#sbServer.hasOwnProperty('onOpen'))
+            this.onOpen = this.#sbServer.onOpen;
+        if (this.#sbServer.hasOwnProperty('onClose'))
+            this.onClose = this.#sbServer.onClose;
+        if (this.#sbServer.hasOwnProperty('onError'))
+            this.onError = this.#sbServer.onError;
         this.#ws = {
             url: url,
             ready: false,
@@ -1706,6 +1715,8 @@ export class ChannelSocket extends Channel {
                         console.log("++++++++ readyPromise() constructed init:");
                         console.log(this.#ws.init);
                     }
+                    if (this.onOpen)
+                        this.onOpen();
                     this.#ws.websocket.send(JSON.stringify(this.#ws.init));
                 });
             });
@@ -1714,6 +1725,8 @@ export class ChannelSocket extends Channel {
             this.#ws.websocket.addEventListener('close', (e) => {
                 this.#ws.closed = true;
                 if (!e.wasClean) {
+                    if (this.onClose)
+                        this.onClose(e);
                     console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.#sbServer.channel_server}`);
                 }
                 else {
@@ -1721,12 +1734,18 @@ export class ChannelSocket extends Channel {
                         reject(`No such channel on this server (${this.#sbServer.channel_server})`);
                     else
                         console.log('ChannelSocket() was closed (cleanly): ', e.reason);
+                    if (this.onClose)
+                        this.onClose(e);
                 }
+                if (this.onClose)
+                    this.onClose(e);
                 reject('wbSocket() closed before it was opened (?)');
             });
             this.#ws.websocket.addEventListener('error', (e) => {
                 this.#ws.closed = true;
                 console.log('ChannelSocket() error: ', e);
+                if (this.onError)
+                    this.onError(e);
                 reject('ChannelSocket creation error (see log)');
             });
             setTimeout(() => {
