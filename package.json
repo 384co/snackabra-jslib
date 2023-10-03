@@ -11,7 +11,7 @@
     "build:watch": "npm run build:jslib:watch & npm run minify:watch",
 
     "build:jslib": "tsc -p ./tsconfig.json",
-    "build:jslib:watch": "tsc -p -w ./tsconfig.json",
+    "build:jslib:watch": "tsc -w  -p ./tsconfig.json",
 
     "minify": "webpack --config webpack.config.js",
     "minify:watch": "webpack --config webpack.config.js --watch",
