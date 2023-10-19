@@ -33,7 +33,7 @@
 // will be labeled '1.1.25' upon publishing
 
 // working on 1.2.0
-const version = '1.2.0 (pre) build 01'
+const version = '1.2.3 (pre) build 01'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -3661,10 +3661,7 @@ class StorageApi {
   }
 
   /**
-   *
-   * @param buf
-   * @param type
-   * @param roomId
+   * StorageApi.getObjectMetadata
    *
    */
   getObjectMetadata(buf: ArrayBuffer, type: SBObjectType): Promise<SBObjectMetadata> {
@@ -3742,6 +3739,8 @@ class StorageApi {
           type: type,
           id: metadata.id,
           key: metadata.key,
+          id32: base64ToBase62(metadata.id),
+          key32: base64ToBase62(metadata.key),
           iv: metadata.iv,
           salt: metadata.salt,
           actualSize: bufSize,
