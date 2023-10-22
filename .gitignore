@@ -1,6 +1,5 @@
 aside.*
 *~
-node_modules
 coverage/
 /FileSystemDB/
 #*
@@ -10,15 +9,10 @@ temp/
 .vscode/
 yarn.lock
 scratch/
-.DS_Store
 tmp/
-.DS_Store/
-.DS_Store
 .yarn/
 .yarn
 node_modules
-node_modules/.yarn-integrity
-node_modules/*
 node_modules/
 .DS_Store
-.DS_Store
+.DS_Store/
