@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.2.0 (pre) build 01';
+const version = '1.2.3 (pre) build 01';
 var DBG = false;
 var DBG2 = false;
 export class MessageBus {
@@ -2231,6 +2231,8 @@ class StorageApi {
                     type: type,
                     id: metadata.id,
                     key: metadata.key,
+                    id32: base64ToBase62(metadata.id),
+                    key32: base64ToBase62(metadata.key),
                     iv: metadata.iv,
                     salt: metadata.salt,
                     actualSize: bufSize,
