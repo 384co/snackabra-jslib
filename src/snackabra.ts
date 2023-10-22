@@ -353,11 +353,25 @@ interface SBMessageContents {
   sign: string,
 }
 
-// these map to conventions and are different namespaces
-// currently: 'full', 'preview', and 'block'. there's an (old)
-// bug in current servers that they don't like reads unless
-// it's of type 'p', but we'll fix that soon ...
 
+
+/**
+ * SBObjectType
+ * 
+ * SBObjectType is a single character string that indicates the
+ * type of object. Currently, the following types are supported:
+ * 
+ * - 'f' : full object (e.g. image, this is the most common)
+ * - 'p' : preview object (e.g. thumbnail)
+ * - 'b' : block/binary object (e.g. 64KB block)
+ * - 't' : test object (for testing purposes)
+ * 
+ * The 't' type is used for testing purposes, and you should
+ * not expect it to have any particular SLA or longevity.
+ * 
+ * Note that when you retrieve any object, you must have the
+ * matching object type.
+ */
 export type SBObjectType = 'f' | 'p' | 'b' | 't'
 
 // TODO: we haven't modularized jslib yet, when we do this
@@ -604,7 +618,7 @@ export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedCont
       }
     }
     if (DBG2) { console.log("decided on nonce as:"); console.log(iv!) }
-    _sb_assert(iv!.length == 12, `unwrap(): nonce should be 12 bytes but is not (${iv!.length})`)
+    _sb_assert(iv!.length == 12, `encryptedContentsMakeBinary(): nonce should be 12 bytes but is not (${iv!.length})`)
     return { content: t, iv: iv! }
   } catch (e: any) {
     console.error('encryptedContentsMakeBinary() failed:')
@@ -2268,8 +2282,6 @@ class SB384 {
 
   #hash?: string // generic 'identifier' in the SB universe
 
-  // #keyPair: CryptoKeyPair | null = null
-
   /**
    * Basic (core) capability object in SB.
    *
@@ -3591,7 +3603,7 @@ class StorageApi {
       try {
         sbCrypto.importKey('raw', base64ToArrayBuffer(decodeURIComponent(fileHash)),
           'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
-            // @psm TODO - Support deriving from PBKDF2 in sbCrypto.eriveKey function
+            // @psm TODO - Support deriving from PBKDF2 in sbCrypto.deriveKey function
             crypto.subtle.deriveKey({
               'name': 'PBKDF2', // salt: crypto.getRandomValues(new Uint8Array(16)),
               'salt': _salt,
@@ -3608,7 +3620,9 @@ class StorageApi {
     });
   }
 
-  /** @private */
+  /** @private
+   * get "permission" to store in the form of a token
+   */
   #_allocateObject(image_id: string, type: SBObjectType): Promise<{ salt: Uint8Array, iv: Uint8Array }> {
     return new Promise((resolve, reject) => {
       SBFetch(this.server + "/storeRequest?name=" + image_id + "&type=" + type)
@@ -3634,6 +3648,7 @@ class StorageApi {
     iv: Uint8Array,
     salt: Uint8Array
   ): Promise<string> {
+    // this started it's life as storeImage() ...
     // export async function storeImage(image, image_id, keyData, type, roomId)
     return new Promise((resolve, reject) => {
       this.#getObjectKey(keyData, salt).then((key) => {
@@ -3644,7 +3659,7 @@ class StorageApi {
             .then((storageTokenReq) => {
               if (storageTokenReq.hasOwnProperty('error')) reject(`storage token request error (${storageTokenReq.error})`)
               let storageToken = JSON.stringify(storageTokenReq)
-              this.storeData(type, image_id, iv, salt, storageToken, data)
+              this.storeObject(type, image_id, iv, salt, storageToken, data)
                 .then((resp_json) => {
                   if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
                   if (resp_json.image_id != image_id) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
@@ -3658,6 +3673,51 @@ class StorageApi {
         })
       })
     })
+  }
+
+  /**
+   * StorageApi().storeObject()
+   * 
+   * Low level of shard uploading - this needs to have all the details. You would
+   * generally not call this directly, but rather use storeData().
+   */
+  storeObject(
+    type: string,
+    fileId: string,
+    iv: Uint8Array,
+    salt: Uint8Array,
+    storageToken: string,
+    data: ArrayBuffer): Promise<Dictionary<any>> {
+    // async function uploadImage(storageToken, encrypt_data, type, image_id, data)
+    return new Promise((resolve, reject) => {
+      // if the first parameter is NOT of type string, then the callee probably meant to use storeData()
+      if (typeof type !== 'string') {
+        const errMsg = "NEW in 1.2.x - storeData() and storeObject() have switched places, you probably meant to use storeData()"
+        console.error(errMsg)
+        reject("errMsg")
+      }
+      
+      SBFetch(this.server + '/storeData?type=' + type + '&key=' + ensureSafe(fileId), {
+        // psm: need to clean up these types
+        method: 'POST',
+        body: assemblePayload({
+          iv: iv,
+          salt: salt,
+          image: data,
+          storageToken: (new TextEncoder()).encode(storageToken),
+          vid: crypto.getRandomValues(new Uint8Array(48))
+        })
+      })
+        .then((response: Response) => {
+          if (!response.ok) { reject('response from storage server was not OK') }
+          return response.json()
+        })
+        .then((data) => {
+          resolve(data)
+        }).catch((error: Error) => {
+          reject(error)
+        });
+    });
   }
 
   /**
@@ -3693,15 +3753,30 @@ class StorageApi {
   }
 
   /**
-   * StorageApi.storeObject
-   * @param buf
-   * @param type
-   * @param roomId
-   *
+   * StorageApi.storeData
+   * 
+   * Main high level work horse: besides buffer and type of data,
+   * it only needs the roomId (channel). Assigned meta data is
+   * optional.
+   * 
+   * This will eventually call storeObject().
+   * 
+   * It is a bit outdated ... it accepts metadata for historical reasons
    */
-  storeObject(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId, metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle> {
+  storeData(
+    buf: BodyInit | Uint8Array,
+    type: SBObjectType,
+    roomId: SBChannelId,
+    metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle> {
+    // used to be integrated with image uploading and matching control message, for reference:
     // export async function saveImage(sbImage, roomId, sendSystemMessage)
     return new Promise((resolve, reject) => {
+      // if the first parameter is of type string, then the callee probably meant to use storeData()
+      if (typeof buf === 'string') {
+        const errMsg = "NEW in 1.2.x - storeData() and storeObject() have switched places, you probably meant to use storeObject()"
+        console.error(errMsg)
+        reject("errMsg")
+      }
       if (buf instanceof Uint8Array) {
         if (DBG2) console.log('converting Uint8Array to ArrayBuffer')
         buf = new Uint8Array(buf).buffer
@@ -3736,6 +3811,7 @@ class StorageApi {
             .catch((e) => reject(e))
         })
       } else {
+        // TODO: this variation should probably not exist ...
         const r: Interfaces.SBObjectHandle = {
           [SB_OBJECT_HANDLE_SYMBOL]: true,
           version: '1',
@@ -3753,52 +3829,9 @@ class StorageApi {
     })
   }
 
-  /**
-   * StorageApi().storeRequest
-   */
-  storeRequest(fileId: string): Promise<ArrayBuffer> {
-    return new Promise((resolve, reject) => {
-      SBFetch(this.server + '/storeRequest?name=' + fileId)
-        .then((response: Response) => {
-          if (!response.ok) { reject(new Error('Network response was not OK')) }
-          return response.arrayBuffer()
-        })
-        .then((data: ArrayBuffer) => {
-          resolve(data);
-        }).catch((error: Error) => {
-          reject(error);
-        });
-    });
-  }
-
-  /**
-   * StorageApi().storeData()
-   */
-  storeData(type: string, fileId: string, iv: Uint8Array, salt: Uint8Array, storageToken: string, data: ArrayBuffer): Promise<Dictionary<any>> {
-    // async function uploadImage(storageToken, encrypt_data, type, image_id, data)
-    return new Promise((resolve, reject) => {
-      SBFetch(this.server + '/storeData?type=' + type + '&key=' + ensureSafe(fileId), {
-        // psm: need to clean up these types
-        method: 'POST',
-        body: assemblePayload({
-          iv: iv,
-          salt: salt,
-          image: data,
-          storageToken: (new TextEncoder()).encode(storageToken),
-          vid: crypto.getRandomValues(new Uint8Array(48))
-        })
-      })
-        .then((response: Response) => {
-          if (!response.ok) { reject('response from storage server was not OK') }
-          return response.json()
-        })
-        .then((data) => {
-          resolve(data)
-        }).catch((error: Error) => {
-          reject(error)
-        });
-    });
-  }
+  // for future reference:
+  //   StorageApi().storeRequest
+  // is now internal-only (#_allocateObject)
 
   /** @private */
   #processData(payload: ArrayBuffer, h: Interfaces.SBObjectHandle): Promise<ArrayBuffer> {
@@ -3969,44 +4002,31 @@ class StorageApi {
 } /* class StorageApi */
 
 
-/**  Snackabra
-   * The main class for interacting with SB servers
-   * 
-   * It is a singleton, so you can only have one instance of it.
-   * It is guaranteed to be synchronous, so you can use it right away.
-   * It is also guaranteed to be thread-safe, so you can use it from multiple
-   * threads.
-   * 
-  * Constructor expects an object with the names of the matching servers, for example
-  * below shows the miniflare local dev config. Note that 'new Snackabra()' is
-  * guaranteed synchronous, so can be 'used' right away. You can optionally call
-  * without a parameter in which case SB will ping known servers.
-  *
-  * @example
-  * ```typescript
-  *     const sb = new Snackabra({
-  *       channel_server: 'http://127.0.0.1:4001',
-  *       channel_ws: 'ws://127.0.0.1:4001',
-  *       storage_server: 'http://127.0.0.1:4000'
-  *     })
-  * ```
-  *
-  */
+/**
+ * Class Snackabra
+ */
 class Snackabra {
-  // xTODO: multiple storage and multiple channel connections
-  //        channels tell us what storage to use
   #storage!: StorageApi
   #channel!: Channel
-  // #defaultIdentity = new Identity();
-  // defaultIdentity?: Identity
   #preferredServer?: SBServer
   #version = version
 
   /**
-  * @param args - optional object with the names of the matching servers, for example
-  * below shows the miniflare local dev config. Note that 'new Snackabra()' is
-  * guaranteed synchronous, so can be 'used' right away. You can optionally call
+  * @param args - optional object with URLs of preferred servers.
+  * 
+  * Note that 'new Snackabra()' is guaranteed synchronous. You can optionally call
   * without a parameter in which case SB will ping known servers.
+  * 
+  *   * @example
+  * ```typescript
+  *     const sb = new Snackabra({
+  *     channel_server: 'http://localhost:3845',
+  *     channel_ws: 'ws://localhost:3845',
+  *     storage_server: 'http://localhost:3843',
+  *     shard_server: 'http://localhost:3841',
+  *     })
+  * ```
+  * 
   * @param DEBUG - optional boolean to enable debug logging
   */
   constructor(args?: SBServer, DEBUG: boolean = false) {
