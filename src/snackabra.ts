@@ -383,11 +383,11 @@ export namespace Interfaces {
   // you'll use to communicate with the API
   export interface SBObjectHandle {
     [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
-    version?: '1',
+    version?: '2',
     type: SBObjectType,
     // for long-term storage you only need these:
-    id: string, key: string,
-    id32?: Base62Encoded, key32?: Base62Encoded, // optional: array32 format of key
+    // id: string, key: string, // b64 encoding (being deprecated)
+    id32?: Base62Encoded, key32?: Base62Encoded, // array32 format of key (new default)
     // and currently you also need to keep track of this,
     // but you can start sharing / communicating the
     // object before it's resolved: among other things it
@@ -412,10 +412,10 @@ export namespace Interfaces {
 
 export interface SBObjectMetadata {
   [SB_OBJECT_HANDLE_SYMBOL]: boolean;
-  version: '1';
+  version: '2';
   type: SBObjectType;
-  id: string;
-  key: string;
+  id32: string;
+  key32: string;
   paddedBuffer: ArrayBuffer;
   iv: Uint8Array;
   salt: Uint8Array;
@@ -1635,15 +1635,15 @@ class SBCrypto {  /*************************************************************
    * @param buf blob of data to be stored
    *
    */
-  generateIdKey(buf: ArrayBuffer): Promise<{ id: string, key: string }> {
+  generateIdKey(buf: ArrayBuffer): Promise<{ id32: string, key32: string }> {
     return new Promise((resolve, reject) => {
       try {
         crypto.subtle.digest('SHA-512', buf).then((digest) => {
           const _id = digest.slice(0, 32);
           const _key = digest.slice(32);
           resolve({
-            id: arrayBufferToBase64(_id),
-            key: arrayBufferToBase64(_key)
+            id32: arrayBuffer32ToBase62(_id),
+            key32: arrayBuffer32ToBase62(_key)
           })
         })
       } catch (e) {
@@ -3442,16 +3442,18 @@ async function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: 
 export class SBObjectHandle implements SBObjectHandle {
   version?= '1';
   #_type: SBObjectType = 'b';
-  #id?: string;
-  #key?: string;
+  #id64?: string;
+  #key64?: string;
   #id32?: Base62Encoded | undefined;
   #key32?: Base62Encoded | undefined;
   #verification?: Promise<string> | string;
+  shardServer?: string;
   iv?: Uint8Array | string;
   salt?: Uint8Array | string;
+
+  // the rest are conveniences, should probably migrate to SBFileHandle
   fileName?: string;
   dateAndTime?: string;
-  shardServer?: string;
   fileType?: string;
   lastModified?: number;
   actualSize?: number;
@@ -3459,17 +3461,17 @@ export class SBObjectHandle implements SBObjectHandle {
 
   constructor(options: SBObjectHandle) {
     const {
-      version, type, id, key, id32, key32, verification, iv, salt, fileName, dateAndTime,
+      version, type, /* id, key, */ id32, key32, verification, iv, salt, fileName, dateAndTime,
       shardServer, fileType, lastModified, actualSize, savedSize,
     } = options;
 
     if (type) this.#_type = type
     if (version) this.version = version
 
-    if (id) this.id = id;
-    if (key) this.key = key;
-    if (id32) this.id32 = id32
-    if (key32) this.key32 = key32
+    // if (id) this.id = id;
+    // if (key) this.key = key;
+    if (id32) { this.id32 = id32; this.id64 = base62ToBase64(id32); }
+    if (key32) { this.key32 = key32; this.key64 = base62ToBase64(key32); }
     if (verification) this.#verification = verification;
 
     this.iv = iv;
@@ -3484,38 +3486,22 @@ export class SBObjectHandle implements SBObjectHandle {
 
   }
 
-  // // ToDo: this is no longer the future mechanism, we will use "synonyms"
-  // // create id32 - if (and when) we have enough info
-  // #setId32() {
-  //   if (this.#id) {
-  //     const bindID = this.#id;
-  //     async () => {
-  //       const verification = await Promise.resolve(this.verification);
-  //       const fullID = this.#id + verification.split('.').join(''); // backwards compatible
-  //       crypto.subtle.digest('SHA-256', new TextEncoder().encode(fullID)).then((hash) => {
-  //         if (bindID !== this.#id) return; // if id has changed, don't set
-  //         this.#id32 = arrayBuffer32ToBase62(hash);
-  //       });
-  //     }
-  //   }
-  // }
+  set id64(value: string) { _assertBase64(value); this.#id64 = value; this.#id32 = base64ToBase62(value); }
+  get id64(): string { _sb_assert(this.#id64, 'object handle identifier is undefined'); return this.#id64!; }
 
-  set id(value: string) { _assertBase64(value); this.#id = value; this.#id32 = base64ToBase62(value); }
-  get id(): string { _sb_assert(this.#id, 'object handle identifier is undefined'); return this.#id!; }
-
-  set key(value: string) { _assertBase64(value); this.#key = value; this.#key32 = base64ToBase62(value); }
-  get key(): string { _sb_assert(this.#key, 'object handle identifier is undefined'); return this.#key!; }
+  set key64(value: string) { _assertBase64(value); this.#key64 = value; this.#key32 = base64ToBase62(value); }
+  get key64(): string { _sb_assert(this.#key64, 'object handle identifier is undefined'); return this.#key64!; }
 
   set id32(value: Base62Encoded) {
     if (!isBase62Encoded(value)) throw new Error('Invalid base62 encoded ID');
     this.#id32 = value;
-    this.#id = base62ToBase64(value);
+    this.#id64 = base62ToBase64(value);
   }
 
   set key32(value: Base62Encoded) {
     if (!isBase62Encoded(value)) throw new Error('Invalid base62 encoded Key');
     this.#key32 = value;
-    this.#key = base62ToBase64(value);
+    this.#key64 = base62ToBase64(value);
   }
 
   get id32(): Base62Encoded { _sb_assert(this.#id32, 'object handle id (32) is undefined'); return this.#id32!; }
@@ -3598,7 +3584,7 @@ class StorageApi {
   }
 
   /** @private */
-  #getObjectKey(fileHash: string, _salt: ArrayBuffer): Promise<CryptoKey> {
+  #getObjectKey(fileHash: Base62Encoded, _salt: ArrayBuffer): Promise<CryptoKey> {
     return new Promise((resolve, reject) => {
       try {
         sbCrypto.importKey('raw', base64ToArrayBuffer(decodeURIComponent(fileHash)),
@@ -3729,16 +3715,16 @@ class StorageApi {
     // export async function saveImage(sbImage, roomId, sendSystemMessage)
     return new Promise((resolve, reject) => {
       const paddedBuf = this.#padBuf(buf)
-      sbCrypto.generateIdKey(paddedBuf).then((fullHash: { id: string, key: string }) => {
+      sbCrypto.generateIdKey(paddedBuf).then((fullHash: { id32: string, key32: string }) => {
         // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
-        this.#_allocateObject(fullHash.id, type)
+        this.#_allocateObject(fullHash.id32, type)
           .then((p) => {
             const r: SBObjectMetadata = {
               [SB_OBJECT_HANDLE_SYMBOL]: true,
-              version: '1',
+              version: '2',
               type: type,
-              id: fullHash.id,
-              key: fullHash.key,
+              id32: fullHash.id32,
+              key32: fullHash.key32,
               iv: p.iv,
               salt: p.salt,
               paddedBuffer: paddedBuf
@@ -3786,23 +3772,23 @@ class StorageApi {
       const bufSize = (buf as ArrayBuffer).byteLength
       if (!metadata) {
         const paddedBuf = this.#padBuf(buf as ArrayBuffer)
-        sbCrypto.generateIdKey(paddedBuf).then((fullHash: { id: string, key: string }) => {
+        sbCrypto.generateIdKey(paddedBuf).then((fullHash: { id32: string, key32: string }) => {
           // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
-          this.#_allocateObject(fullHash.id, type)
+          this.#_allocateObject(fullHash.id32, type)
             .then((p) => {
               // storage server returns the salt and nonce it wants us to use
               const r: Interfaces.SBObjectHandle = {
                 [SB_OBJECT_HANDLE_SYMBOL]: true,
-                version: '1',
+                version: '2',
                 type: type,
-                id: fullHash.id,
-                key: fullHash.key,
-                id32: base64ToBase62(fullHash.id),
-                key32: base64ToBase62(fullHash.key),
+                // id: fullHash.id64,
+                // key: fullHash.key64,
+                id32: base64ToBase62(fullHash.id32),
+                key32: base64ToBase62(fullHash.key32),
                 iv: p.iv,
                 salt: p.salt,
                 actualSize: bufSize,
-                verification: this.#_storeObject(paddedBuf, fullHash.id, fullHash.key, type, roomId, p.iv, p.salt)
+                verification: this.#_storeObject(paddedBuf, fullHash.id32, fullHash.key32, type, roomId, p.iv, p.salt)
               }
               resolve(r)
             })
@@ -3812,16 +3798,16 @@ class StorageApi {
         // TODO: this variation should probably not exist ...
         const r: Interfaces.SBObjectHandle = {
           [SB_OBJECT_HANDLE_SYMBOL]: true,
-          version: '1',
+          version: '2',
           type: type,
-          id: metadata.id,
-          key: metadata.key,
-          id32: base64ToBase62(metadata.id),
-          key32: base64ToBase62(metadata.key),
+          // id: metadata.id,
+          // key: metadata.key,
+          id32: metadata.id32,
+          key32: metadata.key32,
           iv: metadata.iv,
           salt: metadata.salt,
           actualSize: bufSize,
-          verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
+          verification: this.#_storeObject(metadata.paddedBuffer, metadata.id32, metadata.key32, type, roomId, metadata.iv, metadata.salt)
         }
         resolve(r)
       }
@@ -3857,7 +3843,7 @@ class StorageApi {
 
         if ((handleIV) && (!compareBuffers(iv, handleIV))) {
           console.error("WARNING: nonce from server differs from local copy")
-          console.log(`object ID: ${h.id}`)
+          console.log(`object ID: ${h.id32}`)
           console.log(` local iv: ${arrayBufferToBase64(handleIV)}`)
           console.log(`server iv: ${arrayBufferToBase64(data.iv)}`)
         }
@@ -3886,7 +3872,7 @@ class StorageApi {
           console.log(`salt : ${arrayBufferToBase64(salt)}`)
         }
         // const image_key: CryptoKey = await this.#getObjectKey(imageMetaData!.previewKey!, salt)
-        this.#getObjectKey(h.key, salt).then((image_key) => {
+        this.#getObjectKey(h.key32!, salt).then((image_key) => {
           // TODO: test this, it used to call ab2str()? how could that work?
           // const encrypted_image = sbCrypto.ab2str(new Uint8Array(data.image))
           // const encrypted_image = new Uint8Array(data.image)
@@ -3938,7 +3924,7 @@ class StorageApi {
       const verificationToken = await h.verification
       const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
       if (DBG) console.log("fetchData(), fetching from server: " + useServer)
-      SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+      SBFetch(useServer + '/fetchData?id=' + h.id32 + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
         .then((response: Response) => {
           if (!response.ok) reject(new Error('Network response was not OK'))
           // console.log(response)
@@ -3975,8 +3961,8 @@ class StorageApi {
       _sb_assert(control_msg.id, "retrieveImage(): id missing (?)")
       const obj: Interfaces.SBObjectHandle = {
         type: type,
-        id: control_msg.id!,
-        key: key!,
+        id32: control_msg.id!,
+        key32: key!,
         verification: new Promise((resolve, reject) => {
           if (control_msg.verificationToken)
             resolve(control_msg.verificationToken)
