@@ -223,7 +223,6 @@ export declare class ChannelSocket extends Channel {
     adminData?: ChannelAdminData;
     constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string);
     close: () => void;
-    checkServerStatus(url: string, timeout: number, callback: (online: boolean) => void): void;
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set onMessage(f: (m: ChannelMessage) => void);
     get onMessage(): (m: ChannelMessage) => void;

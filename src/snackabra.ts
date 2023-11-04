@@ -173,12 +173,6 @@ interface ImageMetaData {
   */
 export interface ChannelMessage {
   type?: ChannelMessageTypes,
-  // keys?: {
-  //   ownerKey: Dictionary,
-  //   encryptionKey: Dictionary,
-  //   guestKey?: Dictionary,
-  //   signKey: Dictionary,
-  // },
   keys?: ChannelKeyStrings,
   _id?: string,
   id?: string,
@@ -367,6 +361,10 @@ export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedCont
   }
 }
 
+/**
+ * This is the standard (most common) channel message. It matches
+ * directly to a 'chat' message. But the contents can be anything.
+ */
 interface ChannelEncryptedMessage {
   type?: 'encrypted',
 
@@ -470,6 +468,7 @@ function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response
   else return fetch(input, { method: 'GET' /*, credentials: 'include' */ })
 }
 
+/** @private */
 function WrapError(e: any) {
   if (e instanceof Error) return e;
   else return new Error(String(e));
@@ -533,6 +532,7 @@ export function _sb_assert(val: unknown, msg: string) {
 //   .catch((e) => { console.log("No known servers responding to channel"); reject(e); })
 
 // used to create NEW channel
+/** @private */
 async function newChannelData(keys?: JsonWebKey): Promise<{ channelData: ChannelData, exportable_privateKey: Dictionary<any> }> {
   const owner384 = new SB384(keys)
   await owner384.ready
@@ -620,6 +620,7 @@ export function _assertBase64(base64: string) {
 }
 
 // refactor helper - replace encodeURIComponent everywhere
+/** @private */
 function ensureSafe(base64: string): string {
   const z = b64_regex.exec(base64)
   _sb_assert((z) && (z[0] === base64), 'ensureSafe() tripped: something is not URI safe')
@@ -842,7 +843,7 @@ const base62Regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
 // branded string type
 
 /**
-   A branded string type for base62 encoded strings.
+   A 'branded' string type for base62 encoded strings.
    This is used to ensure that the string is a valid base62
    encoded string.
    
@@ -865,11 +866,6 @@ const base62Regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
     characters of base62 [0-9A-Za-z]
  */
 type Base62Encoded = string & { _brand?: 'Base62Encoded' };
-
-// // monkey hack for BigInt JSON serialization ... 
-// (BigInt.prototype as any).toJSON = function () {
-//   return this.toString() + 'n';
-// }
 
 /**
  * base62ToArrayBuffer32 converts a base62 encoded string to an ArrayBuffer32.
@@ -1081,6 +1077,7 @@ export function jsonParseWrapper(str: string | null, loc: string) {
   }
 }
 
+/** Essentially a dictionary where each entry is an arraybuffer. */
 export interface SBPayload {
   [index: string]: ArrayBuffer;
 }
@@ -1088,6 +1085,7 @@ export interface SBPayload {
 /**
  * Deprecated (older version of payloads, for older channels)
  */
+/** @private */
 export function extractPayloadV1(payload: ArrayBuffer): SBPayload {
   try {
     const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
@@ -1109,18 +1107,16 @@ export function extractPayloadV1(payload: ArrayBuffer): SBPayload {
 }
 
 /**
- * Assemble payload
+ * Assemble payload. This creates a single binary (wire) format
+ * of an arbitrary set of (named) binary objects.
  */
 export function assemblePayload(data: SBPayload): BodyInit | null {
   try {
-    // console.log("assemblePayload():")
-    // console.log(data)
     const metadata: Dictionary<any> = {};
     metadata['version'] = '002';
     let keyCount = 0;
     let startIndex = 0;
     for (const key in data) {
-      // if (data.key)  ... why was this added?
       keyCount++;
       metadata[keyCount.toString()] = { name: key, start: startIndex, size: data[key].byteLength };
       startIndex += data[key].byteLength;
@@ -1128,14 +1124,9 @@ export function assemblePayload(data: SBPayload): BodyInit | null {
     const encoder = new TextEncoder();
     const metadataBuffer: ArrayBuffer = encoder.encode(JSON.stringify(metadata));
     const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
-    // psm: changed to Uint8 .. hope that doesn't break things?
     let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
-    for (const key in data) {
-      // if (data.key) ... why was this added?
+    for (const key in data)
       payload = _appendBuffer(new Uint8Array(payload), data[key]);
-    }
-    // console.log("created payload:")
-    // console.log(payload)
     return payload;
   } catch (e) {
     console.error(e);
@@ -1152,38 +1143,29 @@ export function extractPayload(payload: ArrayBuffer): SBPayload {
   try {
     // number of bytes of meta data (encoded as a 32-bit Uint)
     const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
-    // console.info('METADATASIZE: ', metadataSize);
     const decoder = new TextDecoder();
     // extracts the string of meta data and parses
-    // console.info('METADATASTRING: ', decoder.decode(payload.slice(4, 4 + metadataSize)));
     const _metadata: Dictionary<any> = jsonParseWrapper(decoder.decode(payload.slice(4, 4 + metadataSize)), 'L533');
-    // console.info('METADATA EXTRACTED', JSON.stringify(_metadata))
-    // console.log(_metadata)
     // calculate start of actual contents
     const startIndex: number = 4 + metadataSize;
     if (!_metadata.version) _metadata['version'] = '001' // backwards compat
-    // console.info(_metadata['version']);
     switch (_metadata['version']) {
       case '001': {
         // deprecated, older format
         return extractPayloadV1(payload);
       }
       case '002': {
-        // console.log('version 2')
         const data: Dictionary<any> = [];
         for (let i = 1; i < Object.keys(_metadata).length; i++) {
           const _index = i.toString();
           if (_metadata[_index]) {
-            // console.log(`found entry index ${i}`)
             const propertyStartIndex: number = _metadata[_index]['start'];
             // start (in bytes) of contents
-            // console.info(propertyStartIndex);
             const size: number = _metadata[_index]['size'];
             // where to put it
             const entry: Dictionary<any> = _metadata[_index]
             // extracts contents - this supports raw data
             data[entry['name']] = payload.slice(startIndex + propertyStartIndex, startIndex + propertyStartIndex + size);
-            // console.log(data[entry['name']])
           } else {
             console.log(`found nothing for index ${i}`)
           }
@@ -1284,6 +1266,7 @@ class SBCrypto {  /*************************************************************
     }
   }
 
+  /** @private */
   async #generateChannelHash(channelBytes: ArrayBuffer): Promise<string> {
     const MAX_REHASH_ITERATIONS = 160
     const b62regex = /^[0-9A-Za-z]+$/;
@@ -1298,6 +1281,7 @@ class SBCrypto {  /*************************************************************
   }
 
   // For compatibilty with various versions, we accept any of the first 160 hashes.
+  /** @private */
   async #testChannelHash(channelBytes: ArrayBuffer, channel_id: SBChannelId): Promise<boolean> {
     const MAX_REHASH_ITERATIONS = 160
     let count = 0
@@ -1453,8 +1437,6 @@ class SBCrypto {  /*************************************************************
         const iv: Uint8Array = ((!_iv) || (_iv === null)) ? crypto.getRandomValues(new Uint8Array(12)) : _iv
         if (typeof data === 'string') data = (new TextEncoder()).encode(data)
         crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data).then((encrypted) => {
-          // console.log("encrypt() result:")
-          // console.log(encrypted)
           if (returnType === 'encryptedContents') {
             resolve({
               content: ensureSafe(arrayBufferToBase64(encrypted)),
@@ -1483,8 +1465,6 @@ class SBCrypto {  /*************************************************************
       } else {
         a = b as ArrayBuffer
       }
-      // console.log("wrap() is encrypting buffer:")
-      // console.log(a)
       sbCrypto.encrypt(a, k).then((c) => { resolve(c) })
     })
   }
@@ -1544,8 +1524,6 @@ class SBCrypto {  /*************************************************************
         const encoded = encoder.encode(contents);
         let sign;
         try {
-          // console.log("signing with:")
-          // console.log(secretKey)
           sign = await crypto.subtle.sign('HMAC', secretKey, encoded)
           resolve(ensureSafe(arrayBufferToBase64(sign)));
         } catch (error) {
@@ -1604,9 +1582,8 @@ class SBCrypto {  /*************************************************************
    * them "equal" if both have 'x' and 'y' properties and they are the same.
    */
   compareKeys(key1: Dictionary<any>, key2: Dictionary<any>): boolean {
-    if (key1 != null && key2 != null && typeof key1 === 'object' && typeof key2 === 'object') {
+    if (key1 != null && key2 != null && typeof key1 === 'object' && typeof key2 === 'object')
       return key1['x'] === key2['x'] && key1['y'] === key2['y'];
-    }
     return false;
   }
 
@@ -1617,16 +1594,13 @@ class SBCrypto {  /*************************************************************
    * Returns index of key if found, -1 if not found.
    */
   lookupKey(key: JsonWebKey, array: Array<JsonWebKey>): number {
-    for (let i = 0; i < array.length; i++) {
+    for (let i = 0; i < array.length; i++)
       if (sbCrypto.compareKeys(key, array[i])) return i;
-    }
     return -1;
   }
 
   async channelKeyStringsToCryptoKeys(keyStrings: ChannelKeyStrings): Promise<ChannelKeys> {
     return new Promise(async (resolve, reject) => {
-      // console.log("channelKeyStringsToCryptoKeys()")
-      // console.log(keyStrings)
       let ownerKeyParsed: JsonWebKey = jsonParseWrapper(keyStrings.ownerKey, 'L1513')
       Promise.all([
         sbCrypto.importKey('jwk', ownerKeyParsed, 'ECDH', false, []),
@@ -1668,6 +1642,7 @@ const sbCrypto = new SBCrypto();
 //#region Decorators
 
 // Decorator
+/** @private */
 function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
     let get = descriptor.get
@@ -1675,14 +1650,10 @@ function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext
       const prop = `__${target.constructor.name}__${propertyKey}__`
       if (this.hasOwnProperty(prop)) {
         const returnValue = this[prop as keyof PropertyDescriptor]
-        // console.log("Memoize found value in cache")
-        // console.log(returnValue)
         return (returnValue)
       } else {
-        // console.log("Memoize new return value")
         const returnValue = get.call(this)
         Object.defineProperty(this, prop, { configurable: false, enumerable: false, writable: false, value: returnValue })
-        // console.log(returnValue)
         return returnValue
       }
     }
@@ -1690,6 +1661,7 @@ function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext
 }
 
 // Decorator
+/** @private */
 function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
     // console.log("Checking ready for:")
@@ -1715,6 +1687,7 @@ function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext *
 }
 
 // Decorator
+/** @private */
 function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecoratorContext */, descriptor?: PropertyDescriptor): any {
   if ((descriptor) && (descriptor.value)) {
     const operation = descriptor.value
@@ -1729,6 +1702,7 @@ function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecor
 }
 
 // Decorator
+/** @private */
 function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.value)) {
     const operation = descriptor.value
@@ -1810,7 +1784,6 @@ class SB384 {
    *
    */
   constructor(key?: JsonWebKey) {
-    // console.log("setting SB384.ready")
     this.ready = new Promise<SB384>(async (resolve, reject) => {
       try {
         if (key) {
@@ -1902,14 +1875,9 @@ class SBMessage {
 
   /* SBMessage */
   constructor(channel: Channel, body: string = '') {
-    // console.log("creating SBMessage on channel:")
-    // console.log(channel)
-
     _sb_assert(body.length < this.MAX_SB_BODY_SIZE, 'SBMessage(): body must be smaller than 64 KiB')
-
     this.channel = channel
     this.contents = { encrypted: false, isVerfied: false, contents: body, sign: '', image: '', imageMetaData: {} }
-
     this.ready = new Promise<SBMessage>((resolve) => {
       channel.ready.then(async () => {
         this.contents.sender_pubKey = this.channel.exportable_pubKey!
@@ -1959,6 +1927,7 @@ class SBMessage {
 // Left here for reference; we're putting anything like a concep of a "file"
 // in SBFileHelper and similar.  we're moving jslib towards minimalism of
 // simply implementing core SB (aka infrastructure) functionality.
+
 // /**
 //  * SBFile
 //  * @class
@@ -2038,6 +2007,8 @@ abstract class Channel extends SB384 {
    * @param string - the <a href="../glossary.html#term-channel-name">Channel Name</a> to find on that server (optional)
    * 
    */
+  // TODO: we've had to hack the ready template for the moment on this class
+  // ready: Promise<Channel>
   channelReady: Promise<Channel>
   #ChannelReadyFlag: boolean = false // must be named <class>ReadyFlag
 
@@ -2070,6 +2041,7 @@ abstract class Channel extends SB384 {
 
   constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
     super(key)
+    // let superThis = this
     this.#sbServer = sbServer
     this.#api = new ChannelApi(this)
     this.channelReady = new Promise<Channel>(async (resolve) => {
@@ -2080,17 +2052,18 @@ abstract class Channel extends SB384 {
         await this.sb384Ready
         this.#channelId = this.ownerChannelId!
       }
-      new Promise<Channel>(f => {
+      new Promise<Channel>(channelKeysResolve => {
+        const f = channelKeysResolve // this looks like a no-op but leave it for now
         this.#channelKeysResolve = f
       })
         .then(() => {
           this.#channelKeysLoaded = true
           this.#ChannelReadyFlag = true
-          console.warn('Channel.ready: channel keys loaded')
-          this.ready = Promise.resolve(this)
-          resolve(this)
+          this.ready = Promise.resolve(this) // TODO: not ready pattern
+          resolve(this) // TODO: this was superThis, might need to revisit
         })
     })
+    // this.channelReady = this.ready
   }
 
   //
@@ -2098,6 +2071,7 @@ abstract class Channel extends SB384 {
   // but the means of acquiring them depends on the type of channel.
   // currently there are two, ChannelEndpoint and ChannelSocket.
   //
+  /** @private */
   async importKeys(keyStrings: ChannelKeyStrings): Promise<void> {
     this.#channelKeys = await sbCrypto.channelKeyStringsToCryptoKeys(keyStrings)
     _sb_assert(this.#channelKeys, "Channel.importKeys: no channel keys (?)")
@@ -2115,10 +2089,10 @@ abstract class Channel extends SB384 {
   }
 
   get sbServer() { return this.#sbServer }
-  get readyFlag(): boolean { 
+  get readyFlag(): boolean {
     console.warn('Channel.readyFlag: ', this.#ChannelReadyFlag)
     return this.#ChannelReadyFlag
-   }
+  }
 
   @Memoize @Ready get api() { return this.#api }
   @Memoize @Ready get channelId() { return this.#channelId }
@@ -2127,8 +2101,6 @@ abstract class Channel extends SB384 {
 } /* class Channel */
 
 function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: ChannelKeys): Promise<ChannelMessage> {
-  // console.log("#%#%#%#%# m01 passed to deCryptChannelMessage()")
-  // console.log(structuredClone(m01))
   return new Promise<ChannelMessage>((resolve, reject) => {
     const z = messageIdRegex.exec(m00)
     const encryptionKey = keys.encryptionKey
@@ -2152,10 +2124,6 @@ function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: Channe
           name: m2.sender_username ? m2.sender_username : 'Unknown',
           _id: m2.sender_pubKey
         }
-        // console.log("Unwrapped so far:")
-        // console.log(structuredClone(unwrapped))
-        // console.log("Decrypting message, results after decoding so far:")
-        // console.log(structuredClone(m2))
 
         if ((m2.verificationToken) && (!m2.sender_pubKey)) {
           // we don't check signature unless we can (obviously)
@@ -2266,9 +2234,6 @@ export class ChannelSocket extends Channel {
    * 
    * */
   constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string) {
-    // console.log("----ChannelSocket.constructor() start:")
-    // console.log(sbServer)
-    // console.log("----ChannelSocket.constructor() ... end")
     super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
     _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
     const url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
@@ -2281,7 +2246,6 @@ export class ChannelSocket extends Channel {
       closed: false,
       timeout: 2000
     }
-    // console.log("setting ChannelSocket.ready")
     this.ready = this.#readyPromise()
   }
 
@@ -2294,6 +2258,7 @@ export class ChannelSocket extends Channel {
     protocol aspects are low-level (independent of 'app') and those
     are handled here. others are never delivered 'raw', for example
     encrypted messages are always decrypted */
+  /** @private */
   #processMessage(m: any) {
     if (this.#traceSocket) {
       console.log("got raw message (string):")
@@ -2312,13 +2277,12 @@ export class ChannelSocket extends Channel {
         r("success") // resolve
       }
     } else if (data.nack) {
-      console.error('Nack received')
+      // console.error('Nack received')
       this.#ws.closed = true
       // if (this.#websocket) this.#websocket.close()
     } else if (typeof this.#onMessage === 'function') {
       const message = data as ChannelMessage
       try {
-        // console.log("++++++++ #processMessage: will attempt to decipher ...:")
         let m01 = Object.entries(message)[0][1]
         if (Object.keys(m01)[0] === 'encrypted_contents') {
           const m00 = Object.entries(data)[0][0]
@@ -2370,43 +2334,21 @@ export class ChannelSocket extends Channel {
         // TODO: locked key might never resolve (if we don't have it)
         // unwrapped = await sbCrypto.unwrap(this.keys.lockedKey, message.encrypted_contents, 'string')
       }
-
-      // TODO: re-enable local storage of messages
-      // _localStorage.setItem(this.#channel.channelId + '_lastSeenMessage', id.slice(this.#channel.channelId.length));
-      // if (message._id) _localStorage.setItem(this.#channel.channelId + '_lastSeenMessage', message._id)
-      // return JSON.stringify(unwrapped);
     } else {
       _sb_exception('ChannelSocket', 'received message but there is no handler')
     }
   }
 
-  checkServerStatus(url: string, timeout: number, callback: (online: boolean) => void): void {
-    const xhr = new XMLHttpRequest();
-    xhr.onreadystatechange = () => {
-      if (xhr.readyState === XMLHttpRequest.DONE) {
-        if (xhr.status === 200) {
-          callback(true);
-        } else {
-          callback(false);
-        }
-      }
-    };
-    xhr.open('HEAD', url);
-    xhr.timeout = timeout;
-    xhr.send();
-  }
-
 
   /* ChannelSocket */
+  /** @private */
   #readyPromise(): Promise<ChannelSocket> {
     const url = this.#ws.url
     let backlog: Array<MessageEvent> = []
     let processingKeys = false
     return new Promise<ChannelSocket>((resolve, reject) => {
       if (DBG) { console.log("++++++++ readyPromise() has url:"); console.log(url); }
-
       if (!this.#ws.websocket) this.#ws.websocket = new WebSocket(this.#ws.url)
-
       if (this.#ws.websocket.readyState === 3) {
         // it's been closed
         this.#ws.websocket = new WebSocket(url)
@@ -2417,12 +2359,12 @@ export class ChannelSocket extends Channel {
 
       this.#ws.websocket.addEventListener('open', () => {
         this.#ws.closed = false
-        // Removed this.channelReady from here, in order for the channel to be ready keys need to be imported
-        // Keys can not be imported until after the websocket is opened and the first message is received
+        // TODO: needed to hack ready pattern for this class, for now
+        // this.channelReady.then() => {
         this.#ws.init = { name: JSON.stringify(this.exportable_pubKey) } // TODO: sometimes this is null?
         if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
         this.#ws.websocket!.send(JSON.stringify(this.#ws.init))
-        // note: not ready until channel responds with keys
+        // })
       })
 
       this.#ws.websocket.addEventListener('message', async (e: MessageEvent) => {
@@ -2446,6 +2388,7 @@ export class ChannelSocket extends Channel {
         this.#exportable_owner_pubKey = exportable_owner_pubKey;
         if (DBG) console.log(this.#exportable_owner_pubKey)
         await this.importKeys(message.keys);
+        // TODO: note this is hack of regular ready pattern, for now
         // channelReady will not be ready until keys are imported so we move this here
         this.channelReady.then(async () => {
           console.warn(this.api)
@@ -2469,13 +2412,13 @@ export class ChannelSocket extends Channel {
             if (DBG) console.log("++++++++ readyPromise() there were NO messages queued up")
           }
           // once we've gotten our keys, we substitute the message handler
-          // console.log("++++++++ readyPromise() changing onMessage to processMessage")
           this.#ws.websocket!.addEventListener('message', (e: MessageEvent) => {
             this.#processMessage(e.data)
           })
 
           // and now we are ready!
-          _sb_assert(this.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)')
+          // TODO: psm needs to understand why we're using super here :-)
+          _sb_assert(super.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)')
           this.#ChannelSocketReadyFlag = true
           if (DBG) console.log("++++++++ readyPromise() all done - resolving!")
 
@@ -2516,7 +2459,7 @@ export class ChannelSocket extends Channel {
   set onMessage(f: (m: ChannelMessage) => void) { this.#onMessage = f }
   get onMessage() { return this.#onMessage }
 
-
+  /** Enables debug output */
   set enableTrace(b: boolean) {
     this.#traceSocket = b;
     console.log(`Tracing ${b ? 'en' : 'dis'}abled`);
@@ -2738,34 +2681,11 @@ export class SBObjectHandleClass {
   actualSize?: number;
   savedSize?: number;
 
-  constructor(
-    options: SBObjectHandle
-    //   options: {
-    //   version?: '1';
-    //   type?: SBObjectType;
-    //   id: string;
-    //   key: string;
-    //   id32?: Base62Encoded;
-    //   key32?: Base62Encoded;
-    //   verification: Promise<string> | string;
-    //   iv?: Uint8Array | string;
-    //   salt?: Uint8Array | string;
-    //   fileName?: string;
-    //   dateAndTime?: string;
-    //   shardServer?: string;
-    //   fileType?: string;
-    //   lastModified?: number;
-    //   actualSize?: number;
-    //   savedSize?: number;
-    // }
-  ) {
+  constructor(options: SBObjectHandle) {
     const {
       version, type, id, key, id32, key32, verification, iv, salt, fileName, dateAndTime,
       shardServer, fileType, lastModified, actualSize, savedSize,
     } = options;
-
-    // this.ready = new Promise<SBObjectHandle>((resolve) => {
-    // });
 
     if (version) this.version = version;
     if (type) this.#type = type;
@@ -2871,6 +2791,7 @@ class StorageApi {
    *
    * @param buf blob of data to be eventually stored
    */
+  /** @private */
   #padBuf(buf: ArrayBuffer) {
     const image_size = buf.byteLength; let _target
     // pick the size to be rounding up to
@@ -2893,6 +2814,7 @@ class StorageApi {
    * last 4 bytes of the buffer. This function removes
    * all the padding and returns the actual object.
    */
+  /** @private */
   #unpadData(data_buffer: ArrayBuffer): ArrayBuffer {
     const tail = data_buffer.slice(-4)
     var _size = new DataView(tail).getUint32(0)
@@ -2908,6 +2830,7 @@ class StorageApi {
     return data_buffer.slice(0, _size);
   }
 
+  /** @private */
   #getObjectKey(fileHash: string, _salt: ArrayBuffer): Promise<CryptoKey> {
     // was: getFileKey(fileHash: string, _salt: ArrayBuffer)
     // also (?): getImageKey(imageHash, _salt) {
@@ -2940,6 +2863,7 @@ class StorageApi {
     });
   }
 
+  /** @private */
   #_allocateObject(image_id: string, type: SBObjectType): Promise<{ salt: Uint8Array, iv: Uint8Array }> {
     return new Promise((resolve, reject) => {
       SBFetch(this.server + "/storeRequest?name=" + image_id + "&type=" + type)
@@ -2955,6 +2879,7 @@ class StorageApi {
     })
   }
 
+  /** @private */
   #_storeObject(
     image: ArrayBuffer,
     image_id: string,
@@ -3047,16 +2972,12 @@ class StorageApi {
       }
       const bufSize = (buf as ArrayBuffer).byteLength
       if (!metadata) {
-        // console.warn('No metadata')
         const paddedBuf = this.#padBuf(buf as ArrayBuffer)
         sbCrypto.generateIdKey(paddedBuf).then((fullHash: { id: string, key: string }) => {
           // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
           this.#_allocateObject(fullHash.id, type)
             .then((p) => {
-              // console.log('got these instructions from the storage server:')
               // storage server returns the salt and nonce it wants us to use
-              // console.log(p)
-
               const r: SBObjectHandle = {
                 [SB_OBJECT_HANDLE_SYMBOL]: true,
                 version: '1',
@@ -3068,25 +2989,11 @@ class StorageApi {
                 actualSize: bufSize,
                 verification: this.#_storeObject(paddedBuf, fullHash.id, fullHash.key, type, roomId, p.iv, p.salt)
               }
-
-              // const r = new SBObjectHandleClass({
-              //   type: type,
-              //   id: fullHash.id,
-              //   key: fullHash.key,
-              //   iv: p.iv,
-              //   salt: p.salt,
-              //   actualSize: bufSize,
-              //   verification: this.#_storeObject(paddedBuf, fullHash.id, fullHash.key, type, roomId, p.iv, p.salt)
-              // })
-
-              // console.log("SBObj is:")
-              // console.log(r)
               resolve(r)
             })
             .catch((e) => reject(e))
         })
       } else {
-
         const r: SBObjectHandle = {
           [SB_OBJECT_HANDLE_SYMBOL]: true,
           version: '1',
@@ -3098,19 +3005,6 @@ class StorageApi {
           actualSize: bufSize,
           verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
         }
-
-        // const r = new SBObjectHandleClass({
-        //   type: type,
-        //   id: metadata.id,
-        //   key: metadata.key,
-        //   iv: metadata.iv,
-        //   salt: metadata.salt,
-        //   actualSize: bufSize,
-        //   verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
-        // })
-
-        // console.log("SBObj is:")
-        // console.log(r)
         resolve(r)
       }
 
@@ -3189,16 +3083,7 @@ class StorageApi {
     });
   }
 
-  // // Deprecated
-  // /**
-  //  * StorageApi().storeImage()
-  //  */
-  // storeImage(image: string | ArrayBuffer, image_id: string, keyData: string, type: string) {
-  //   // latest and greatest JS version is in:
-  //   // 384-snackabra-webclient/src/utils/ImageProcessor.js
-  //   throw new Error('StorageApi.storeImate() needs TS version')
-  // }
-
+  /** @private */
   #processData(payload: ArrayBuffer, h: SBObjectHandle): Promise<ArrayBuffer> {
     return new Promise((resolve, reject) => {
       // console.log('#processData()')
@@ -3326,18 +3211,8 @@ class StorageApi {
           console.log(returnType);
         }
         if (!h) reject('SBObjectHandle is null or undefined')
-        // TODO: haven't tested this caching stuff .. moving from the refactored web client
-        // _localStorage.getItem(`${h.id}_cache`).then((payload) => {
-        // if (payload) {
-        //   console.log("Found object in _localStorage")
-        //   resolve(this.#processData(base64ToArrayBuffer(payload), h))
-        // } else {
-        // console.log("Object not cached, fetching from server. SBObjectHandle is:")
-        // console.log(h)
         if (typeof h.verification === 'string') h.verification = new Promise<string>((resolve) => { resolve(h.verification); })
         h.verification.then((verificationToken) => {
-          // console.log("verification token:")
-          // console.log(verificationToken)
           _sb_assert(verificationToken, "fetchData(): missing verification token (?)")
           const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
           if (DBG) console.log("fetching from server: " + useServer)
@@ -3356,17 +3231,6 @@ class StorageApi {
               else resolve(payload)
             })
         })
-        // fetch(this.server + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + h.verification, { method: 'GET' })
-        //   .then((response: Response) => {
-        //     if (!response.ok) reject(new Error('Network response was not OK'))
-        //     // console.log(response)
-        //     return response.arrayBuffer()
-        //   })
-        //   .then((payload: ArrayBuffer) => {
-        //     resolve(this.#processData(payload, h))
-        //   })
-        // }
-        // })
       } catch (error) {
         reject(error)
       }
@@ -3391,19 +3255,6 @@ class StorageApi {
       _sb_assert(control_msg.verificationToken, "retrieveImage(): verificationToken missing (?)")
       _sb_assert(control_msg.id, "retrieveImage(): id missing (?)")
 
-      // const obj: SBObjectHandle = {
-      //   [SB_OBJECT_HANDLE_SYMBOL]: true,
-      //   version: '1',
-      //   type: type,
-      //   id: control_msg.id!,
-      //   key: key!,
-      //   verification: new Promise((res, rej) => {
-      //     if (control_msg.verificationToken) res(control_msg.verificationToken)
-      //     else
-      //       rej("retrieveImage(): verificationToken missing (?)")
-      //   })
-      // }
-
       const obj: SBObjectHandle = {
         type: type,
         id: control_msg.id!,
@@ -3426,7 +3277,6 @@ class StorageApi {
   /* Unused Currently
   migrateStorage() {
   }
-
   fetchDataMigration() {
   }
    */
@@ -3522,13 +3372,8 @@ class ChannelApi {
           .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.#channel.keys)))
           .then((decryptedMessageArray) => {
             let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-            this.#cursor = lastMessage?._id || lastMessage?.id || '';
-            if (DBG) {
-              console.log("getOldMessages() is returning:");
-              console.log(decryptedMessageArray);
-              console.log("cursor is now:")
-              console.log(this.#cursor);
-            }
+            if (lastMessage)
+              this.#cursor = lastMessage._id || lastMessage.id || '';
             resolve(decryptedMessageArray)
           })
       }).catch((e: Error) => {
@@ -3544,9 +3389,7 @@ class ChannelApi {
     if (DBG) console.log(path)
     const method = body ? 'POST' : 'GET'
     return new Promise(async (resolve, reject) => {
-      console.warn(this.#channel.ready)
       await (this.#channel.ready)
-      // console.log(this.#channel)
       let authString = '';
       const token_data: string = new Date().getTime().toString()
       authString = token_data + '.' + await sbCrypto.sign(this.#channel.channelSignKey, token_data)
@@ -3562,15 +3405,12 @@ class ChannelApi {
       await (this.#channel.ready)
       SBFetch(this.#channelServer + this.#channel.channelId + path, init)
         .then((response: Response) => {
-          if (!response.ok)
-            reject(new Error('Network response was not OK'))
+          if (!response.ok) reject(new Error('Network response was not OK'))
           return response.json()
         })
         .then((data: Dictionary<any>) => {
-          if (data.error) {
-            reject(new Error(data.error))
-          }
-          resolve(data)
+          if (data.error) reject(new Error(data.error))
+          else resolve(data)
         })
         .catch((e: Error) => { reject("ChannelApi Error [1]: " + WrapError(e)) })
     })
@@ -3954,20 +3794,6 @@ class Snackabra {
   get crypto(): SBCrypto {
     return sbCrypto;
   }
-
-  // get identity(): Identity {
-  //   // return this.#identity;
-  //   return this.#defaultIdentity
-  // }
-
-  // set identity(identity: Identity) {
-  //   this.#defaultIdentity = identity
-  // }
-
-  // // These are just helper methods, we can still access from SB.channel.socket.send externally
-  // sendMessage(message: SBMessage) {
-  //   this.channel.send(message);
-  // }
 
   // // see comments above re: SBFile:
   // /**

@@ -9,10 +9,22 @@ project, please feel free to reach out to us at <snackabra@gmail.com> or
 Snackabra is licensed under GPL-v3, see [GPL v3 license
 file](LICENSE.md) for details.
 
+## About
+
+For documentation see:
+
+* <https://snackabra.readthedocs.io> (latest)
+* <https://snackabra.io> (archive of version 0.4.3)
+
+Source and related projects: <https://github.com/snackabra>
+
 ## Build
 
 ```bash
+# first time:
 yarn install
+
+# build and watch:
 yarn start
 ```
 
@@ -44,7 +56,7 @@ Dynamic import of latest version from unpkg:
   </script>
 ```
 
-You can also access the loaded functions globally, e.g. ``window.Snackabra.str2ab('hello')``.
+You can also access the loaded functions globally, e.g. ``window.SB.str2ab('hello')``.
 
 ## Usage in Node
 
@@ -74,31 +86,21 @@ import {str2ab} from 'snackabra';
 console.log(str2ab('hello'));
 ```
 
-## Development
-
-First time around, remember to:
+## Development and Publishing
 
 ```bash
-# install devDependencies
+# first time around remember to:
 yarn install
-```
 
-Build components (and install dependencies):
-
-```bash
+# build components
 yarn pack
-```
 
-## Publishing
+# if needed
+yarn login
 
-If you have write/admin access to ``npmjs``:
-
-```bash
-yarn login  # if needed
+# if you have credentials
 yarn publish
 ```
-
-Remember to bump the version number in ![package.json](package.json) before publishing.
 
 Package should get updated at <https://www.npmjs.com/package/snackabra>
 

@@ -471,9 +471,8 @@ export function assemblePayload(data) {
         const metadataBuffer = encoder.encode(JSON.stringify(metadata));
         const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
         let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
-        for (const key in data) {
+        for (const key in data)
             payload = _appendBuffer(new Uint8Array(payload), data[key]);
-        }
         return payload;
     }
     catch (e) {
@@ -787,16 +786,14 @@ class SBCrypto {
         return new TextDecoder('utf-8').decode(buffer);
     }
     compareKeys(key1, key2) {
-        if (key1 != null && key2 != null && typeof key1 === 'object' && typeof key2 === 'object') {
+        if (key1 != null && key2 != null && typeof key1 === 'object' && typeof key2 === 'object')
             return key1['x'] === key2['x'] && key1['y'] === key2['y'];
-        }
         return false;
     }
     lookupKey(key, array) {
-        for (let i = 0; i < array.length; i++) {
+        for (let i = 0; i < array.length; i++)
             if (sbCrypto.compareKeys(key, array[i]))
                 return i;
-        }
         return -1;
     }
     async channelKeyStringsToCryptoKeys(keyStrings) {
@@ -1045,13 +1042,13 @@ class Channel extends SB384 {
                 await this.sb384Ready;
                 this.#channelId = this.ownerChannelId;
             }
-            new Promise(f => {
+            new Promise(channelKeysResolve => {
+                const f = channelKeysResolve;
                 this.#channelKeysResolve = f;
             })
                 .then(() => {
                 this.#channelKeysLoaded = true;
                 this.#ChannelReadyFlag = true;
-                console.warn('Channel.ready: channel keys loaded');
                 this.ready = Promise.resolve(this);
                 resolve(this);
             });
@@ -1223,7 +1220,6 @@ export class ChannelSocket extends Channel {
             }
         }
         else if (data.nack) {
-            console.error('Nack received');
             this.#ws.closed = true;
         }
         else if (typeof this.#onMessage === 'function') {
@@ -1283,22 +1279,6 @@ export class ChannelSocket extends Channel {
         else {
             _sb_exception('ChannelSocket', 'received message but there is no handler');
         }
-    }
-    checkServerStatus(url, timeout, callback) {
-        const xhr = new XMLHttpRequest();
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE) {
-                if (xhr.status === 200) {
-                    callback(true);
-                }
-                else {
-                    callback(false);
-                }
-            }
-        };
-        xhr.open('HEAD', url);
-        xhr.timeout = timeout;
-        xhr.send();
     }
     #readyPromise() {
         const url = this.#ws.url;
@@ -1381,7 +1361,7 @@ export class ChannelSocket extends Channel {
                     this.#ws.websocket.addEventListener('message', (e) => {
                         this.#processMessage(e.data);
                     });
-                    _sb_assert(this.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)');
+                    _sb_assert(super.readyFlag, 'ChannelSocket.readyPromise(): parent channel not ready (?)');
                     this.#ChannelSocketReadyFlag = true;
                     if (DBG)
                         console.log("++++++++ readyPromise() all done - resolving!");
@@ -2012,13 +1992,8 @@ class ChannelApi {
                     .map((v) => deCryptChannelMessage(v, messages[v].encrypted_contents, this.#channel.keys)))
                     .then((decryptedMessageArray) => {
                     let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-                    this.#cursor = lastMessage?._id || lastMessage?.id || '';
-                    if (DBG) {
-                        console.log("getOldMessages() is returning:");
-                        console.log(decryptedMessageArray);
-                        console.log("cursor is now:");
-                        console.log(this.#cursor);
-                    }
+                    if (lastMessage)
+                        this.#cursor = lastMessage._id || lastMessage.id || '';
                     resolve(decryptedMessageArray);
                 });
             }).catch((e) => {
@@ -2031,7 +2006,6 @@ class ChannelApi {
             console.log(path);
         const method = body ? 'POST' : 'GET';
         return new Promise(async (resolve, reject) => {
-            console.warn(this.#channel.ready);
             await (this.#channel.ready);
             let authString = '';
             const token_data = new Date().getTime().toString();
@@ -2053,10 +2027,10 @@ class ChannelApi {
                 return response.json();
             })
                 .then((data) => {
-                if (data.error) {
+                if (data.error)
                     reject(new Error(data.error));
-                }
-                resolve(data);
+                else
+                    resolve(data);
             })
                 .catch((e) => { reject("ChannelApi Error [1]: " + WrapError(e)); });
         });

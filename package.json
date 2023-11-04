@@ -1,8 +1,7 @@
 {
   "name": "snackabra",
-  "//": "Pre-relase of 0.6.0 (version numbers will be 0.5.x)",
-  "version": "0.6.5",
-  "description": "Snackabra Core Library 0.5.x/0.6.0 ('jslib')",
+  "version": "1.0.3",
+  "description": "Snackabra Core Library ('jslib')",
   "main": "dist/snackabra.min.js",
   "types": "dist/snackabra.d.ts",
   "scripts": {
@@ -24,9 +23,10 @@
     "messaging",
     "photo",
     "file",
+    "storage",
     "share"
   ],
-  "author": "384, Inc",
+  "author": "Magnusson Institute",
   "license": "GPL-3.0-only",
   "bugs": {
     "url": "https://github.com/snackabra/snackabra-jslib/issues"
