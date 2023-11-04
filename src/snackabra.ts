@@ -33,7 +33,8 @@
 // will be labeled '1.1.25' upon publishing
 
 // working on 1.2.0
-const version = '1.2.3 (pre) build 01'
+// const version = '1.2.3 (pre) build 01'
+const version = '2.0.0 (pre) build 01'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -123,9 +124,10 @@ interface ChannelData {
 }
 
 interface ImageMetaData {
+  imgObjVersion?: SBObjectHandleVersions, // if empty is type '1', new objects need to be '2'
   imageId?: string,
-  previewId?: string,
   imageKey?: string,
+  previewId?: string,
   previewKey?: string,
   // nonce and salt not needed, but if it's there, we do extra checks
   previewNonce?: string,
@@ -342,6 +344,7 @@ export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encryp
  */
 interface SBMessageContents {
   contents: string,
+  imgObjVersion?: SBObjectHandleVersions, // if empty is type '1', new objects need to be '2'
   image: string,
   imageMetaData?: ImageMetaData,
   image_sign?: string,
@@ -373,6 +376,8 @@ interface SBMessageContents {
  * matching object type.
  */
 export type SBObjectType = 'f' | 'p' | 'b' | 't'
+export type SBObjectHandleVersions = '1' | '2'
+const currentSBOHVersion: SBObjectHandleVersions = '2'
 
 // TODO: we haven't modularized jslib yet, when we do this
 //       will be superfluous
@@ -381,18 +386,15 @@ export namespace Interfaces {
   // this exists as both interface and class, but the class
   // is mostly used internally, and the interface is what
   // you'll use to communicate with the API
-  export interface SBObjectHandle {
+  export interface SBObjectHandle_base {
     [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
-    version?: '2',
-    type: SBObjectType,
-    // for long-term storage you only need these:
-    // id: string, key: string, // b64 encoding (being deprecated)
-    id32?: Base62Encoded, key32?: Base62Encoded, // array32 format of key (new default)
+    version?: SBObjectHandleVersions,
+    type?: SBObjectType,
     // and currently you also need to keep track of this,
     // but you can start sharing / communicating the
     // object before it's resolved: among other things it
     // serves as a 'write-through' verification
-    verification: Promise<string> | string,
+    verification?: Promise<string> | string,
     // you'll need these in case you want to track an object
     // across future (storage) servers, but as long as you
     // are within the same SB servers you can request them.
@@ -408,11 +410,33 @@ export namespace Interfaces {
     actualSize?: number, // optional: actual size of underlying file, if any
     savedSize?: number, // optional: size of shard (may be different from actualSize)
   }
+
+  // for long-term storage you only need these:
+  //   id: string, key: string, // b64 encoding (being deprecated)
+  //   id32?: Base62Encoded, key32?: Base62Encoded, // array32 format of key (new default)
+
+  export interface SBObjectHandle_v1 extends SBObjectHandle_base {
+    version: '1',
+    id: string, // in v1 these are base64 encoded
+    key: string,
+    // some handles were created with version 1 and id32/key32 as well
+    id32?: Base62Encoded,
+    key32?: Base62Encoded,
+  }
+
+  export interface SBObjectHandle_v2 extends SBObjectHandle_base {
+    version: '2',
+    // in v2 these are base62 encoded only
+    id: Base62Encoded,
+    key: Base62Encoded,
+  }
+
+  export type SBObjectHandle = SBObjectHandle_v1 | SBObjectHandle_v2
 }
 
 export interface SBObjectMetadata {
   [SB_OBJECT_HANDLE_SYMBOL]: boolean;
-  version: '2';
+  version: SBObjectHandleVersions;
   type: SBObjectType;
   id32: string;
   key32: string;
@@ -497,8 +521,18 @@ export class MessageBus {
 function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   // console.log("SBFetch()"); console.log(input); console.log(init);
   // if (navigator.onLine === false) console.info("Note: you are offline, according to the browser") /* return Promise.reject(new Error("you are offline")) */
-  if (init) return fetch(input, init)
-  else return fetch(input, { method: 'GET' /*, credentials: 'include' */ })
+  // check if the string "a32." is in the URL, if so, we need to throw an error
+  // if (init) return fetch(input, init)
+  // else return fetch(input, { method: 'GET' /*, credentials: 'include' */ })
+
+  // Extract the URL as a string
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  // Check for the substring "a32."  - this is for transitioning code, a32 internal coding should not "leak"
+  if (url.includes("a32.")) {
+    return Promise.reject(new Error("URL contains forbidden substring 'a32.'"));
+  }
+  // Perform the fetch operation
+  return fetch(input, init ?? { method: 'GET' });
 }
 
 /** @private */
@@ -678,6 +712,7 @@ function _assertBase64(base64: string) {
   const z = b64_regex.exec(base64)
   if (z) return (z[0] === base64); else return false;
 }
+const isBase64Encoded = _assertBase64 // alias
 
 // refactor helper - replace encodeURIComponent everywhere
 /** @private */
@@ -685,6 +720,13 @@ function ensureSafe(base64: string): string {
   const z = b64_regex.exec(base64)
   _sb_assert((z) && (z[0] === base64), 'ensureSafe() tripped: something is not URI safe')
   return base64
+}
+
+// this also functions as a place to identify "internal" from
+// "external" uses of A32 format (eg users of the library should
+// never see the 'a32.' prefix directly)
+function stripA32(value: string | Base62Encoded): string {
+  return value.replace(/^a32\./, '')
 }
 
 /*
@@ -919,7 +961,7 @@ type Base62Encoded = string & { _brand?: 'Base62Encoded' };
  * @param s base62 encoded string
  * @returns ArrayBuffer32
  */
-export function base62ToArrayBuffer32(s: string): ArrayBuffer {
+export function base62ToArrayBuffer32(s: Base62Encoded ): ArrayBuffer {
   if (!base62Regex.test(s)) throw new Error(`base62ToArrayBuffer32: string must match: ${base62Regex}`);
   s = s.slice(4); // remove the 'a32.' prefix
   let n = BigInt(0);
@@ -940,7 +982,7 @@ export function base62ToArrayBuffer32(s: string): ArrayBuffer {
  * @param buffer ArrayBuffer32
  * @returns base62 encoded string
  */
-export function arrayBuffer32ToBase62(buffer: ArrayBuffer): string {
+export function arrayBuffer32ToBase62(buffer: ArrayBuffer): Base62Encoded {
   if (buffer.byteLength !== 32)
     throw new Error('arrayBuffer32ToBase62: buffer must be exactly 32 bytes (256 bits).');
   let result = '';
@@ -959,7 +1001,7 @@ export function arrayBuffer32ToBase62(buffer: ArrayBuffer): string {
  * 
  * @throws Error if the string is not a valid base62 encoded string
  */
-export function base62ToBase64(s: string): string {
+export function base62ToBase64(s: Base62Encoded): string {
   return arrayBufferToBase64(base62ToArrayBuffer32(s));
 }
 
@@ -971,12 +1013,12 @@ export function base62ToBase64(s: string): string {
  * 
  * @throws Error if the string is not a valid base64 encoded string
  */
-export function base64ToBase62(s: string): string {
+export function base64ToBase62(s: string): Base62Encoded {
   return arrayBuffer32ToBase62(base64ToArrayBuffer(s));
 }
 
 // and a type guard
-export function isBase62Encoded(value: string): value is Base62Encoded {
+export function isBase62Encoded(value: string | Base62Encoded): value is Base62Encoded {
   return base62Regex.test(value);
 }
 
@@ -995,82 +1037,82 @@ function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | 
   return tmp.buffer;
 }
 
-/**
- * Returns random number
- *
- * @return {int} integer 0..255
- *
- */
-export function simpleRand256() {
-  return crypto.getRandomValues(new Uint8Array(1))[0];
-}
+// /**
+//  * Returns random number
+//  *
+//  * @return {int} integer 0..255
+//  *
+//  */
+// export function simpleRand256() {
+//   return crypto.getRandomValues(new Uint8Array(1))[0];
+// }
 
-const base32mi = '0123456789abcdefyhEjkLmNHpFrRTUW';
+// const base32mi = '0123456789abcdefyhEjkLmNHpFrRTUW';
 
-/**
- * Returns a random string in requested encoding
- *
- * @param {n} number of characters
- * @param {code} encoding, supported types: 'base32mi'
- * @return {string} random string
- *
- * base32mi: ``0123456789abcdefyhEjkLmNHpFrRTUW``
- */
-export function simpleRandomString(n: number, code: string): string {
-  if (code == 'base32mi') {
-    // yeah, of course we need to add base64 etc
-    const z = crypto.getRandomValues(new Uint8Array(n));
-    let r = '';
-    for (let i = 0; i < n; i++) r += base32mi[z[i] & 31];
-    return r;
-  }
-  _sb_exception('simpleRandomString', 'code ' + code + ' not supported');
-  return '';
-}
+// /**
+//  * Returns a random string in requested encoding
+//  *
+//  * @param {n} number of characters
+//  * @param {code} encoding, supported types: 'base32mi'
+//  * @return {string} random string
+//  *
+//  * base32mi: ``0123456789abcdefyhEjkLmNHpFrRTUW``
+//  */
+// export function simpleRandomString(n: number, code: string): string {
+//   if (code == 'base32mi') {
+//     // yeah, of course we need to add base64 etc
+//     const z = crypto.getRandomValues(new Uint8Array(n));
+//     let r = '';
+//     for (let i = 0; i < n; i++) r += base32mi[z[i] & 31];
+//     return r;
+//   }
+//   _sb_exception('simpleRandomString', 'code ' + code + ' not supported');
+//   return '';
+// }
 
-/**
- * This function disambiguates strings that are known to be 'base32mi' type.
- * Below is the list of base32 characters, and the disambiguation table.
- * base32mi is designed to be human-friendly, so this function can be 
- * safely called anywhere you have human input - including as an 
- * event on an input field that immediately makes any correction. 
- * 
- * You can think of the translation either in terms of many-to-one
- * (all entered characters that map to a specific base32mi character),
- * or as a one-to-one correspondence (where '.' means 'no change').
- *
- * @example
- *
- *     'base32mi': '0123456789abcdefyhEjkLmNHpFrRTUW'
- * 
- *     Disambiguation transformations:
- * 
- *     [OoQD] -> '0'
- *     [lIiJ] -> '1'
- *     [Zz] -> '2'
- *     [A] -> '4'
- *     [Ss] -> '5'
- *     [G] -> '6'
- *     [t] -> '7'
- *     [B] -> '8'
- *     [gq] -> '9'
- *     [C] -> 'c'
- *     [Y] -> 'y'
- *     [KxX] -> 'k'
- *     [M] -> 'm'
- *     [n] -> 'N'
- *     [P] -> 'p'
- *     [uvV] -> 'U'
- *     [w] -> 'W'
- *
- *     0123456789abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVXYZ
- *     ................9.1..1.N0.9.57UUk.248c0EF6.11kLm.0p0.5..Uky2
- *
- */
-export function cleanBase32mi(s: string) {
-  // this of course is not the most efficient
-  return s.replace(/[OoQD]/g, '0').replace(/[lIiJ]/g, '1').replace(/[Zz]/g, '2').replace(/[A]/g, '4').replace(/[Ss]/g, '5').replace(/[G]/g, '6').replace(/[t]/g, '7').replace(/[B]/g, '8').replace(/[gq]/g, '9').replace(/[C]/g, 'c').replace(/[Y]/g, 'y').replace(/[KxX]/g, 'k').replace(/[M]/g, 'm').replace(/[n]/g, 'N').replace(/[P]/g, 'p').replace(/[uvV]/g, 'U').replace(/[w]/g, 'w');
-}
+// /**
+//  * This function disambiguates strings that are known to be 'base32mi' type.
+//  * Below is the list of base32 characters, and the disambiguation table.
+//  * base32mi is designed to be human-friendly, so this function can be 
+//  * safely called anywhere you have human input - including as an 
+//  * event on an input field that immediately makes any correction. 
+//  * 
+//  * You can think of the translation either in terms of many-to-one
+//  * (all entered characters that map to a specific base32mi character),
+//  * or as a one-to-one correspondence (where '.' means 'no change').
+//  *
+//  * @example
+//  *
+//  *     'base32mi': '0123456789abcdefyhEjkLmNHpFrRTUW'
+//  * 
+//  *     Disambiguation transformations:
+//  * 
+//  *     [OoQD] -> '0'
+//  *     [lIiJ] -> '1'
+//  *     [Zz] -> '2'
+//  *     [A] -> '4'
+//  *     [Ss] -> '5'
+//  *     [G] -> '6'
+//  *     [t] -> '7'
+//  *     [B] -> '8'
+//  *     [gq] -> '9'
+//  *     [C] -> 'c'
+//  *     [Y] -> 'y'
+//  *     [KxX] -> 'k'
+//  *     [M] -> 'm'
+//  *     [n] -> 'N'
+//  *     [P] -> 'p'
+//  *     [uvV] -> 'U'
+//  *     [w] -> 'W'
+//  *
+//  *     0123456789abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVXYZ
+//  *     ................9.1..1.N0.9.57UUk.248c0EF6.11kLm.0p0.5..Uky2
+//  *
+//  */
+// export function cleanBase32mi(s: string) {
+//   // this of course is not the most efficient
+//   return s.replace(/[OoQD]/g, '0').replace(/[lIiJ]/g, '1').replace(/[Zz]/g, '2').replace(/[A]/g, '4').replace(/[Ss]/g, '5').replace(/[G]/g, '6').replace(/[t]/g, '7').replace(/[B]/g, '8').replace(/[gq]/g, '9').replace(/[C]/g, 'c').replace(/[Y]/g, 'y').replace(/[KxX]/g, 'k').replace(/[M]/g, 'm').replace(/[n]/g, 'N').replace(/[P]/g, 'p').replace(/[uvV]/g, 'U').replace(/[w]/g, 'w');
+// }
 
 /**
  * Partition
@@ -1635,7 +1677,7 @@ class SBCrypto {  /*************************************************************
    * @param buf blob of data to be stored
    *
    */
-  generateIdKey(buf: ArrayBuffer): Promise<{ id32: string, key32: string }> {
+  generateIdKey(buf: ArrayBuffer): Promise<{ id32: Base62Encoded, key32: Base62Encoded }> {
     return new Promise((resolve, reject) => {
       try {
         crypto.subtle.digest('SHA-512', buf).then((digest) => {
@@ -2430,6 +2472,7 @@ class SBMessage {
           this.contents.sign = values[0]
           this.contents.image_sign = values[1]
           this.contents.imageMetadata_sign = values[2]
+          this.contents.imgObjVersion = '2' // default for anything new
           // NOTE: mtg:adding this breaks messages... but I dont understand why
           // const isVerfied = await this.channel.api.postPubKey(this.channel.exportable_pubKey!)
           // console.log('here',isVerfied)
@@ -2546,8 +2589,11 @@ abstract class Channel extends SB384 {
 
     this.channelReady = new Promise<Channel>(async (resolve, reject) => {
       await this.sb384Ready
+      if (!this.#channelId) {
+        reject("Channel(): no channel ID provided")
+      }
       // xTODO: check all known servers for this channel
-      SBFetch(this.#sbServer.channel_server + '/api/room/' + this.#channelId + '/getChannelKeys',
+      SBFetch(this.#sbServer.channel_server + '/api/room/' + stripA32(this.#channelId!) + '/getChannelKeys',
         {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
@@ -2634,6 +2680,9 @@ abstract class Channel extends SB384 {
   getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
     // xTODO: convert to new API call model
     return new Promise(async (resolve, reject) => {
+      if (!this.channelId) {
+        reject("Channel.getOldMessages: no channel ID (?)")
+      }
       // make sure channel is ready
       if (!this.#ChannelReadyFlag) {
         if (DBG) console.log("Channel.getOldMessages: channel not ready (we will wait)")
@@ -2645,7 +2694,7 @@ abstract class Channel extends SB384 {
       let cursorOption = '';
       if (paginate)
         cursorOption = '&cursor=' + this.#cursor;
-      SBFetch(this.#channelServer + this.channelId + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
+      SBFetch(this.#channelServer + stripA32(this.channelId!) + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
         method: 'GET',
       }).then(async (response: Response) => {
         if (!response.ok) reject(new Error('Network response was not OK'));
@@ -2683,6 +2732,9 @@ abstract class Channel extends SB384 {
     }
     const method = body ? 'POST' : 'GET'
     return new Promise(async (resolve, reject) => {
+      if (!this.channelId) {
+        reject("ChannelApi.#callApi: no channel ID (?)")
+      }
       await (this.ready)
       let authString = '';
       const token_data: string = new Date().getTime().toString()
@@ -2697,7 +2749,7 @@ abstract class Channel extends SB384 {
       if (body)
         init.body = JSON.stringify(body);
       await (this.ready)
-      SBFetch(this.#channelServer + this.channelId + path, init)
+      SBFetch(this.#channelServer + stripA32(this.channelId!) + path, init)
         .then(async (response: Response) => {
           const retValue = await response.json()
           if ((!response.ok) || (retValue.error)) {
@@ -3439,14 +3491,15 @@ async function deCryptChannelMessage(m00: string, m01: EncryptedContents, keys: 
  * @property {number} [savedSize] - optional: size of shard (may be different from actualSize)
  * 
  */
-export class SBObjectHandle implements SBObjectHandle {
-  version?= '1';
+export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
+  version: SBObjectHandleVersions = currentSBOHVersion;
   #_type: SBObjectType = 'b';
-  #id64?: string;
-  #key64?: string;
-  #id32?: Base62Encoded | undefined;
-  #key32?: Base62Encoded | undefined;
-  #verification?: Promise<string> | string;
+
+  // internal: these are 32-byte binary values
+  #id_binary?: ArrayBuffer;
+  #key_binary?: ArrayBuffer;
+
+  // verification?: Promise<string> | string;
   shardServer?: string;
   iv?: Uint8Array | string;
   salt?: Uint8Array | string;
@@ -3459,20 +3512,40 @@ export class SBObjectHandle implements SBObjectHandle {
   actualSize?: number;
   savedSize?: number;
 
-  constructor(options: SBObjectHandle) {
+  constructor(options: Interfaces.SBObjectHandle) {
     const {
-      version, type, /* id, key, */ id32, key32, verification, iv, salt, fileName, dateAndTime,
+      version, type, id, key, verification, iv, salt, fileName, dateAndTime,
       shardServer, fileType, lastModified, actualSize, savedSize,
     } = options;
 
     if (type) this.#_type = type
-    if (version) this.version = version
 
-    // if (id) this.id = id;
-    // if (key) this.key = key;
-    if (id32) { this.id32 = id32; this.id64 = base62ToBase64(id32); }
-    if (key32) { this.key32 = key32; this.key64 = base62ToBase64(key32); }
-    if (verification) this.#verification = verification;
+
+    if (version) {
+      this.version = version
+    } else {
+      // if no version is specified, we try to guess based on BOTH key and id
+      // there is a 6.5% chance that we will guess wrong if it's b62 but which
+      // happens to base b62 tests
+      if ((key) && (id)) {
+        if (isBase62Encoded(key) && isBase62Encoded(id)) {
+          this.version = '2'
+        } else if (isBase64Encoded(key) && isBase64Encoded(id)) {
+          this.version = '1'
+        } else {
+          throw new Error('Unable to determine version from key and id')
+        }
+      } else {
+        // if neither key nor id is specified, we assume version 2
+        this.version = '2'
+      }
+
+    }
+
+    if (id) this.id = id; // use setter
+    if (key) this.key = key; // use setter
+
+    if (verification) this.verification = verification;
 
     this.iv = iv;
     this.salt = salt;
@@ -3483,34 +3556,140 @@ export class SBObjectHandle implements SBObjectHandle {
     this.lastModified = lastModified;
     this.actualSize = actualSize;
     this.savedSize = savedSize;
-
   }
 
-  set id64(value: string) { _assertBase64(value); this.#id64 = value; this.#id32 = base64ToBase62(value); }
-  get id64(): string { _sb_assert(this.#id64, 'object handle identifier is undefined'); return this.#id64!; }
-
-  set key64(value: string) { _assertBase64(value); this.#key64 = value; this.#key32 = base64ToBase62(value); }
-  get key64(): string { _sb_assert(this.#key64, 'object handle identifier is undefined'); return this.#key64!; }
-
-  set id32(value: Base62Encoded) {
-    if (!isBase62Encoded(value)) throw new Error('Invalid base62 encoded ID');
-    this.#id32 = value;
-    this.#id64 = base62ToBase64(value);
+  set id_binary(value: ArrayBuffer) {
+    if (!value) throw new Error('Invalid id_binary');
+    // make sure it is exactly 32 bytes
+    if (value.byteLength !== 32) throw new Error('Invalid id_binary length');
+    this.#id_binary = value;
+    // Dynamically define the getter for id64 when idBinary is set
+    Object.defineProperty(this, 'id64', {
+      get: () => {
+        return arrayBufferToBase64(this.#id_binary!);
+      },
+      enumerable: false,  // Or false if you don't want it to be serialized
+      configurable: false // Allows this property to be redefined or deleted
+    });
+    // same in base62
+    Object.defineProperty(this, 'id32', {
+      get: () => {
+        return arrayBuffer32ToBase62(this.#id_binary!);
+      },
+      enumerable: false,  // Or false if you don't want it to be serialized
+      configurable: false // Allows this property to be redefined or deleted
+    });
   }
 
-  set key32(value: Base62Encoded) {
-    if (!isBase62Encoded(value)) throw new Error('Invalid base62 encoded Key');
-    this.#key32 = value;
-    this.#key64 = base62ToBase64(value);
+  // same as above for key_binary
+  set key_binary(value: ArrayBuffer) {
+    if (!value) throw new Error('Invalid key_binary');
+    // make sure it is exactly 32 bytes
+    if (value.byteLength !== 32) throw new Error('Invalid key_binary length');
+    this.#key_binary = value;
+    // Dynamically define the getter for key64 when keyBinary is set
+    Object.defineProperty(this, 'key64', {
+      get: () => {
+        return arrayBufferToBase64(this.#key_binary!);
+      },
+      enumerable: false,  // Or false if you don't want it to be serialized
+      configurable: false // Allows this property to be redefined or deleted
+    });
+    // same in base62
+    Object.defineProperty(this, 'key32', {
+      get: () => {
+        return arrayBuffer32ToBase62(this.#key_binary!);
+      },
+      enumerable: false,  // Or false if you don't want it to be serialized
+      configurable: false // Allows this property to be redefined or deleted
+    });
   }
 
-  get id32(): Base62Encoded { _sb_assert(this.#id32, 'object handle id (32) is undefined'); return this.#id32!; }
-  get key32(): Base62Encoded { _sb_assert(this.#key32, 'object handle key (32) is undefined'); return this.#key32!; }
+  set id(value: ArrayBuffer | string | Base62Encoded) {
+    if (typeof value === 'string') {
+      if (this.version === '1') {
+        if (isBase64Encoded(value)) {
+          throw new Error('Requested version 1, but id is not b64');
+        } else {
+          this.#id_binary = base64ToArrayBuffer(value);
+        }
+      } else if (this.version === '2') {
+        if (isBase62Encoded(value)) {
+          this.#id_binary = base62ToArrayBuffer32(value);
+        } else {
+          throw new Error('Requested version 2, but id is not b62');
+        }
+      }
+    } else if (value instanceof ArrayBuffer) {
+      // assert it is 32 bytes
+      if (value.byteLength !== 32) throw new Error('Invalid ID length');
+      this.#id_binary = value;
+    } else {
+      throw new Error('Invalid ID type');
+    }
+  }
 
-  set verification(value: Promise<string> | string) { this.#verification = value; /* this.#setId32(); */ }
+  // same as above but for key
+  set key(value: ArrayBuffer | string | Base62Encoded) {
+    if (typeof value === 'string') {
+      if (this.version === '1') {
+        if (isBase64Encoded(value)) {
+          throw new Error('Requested version 1, but key is not b64');
+        } else {
+          this.#key_binary = base64ToArrayBuffer(value);
+        }
+      } else if (this.version === '2') {
+        if (isBase62Encoded(value)) {
+          this.#key_binary = base62ToArrayBuffer32(value);
+        } else {
+          throw new Error('Requested version 2, but key is not b62');
+        }
+      }
+    } else if (value instanceof ArrayBuffer) {
+      // assert it is 32 bytes
+      if (value.byteLength !== 32) throw new Error('Invalid key length');
+      this.#key_binary = value;
+    } else {
+      throw new Error('Invalid key type');
+    }
+  }
+
+  // the getter for id returns based on what version we are
+  // we stripA32() because this is also used by JSON.stringify()
+  // (unless we want to write a custom serializer ...)
+  get id(): string {
+    _sb_assert(this.#id_binary, 'object handle id is undefined');
+    if (this.version === '1') {
+      return arrayBufferToBase64(this.#id_binary!);
+    } else if (this.version === '2') {
+      return stripA32(arrayBuffer32ToBase62(this.#id_binary!));
+    } else {
+      throw new Error('Invalid or missing version (internal error, should not happen)');
+    }
+  }
+
+  // same as above but for key
+  get key(): string {
+    _sb_assert(this.#key_binary, 'object handle key is undefined');
+    if (this.version === '1') {
+      return arrayBufferToBase64(this.#key_binary!);
+    } else if (this.version === '2') {
+      return stripA32(arrayBuffer32ToBase62(this.#key_binary!));
+    } else {
+      throw new Error('Invalid or missing version (internal error, should not happen)');
+    }
+  }
+
+  // convenience getters - these are placeholders for type definitions
+  get id64(): string { throw new Error('Invalid id_binary'); }
+  get id32(): Base62Encoded { throw new Error('Invalid id_binary'); }
+  get key64(): string { throw new Error('Invalid key_binary');  }
+  get key32(): Base62Encoded { throw new Error('Invalid key_binary'); }
+
+  set verification(value: Promise<string> | string) { this.verification = value; /* this.#setId32(); */ }
   get verification(): Promise<string> | string {
-    _sb_assert(this.#verification, 'object handle verification is undefined');
-    return this.#verification!;
+    _sb_assert(this.verification, 'object handle verification is undefined');
+    return this.verification!;
   }
 
   get type(): SBObjectType { return this.#_type; }
@@ -3587,7 +3766,7 @@ class StorageApi {
   #getObjectKey(fileHash: Base62Encoded, _salt: ArrayBuffer): Promise<CryptoKey> {
     return new Promise((resolve, reject) => {
       try {
-        sbCrypto.importKey('raw', base64ToArrayBuffer(decodeURIComponent(fileHash)),
+        sbCrypto.importKey('raw', base62ToArrayBuffer32(fileHash) /* base64ToArrayBuffer(decodeURIComponent(fileHash))*/,
           'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
             // @psm TODO - Support deriving from PBKDF2 in sbCrypto.deriveKey function
             crypto.subtle.deriveKey({
@@ -3609,9 +3788,9 @@ class StorageApi {
   /** @private
    * get "permission" to store in the form of a token
    */
-  #_allocateObject(image_id: string, type: SBObjectType): Promise<{ salt: Uint8Array, iv: Uint8Array }> {
+  #_allocateObject(image_id: Base62Encoded, type: SBObjectType): Promise<{ salt: Uint8Array, iv: Uint8Array }> {
     return new Promise((resolve, reject) => {
-      SBFetch(this.server + "/storeRequest?name=" + image_id + "&type=" + type)
+      SBFetch(this.server + "/storeRequest?name=" + stripA32(image_id) + "&type=" + type)
         .then((r) => { /* console.log('got storage reply:'); console.log(r); */ return r.arrayBuffer(); })
         .then((b) => {
           const par = extractPayload(b)
@@ -3627,20 +3806,18 @@ class StorageApi {
   /** @private */
   #_storeObject(
     image: ArrayBuffer,
-    image_id: string,
-    keyData: string,
+    image_id: Base62Encoded,
+    keyData: Base62Encoded,
     type: SBObjectType,
     roomId: SBChannelId,
     iv: Uint8Array,
     salt: Uint8Array
   ): Promise<string> {
-    // this started it's life as storeImage() ...
-    // export async function storeImage(image, image_id, keyData, type, roomId)
     return new Promise((resolve, reject) => {
       this.#getObjectKey(keyData, salt).then((key) => {
         sbCrypto.encrypt(image, key, iv, 'arrayBuffer').then((data) => {
           // const storageTokenReq = await(await
-          SBFetch(this.channelServer + roomId + '/storageRequest?size=' + data.byteLength)
+          SBFetch(this.channelServer + stripA32(roomId) + '/storageRequest?size=' + data.byteLength)
             .then((r) => r.json())
             .then((storageTokenReq) => {
               if (storageTokenReq.hasOwnProperty('error')) reject(`storage token request error (${storageTokenReq.error})`)
@@ -3648,7 +3825,7 @@ class StorageApi {
               this.storeObject(type, image_id, iv, salt, storageToken, data)
                 .then((resp_json) => {
                   if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
-                  if (resp_json.image_id != image_id) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
+                  if (resp_json.image_id != stripA32(image_id)) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
                   resolve(resp_json.verification_token)
                 })
                 .catch((e: any) => {
@@ -3669,7 +3846,7 @@ class StorageApi {
    */
   storeObject(
     type: string,
-    fileId: string,
+    fileId: Base62Encoded,
     iv: Uint8Array,
     salt: Uint8Array,
     storageToken: string,
@@ -3683,7 +3860,7 @@ class StorageApi {
         reject("errMsg")
       }
       
-      SBFetch(this.server + '/storeData?type=' + type + '&key=' + ensureSafe(fileId), {
+      SBFetch(this.server + '/storeData?type=' + type + '&key=' + stripA32(fileId), { // ToDo: bit of a hack in handling "a32"
         // psm: need to clean up these types
         method: 'POST',
         body: assemblePayload({
@@ -3715,16 +3892,16 @@ class StorageApi {
     // export async function saveImage(sbImage, roomId, sendSystemMessage)
     return new Promise((resolve, reject) => {
       const paddedBuf = this.#padBuf(buf)
-      sbCrypto.generateIdKey(paddedBuf).then((fullHash: { id32: string, key32: string }) => {
+      sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
         // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
         this.#_allocateObject(fullHash.id32, type)
           .then((p) => {
             const r: SBObjectMetadata = {
               [SB_OBJECT_HANDLE_SYMBOL]: true,
-              version: '2',
+              version: currentSBOHVersion,
               type: type,
-              id32: fullHash.id32,
-              key32: fullHash.key32,
+              id32: stripA32(fullHash.id32),
+              key32: stripA32(fullHash.key32),
               iv: p.iv,
               salt: p.salt,
               paddedBuffer: paddedBuf
@@ -3772,19 +3949,21 @@ class StorageApi {
       const bufSize = (buf as ArrayBuffer).byteLength
       if (!metadata) {
         const paddedBuf = this.#padBuf(buf as ArrayBuffer)
-        sbCrypto.generateIdKey(paddedBuf).then((fullHash: { id32: string, key32: string }) => {
+        sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
           // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
           this.#_allocateObject(fullHash.id32, type)
             .then((p) => {
               // storage server returns the salt and nonce it wants us to use
               const r: Interfaces.SBObjectHandle = {
                 [SB_OBJECT_HANDLE_SYMBOL]: true,
-                version: '2',
+                version: currentSBOHVersion,
                 type: type,
                 // id: fullHash.id64,
                 // key: fullHash.key64,
-                id32: base64ToBase62(fullHash.id32),
-                key32: base64ToBase62(fullHash.key32),
+                // id: base64ToBase62(fullHash.id32),
+                // key: base64ToBase62(fullHash.key32),
+                id: stripA32(fullHash.id32),
+                key: stripA32(fullHash.key32),
                 iv: p.iv,
                 salt: p.salt,
                 actualSize: bufSize,
@@ -3798,12 +3977,12 @@ class StorageApi {
         // TODO: this variation should probably not exist ...
         const r: Interfaces.SBObjectHandle = {
           [SB_OBJECT_HANDLE_SYMBOL]: true,
-          version: '2',
+          version: currentSBOHVersion,
           type: type,
           // id: metadata.id,
           // key: metadata.key,
-          id32: metadata.id32,
-          key32: metadata.key32,
+          id: stripA32(metadata.id32),
+          key: stripA32(metadata.key32),
           iv: metadata.iv,
           salt: metadata.salt,
           actualSize: bufSize,
@@ -3843,7 +4022,7 @@ class StorageApi {
 
         if ((handleIV) && (!compareBuffers(iv, handleIV))) {
           console.error("WARNING: nonce from server differs from local copy")
-          console.log(`object ID: ${h.id32}`)
+          console.log(`object ID: ${h.id}`)
           console.log(` local iv: ${arrayBufferToBase64(handleIV)}`)
           console.log(`server iv: ${arrayBufferToBase64(data.iv)}`)
         }
@@ -3872,7 +4051,7 @@ class StorageApi {
           console.log(`salt : ${arrayBufferToBase64(salt)}`)
         }
         // const image_key: CryptoKey = await this.#getObjectKey(imageMetaData!.previewKey!, salt)
-        this.#getObjectKey(h.key32!, salt).then((image_key) => {
+        this.#getObjectKey(h.key!, salt).then((image_key) => {
           // TODO: test this, it used to call ab2str()? how could that work?
           // const encrypted_image = sbCrypto.ab2str(new Uint8Array(data.image))
           // const encrypted_image = new Uint8Array(data.image)
@@ -3924,7 +4103,7 @@ class StorageApi {
       const verificationToken = await h.verification
       const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
       if (DBG) console.log("fetchData(), fetching from server: " + useServer)
-      SBFetch(useServer + '/fetchData?id=' + h.id32 + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+      SBFetch(useServer + '/fetchData?id=' + stripA32(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
         .then((response: Response) => {
           if (!response.ok) reject(new Error('Network response was not OK'))
           // console.log(response)
@@ -3947,12 +4126,13 @@ class StorageApi {
    * retrieves an object from storage
    */
   async retrieveImage(imageMetaData: ImageMetaData,
-    controlMessages: Array<ChannelMessage>, imageId?: string, imageKey?: string, imageType?: SBObjectType): Promise<Dictionary<any>> {
+    controlMessages: Array<ChannelMessage>, imageId?: string, imageKey?: string, imageType?: SBObjectType, imgObjVersion?: SBObjectHandleVersions): Promise<Dictionary<any>> {
     console.trace("retrieveImage()")
     console.log(imageMetaData)
     const id = imageId ? imageId : imageMetaData.previewId;
     const key = imageKey ? imageKey : imageMetaData.previewKey;
     const type = imageType ? imageType : 'p';
+    const objVersion = imgObjVersion ? imgObjVersion : (imageMetaData.imgObjVersion ? imageMetaData.imgObjVersion : '2');
 
     const control_msg = controlMessages.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == id)
     console.log(control_msg)
@@ -3961,8 +4141,9 @@ class StorageApi {
       _sb_assert(control_msg.id, "retrieveImage(): id missing (?)")
       const obj: Interfaces.SBObjectHandle = {
         type: type,
-        id32: control_msg.id!,
-        key32: key!,
+        version: objVersion,
+        id: control_msg.id!,
+        key: key!,
         verification: new Promise((resolve, reject) => {
           if (control_msg.verificationToken)
             resolve(control_msg.verificationToken)
@@ -4089,9 +4270,12 @@ class Snackabra {
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       try {
         const { channelData, exportable_privateKey } = await newChannelData(keys)
+        if (!channelData.roomId) {
+          throw new Error('Unable to determine roomId from key and id (it is empty)')
+        }
         channelData.SERVER_SECRET = serverSecret
         const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
-        let resp: Dictionary<any> = await SBFetch(sbServer.channel_server + '/api/room/' + channelData.roomId + '/uploadRoom', {
+        let resp: Dictionary<any> = await SBFetch(sbServer.channel_server + '/api/room/' + stripA32(channelData.roomId) + '/uploadRoom', {
           method: 'POST',
           body: data
         });

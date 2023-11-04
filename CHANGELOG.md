@@ -17,6 +17,20 @@ Follow format from [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 - SBOBjectHandle has id64 and key64 setters/getters for
   backwards compatibility.
 
+- stricter about using 'Base62Encoded' rather than 'string'
+
+- removing 'base32mi' references, these are UI-oriented and
+  should not be in jslib. left as commented out for now.
+
+- SBObjectHandle has been completely rewritten so as to
+  more tolerant of transition from b64 to b62.
+
+- Handling of images in control messages etc have been tuned
+  a bit to try to transition from b64 to b62 (eg all old
+  conversations should work; added a obj type in control
+  messages etc, which should henceforth be set to '2', but
+  if missing will default to version '1')
+
 ## [1.1.0] - 2023-03-01
 
 ### Added
