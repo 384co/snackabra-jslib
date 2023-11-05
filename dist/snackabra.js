@@ -4,9 +4,10 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '1.2.3 (pre) build 01';
+const version = '2.0.0 (pre) build 02';
 var DBG = false;
 var DBG2 = false;
+const currentSBOHVersion = '2';
 export class MessageBus {
     bus = {};
     #select(event) {
@@ -39,10 +40,11 @@ export class MessageBus {
     }
 }
 function SBFetch(input, init) {
-    if (init)
-        return fetch(input, init);
-    else
-        return fetch(input, { method: 'GET' });
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes("a32.")) {
+        return Promise.reject(new Error("URL contains forbidden substring 'a32.'"));
+    }
+    return fetch(input, init ?? { method: 'GET' });
 }
 function WrapError(e) {
     if (e instanceof Error)
@@ -141,7 +143,7 @@ export function encryptedContentsMakeBinary(o) {
             console.log("decided on nonce as:");
             console.log(iv);
         }
-        _sb_assert(iv.length == 12, `unwrap(): nonce should be 12 bytes but is not (${iv.length})`);
+        _sb_assert(iv.length == 12, `encryptedContentsMakeBinary(): nonce should be 12 bytes but is not (${iv.length})`);
         return { content: t, iv: iv };
     }
     catch (e) {
@@ -183,10 +185,14 @@ function _assertBase64(base64) {
     else
         return false;
 }
+const isBase64Encoded = _assertBase64;
 function ensureSafe(base64) {
     const z = b64_regex.exec(base64);
     _sb_assert((z) && (z[0] === base64), 'ensureSafe() tripped: something is not URI safe');
     return base64;
+}
+function stripA32(value) {
+    return value.replace(/^a32\./, '');
 }
 const b64lookup = [];
 const urlLookup = [];
@@ -364,24 +370,6 @@ function _appendBuffer(buffer1, buffer2) {
     tmp.set(new Uint8Array(buffer1), 0);
     tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
     return tmp.buffer;
-}
-export function simpleRand256() {
-    return crypto.getRandomValues(new Uint8Array(1))[0];
-}
-const base32mi = '0123456789abcdefyhEjkLmNHpFrRTUW';
-export function simpleRandomString(n, code) {
-    if (code == 'base32mi') {
-        const z = crypto.getRandomValues(new Uint8Array(n));
-        let r = '';
-        for (let i = 0; i < n; i++)
-            r += base32mi[z[i] & 31];
-        return r;
-    }
-    _sb_exception('simpleRandomString', 'code ' + code + ' not supported');
-    return '';
-}
-export function cleanBase32mi(s) {
-    return s.replace(/[OoQD]/g, '0').replace(/[lIiJ]/g, '1').replace(/[Zz]/g, '2').replace(/[A]/g, '4').replace(/[Ss]/g, '5').replace(/[G]/g, '6').replace(/[t]/g, '7').replace(/[B]/g, '8').replace(/[gq]/g, '9').replace(/[C]/g, 'c').replace(/[Y]/g, 'y').replace(/[KxX]/g, 'k').replace(/[M]/g, 'm').replace(/[n]/g, 'N').replace(/[P]/g, 'p').replace(/[uvV]/g, 'U').replace(/[w]/g, 'w');
 }
 export function partition(str, n) {
     throw (`partition() not tested on TS yet - (${str}, ${n})`);
@@ -739,8 +727,8 @@ class SBCrypto {
                     const _id = digest.slice(0, 32);
                     const _key = digest.slice(32);
                     resolve({
-                        id: arrayBufferToBase64(_id),
-                        key: arrayBufferToBase64(_key)
+                        id32: stripA32(arrayBuffer32ToBase62(_id)),
+                        key32: stripA32(arrayBuffer32ToBase62(_key))
                     });
                 });
             }
@@ -1247,6 +1235,7 @@ class SBMessage {
                     this.contents.sign = values[0];
                     this.contents.image_sign = values[1];
                     this.contents.imageMetadata_sign = values[2];
+                    this.contents.imgObjVersion = '2';
                     resolve(this);
                 });
             });
@@ -1299,7 +1288,10 @@ class Channel extends SB384 {
         this.#channelServer = sbServer.channel_server + '/api/room/';
         this.channelReady = new Promise(async (resolve, reject) => {
             await this.sb384Ready;
-            SBFetch(this.#sbServer.channel_server + '/api/room/' + this.#channelId + '/getChannelKeys', {
+            if (!this.#channelId) {
+                reject("Channel(): no channel ID provided");
+            }
+            SBFetch(this.#sbServer.channel_server + '/api/room/' + stripA32(this.#channelId) + '/getChannelKeys', {
                 method: 'GET',
                 headers: { 'Content-Type': 'application/json' },
             })
@@ -1360,6 +1352,9 @@ class Channel extends SB384 {
     }
     getOldMessages(currentMessagesLength = 100, paginate = false) {
         return new Promise(async (resolve, reject) => {
+            if (!this.channelId) {
+                reject("Channel.getOldMessages: no channel ID (?)");
+            }
             if (!this.#ChannelReadyFlag) {
                 if (DBG)
                     console.log("Channel.getOldMessages: channel not ready (we will wait)");
@@ -1370,7 +1365,7 @@ class Channel extends SB384 {
             let cursorOption = '';
             if (paginate)
                 cursorOption = '&cursor=' + this.#cursor;
-            SBFetch(this.#channelServer + this.channelId + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
+            SBFetch(this.#channelServer + stripA32(this.channelId) + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
                 method: 'GET',
             }).then(async (response) => {
                 if (!response.ok)
@@ -1408,6 +1403,9 @@ class Channel extends SB384 {
         }
         const method = body ? 'POST' : 'GET';
         return new Promise(async (resolve, reject) => {
+            if (!this.channelId) {
+                reject("ChannelApi.#callApi: no channel ID (?)");
+            }
             await (this.ready);
             let authString = '';
             const token_data = new Date().getTime().toString();
@@ -1422,7 +1420,7 @@ class Channel extends SB384 {
             if (body)
                 init.body = JSON.stringify(body);
             await (this.ready);
-            SBFetch(this.#channelServer + this.channelId + path, init)
+            SBFetch(this.#channelServer + stripA32(this.channelId) + path, init)
                 .then(async (response) => {
                 const retValue = await response.json();
                 if ((!response.ok) || (retValue.error)) {
@@ -1997,38 +1995,48 @@ async function deCryptChannelMessage(m00, m01, keys) {
     }
 }
 export class SBObjectHandle {
-    version = '1';
+    version = currentSBOHVersion;
     #_type = 'b';
-    #id;
-    #key;
-    #id32;
-    #key32;
-    #verification;
+    #id_binary;
+    #key_binary;
+    shardServer;
     iv;
     salt;
     fileName;
     dateAndTime;
-    shardServer;
     fileType;
     lastModified;
     actualSize;
     savedSize;
     constructor(options) {
-        const { version, type, id, key, id32, key32, verification, iv, salt, fileName, dateAndTime, shardServer, fileType, lastModified, actualSize, savedSize, } = options;
+        const { version, type, id, key, verification, iv, salt, fileName, dateAndTime, shardServer, fileType, lastModified, actualSize, savedSize, } = options;
         if (type)
             this.#_type = type;
-        if (version)
+        if (version) {
             this.version = version;
+        }
+        else {
+            if ((key) && (id)) {
+                if (isBase62Encoded(key) && isBase62Encoded(id)) {
+                    this.version = '2';
+                }
+                else if (isBase64Encoded(key) && isBase64Encoded(id)) {
+                    this.version = '1';
+                }
+                else {
+                    throw new Error('Unable to determine version from key and id');
+                }
+            }
+            else {
+                this.version = '2';
+            }
+        }
         if (id)
             this.id = id;
         if (key)
             this.key = key;
-        if (id32)
-            this.id32 = id32;
-        if (key32)
-            this.key32 = key32;
         if (verification)
-            this.#verification = verification;
+            this.verification = verification;
         this.iv = iv;
         this.salt = salt;
         this.fileName = fileName;
@@ -2039,28 +2047,136 @@ export class SBObjectHandle {
         this.actualSize = actualSize;
         this.savedSize = savedSize;
     }
-    set id(value) { _assertBase64(value); this.#id = value; this.#id32 = base64ToBase62(value); }
-    get id() { _sb_assert(this.#id, 'object handle identifier is undefined'); return this.#id; }
-    set key(value) { _assertBase64(value); this.#key = value; this.#key32 = base64ToBase62(value); }
-    get key() { _sb_assert(this.#key, 'object handle identifier is undefined'); return this.#key; }
-    set id32(value) {
-        if (!isBase62Encoded(value))
-            throw new Error('Invalid base62 encoded ID');
-        this.#id32 = value;
-        this.#id = base62ToBase64(value);
+    set id_binary(value) {
+        if (!value)
+            throw new Error('Invalid id_binary');
+        if (value.byteLength !== 32)
+            throw new Error('Invalid id_binary length');
+        this.#id_binary = value;
+        Object.defineProperty(this, 'id64', {
+            get: () => {
+                return arrayBufferToBase64(this.#id_binary);
+            },
+            enumerable: false,
+            configurable: false
+        });
+        Object.defineProperty(this, 'id32', {
+            get: () => {
+                return stripA32(arrayBuffer32ToBase62(this.#id_binary));
+            },
+            enumerable: false,
+            configurable: false
+        });
     }
-    set key32(value) {
-        if (!isBase62Encoded(value))
-            throw new Error('Invalid base62 encoded Key');
-        this.#key32 = value;
-        this.#key = base62ToBase64(value);
+    set key_binary(value) {
+        if (!value)
+            throw new Error('Invalid key_binary');
+        if (value.byteLength !== 32)
+            throw new Error('Invalid key_binary length');
+        this.#key_binary = value;
+        Object.defineProperty(this, 'key64', {
+            get: () => {
+                return arrayBufferToBase64(this.#key_binary);
+            },
+            enumerable: false,
+            configurable: false
+        });
+        Object.defineProperty(this, 'key32', {
+            get: () => {
+                return stripA32(arrayBuffer32ToBase62(this.#key_binary));
+            },
+            enumerable: false,
+            configurable: false
+        });
     }
-    get id32() { _sb_assert(this.#id32, 'object handle id (32) is undefined'); return this.#id32; }
-    get key32() { _sb_assert(this.#key32, 'object handle key (32) is undefined'); return this.#key32; }
-    set verification(value) { this.#verification = value; }
+    set id(value) {
+        if (typeof value === 'string') {
+            if (this.version === '1') {
+                if (isBase64Encoded(value)) {
+                    throw new Error('Requested version 1, but id is not b64');
+                }
+                else {
+                    this.#id_binary = base64ToArrayBuffer(value);
+                }
+            }
+            else if (this.version === '2') {
+                if (isBase62Encoded(value)) {
+                    this.#id_binary = base62ToArrayBuffer32(value);
+                }
+                else {
+                    throw new Error('Requested version 2, but id is not b62');
+                }
+            }
+        }
+        else if (value instanceof ArrayBuffer) {
+            if (value.byteLength !== 32)
+                throw new Error('Invalid ID length');
+            this.#id_binary = value;
+        }
+        else {
+            throw new Error('Invalid ID type');
+        }
+    }
+    set key(value) {
+        if (typeof value === 'string') {
+            if (this.version === '1') {
+                if (isBase64Encoded(value)) {
+                    throw new Error('Requested version 1, but key is not b64');
+                }
+                else {
+                    this.#key_binary = base64ToArrayBuffer(value);
+                }
+            }
+            else if (this.version === '2') {
+                if (isBase62Encoded(value)) {
+                    this.#key_binary = base62ToArrayBuffer32(value);
+                }
+                else {
+                    throw new Error('Requested version 2, but key is not b62');
+                }
+            }
+        }
+        else if (value instanceof ArrayBuffer) {
+            if (value.byteLength !== 32)
+                throw new Error('Invalid key length');
+            this.#key_binary = value;
+        }
+        else {
+            throw new Error('Invalid key type');
+        }
+    }
+    get id() {
+        _sb_assert(this.#id_binary, 'object handle id is undefined');
+        if (this.version === '1') {
+            return arrayBufferToBase64(this.#id_binary);
+        }
+        else if (this.version === '2') {
+            return stripA32(arrayBuffer32ToBase62(this.#id_binary));
+        }
+        else {
+            throw new Error('Invalid or missing version (internal error, should not happen)');
+        }
+    }
+    get key() {
+        _sb_assert(this.#key_binary, 'object handle key is undefined');
+        if (this.version === '1') {
+            return arrayBufferToBase64(this.#key_binary);
+        }
+        else if (this.version === '2') {
+            return stripA32(arrayBuffer32ToBase62(this.#key_binary));
+        }
+        else {
+            throw new Error('Invalid or missing version (internal error, should not happen)');
+        }
+    }
+    get id64() { throw new Error('Invalid id_binary'); }
+    get id32() { throw new Error('Invalid id_binary'); }
+    get key64() { throw new Error('Invalid key_binary'); }
+    get key32() { throw new Error('Invalid key_binary'); }
+    set verification(value) { this.verification = value; }
     get verification() {
-        _sb_assert(this.#verification, 'object handle verification is undefined');
-        return this.#verification;
+        _sb_assert(this.verification, 'object handle verification is undefined');
+        return this.verification;
     }
     get type() { return this.#_type; }
 }
@@ -2108,7 +2224,7 @@ class StorageApi {
     #getObjectKey(fileHash, _salt) {
         return new Promise((resolve, reject) => {
             try {
-                sbCrypto.importKey('raw', base64ToArrayBuffer(decodeURIComponent(fileHash)), 'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
+                sbCrypto.importKey('raw', base62ToArrayBuffer32(fileHash), 'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
                     crypto.subtle.deriveKey({
                         'name': 'PBKDF2',
                         'salt': _salt,
@@ -2126,7 +2242,7 @@ class StorageApi {
     }
     #_allocateObject(image_id, type) {
         return new Promise((resolve, reject) => {
-            SBFetch(this.server + "/storeRequest?name=" + image_id + "&type=" + type)
+            SBFetch(this.server + "/storeRequest?name=" + stripA32(image_id) + "&type=" + type)
                 .then((r) => { return r.arrayBuffer(); })
                 .then((b) => {
                 const par = extractPayload(b);
@@ -2142,17 +2258,17 @@ class StorageApi {
         return new Promise((resolve, reject) => {
             this.#getObjectKey(keyData, salt).then((key) => {
                 sbCrypto.encrypt(image, key, iv, 'arrayBuffer').then((data) => {
-                    SBFetch(this.channelServer + roomId + '/storageRequest?size=' + data.byteLength)
+                    SBFetch(this.channelServer + stripA32(roomId) + '/storageRequest?size=' + data.byteLength)
                         .then((r) => r.json())
                         .then((storageTokenReq) => {
                         if (storageTokenReq.hasOwnProperty('error'))
                             reject(`storage token request error (${storageTokenReq.error})`);
                         let storageToken = JSON.stringify(storageTokenReq);
-                        this.storeData(type, image_id, iv, salt, storageToken, data)
+                        this.storeObject(type, image_id, iv, salt, storageToken, data)
                             .then((resp_json) => {
                             if (resp_json.error)
                                 reject(`storeObject() failed: ${resp_json.error}`);
-                            if (resp_json.image_id != image_id)
+                            if (resp_json.image_id != stripA32(image_id))
                                 reject(`received imageId ${resp_json.image_id} but expected ${image_id}`);
                             resolve(resp_json.verification_token);
                         })
@@ -2165,102 +2281,14 @@ class StorageApi {
             });
         });
     }
-    getObjectMetadata(buf, type) {
+    storeObject(type, fileId, iv, salt, storageToken, data) {
         return new Promise((resolve, reject) => {
-            const paddedBuf = this.#padBuf(buf);
-            sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
-                this.#_allocateObject(fullHash.id, type)
-                    .then((p) => {
-                    const r = {
-                        [SB_OBJECT_HANDLE_SYMBOL]: true,
-                        version: '1',
-                        type: type,
-                        id: fullHash.id,
-                        key: fullHash.key,
-                        iv: p.iv,
-                        salt: p.salt,
-                        paddedBuffer: paddedBuf
-                    };
-                    resolve(r);
-                })
-                    .catch((e) => reject(e));
-            });
-        });
-    }
-    storeObject(buf, type, roomId, metadata) {
-        return new Promise((resolve, reject) => {
-            if (buf instanceof Uint8Array) {
-                if (DBG2)
-                    console.log('converting Uint8Array to ArrayBuffer');
-                buf = new Uint8Array(buf).buffer;
+            if (typeof type !== 'string') {
+                const errMsg = "NEW in 1.2.x - storeData() and storeObject() have switched places, you probably meant to use storeData()";
+                console.error(errMsg);
+                reject("errMsg");
             }
-            if (!(buf instanceof ArrayBuffer) && buf.constructor.name != 'ArrayBuffer') {
-                if (DBG2)
-                    console.log('buf must be an ArrayBuffer:');
-                console.log(buf);
-                reject('buf must be an ArrayBuffer');
-            }
-            const bufSize = buf.byteLength;
-            if (!metadata) {
-                const paddedBuf = this.#padBuf(buf);
-                sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
-                    this.#_allocateObject(fullHash.id, type)
-                        .then((p) => {
-                        const r = {
-                            [SB_OBJECT_HANDLE_SYMBOL]: true,
-                            version: '1',
-                            type: type,
-                            id: fullHash.id,
-                            key: fullHash.key,
-                            id32: base64ToBase62(fullHash.id),
-                            key32: base64ToBase62(fullHash.key),
-                            iv: p.iv,
-                            salt: p.salt,
-                            actualSize: bufSize,
-                            verification: this.#_storeObject(paddedBuf, fullHash.id, fullHash.key, type, roomId, p.iv, p.salt)
-                        };
-                        resolve(r);
-                    })
-                        .catch((e) => reject(e));
-                });
-            }
-            else {
-                const r = {
-                    [SB_OBJECT_HANDLE_SYMBOL]: true,
-                    version: '1',
-                    type: type,
-                    id: metadata.id,
-                    key: metadata.key,
-                    id32: base64ToBase62(metadata.id),
-                    key32: base64ToBase62(metadata.key),
-                    iv: metadata.iv,
-                    salt: metadata.salt,
-                    actualSize: bufSize,
-                    verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
-                };
-                resolve(r);
-            }
-        });
-    }
-    storeRequest(fileId) {
-        return new Promise((resolve, reject) => {
-            SBFetch(this.server + '/storeRequest?name=' + fileId)
-                .then((response) => {
-                if (!response.ok) {
-                    reject(new Error('Network response was not OK'));
-                }
-                return response.arrayBuffer();
-            })
-                .then((data) => {
-                resolve(data);
-            }).catch((error) => {
-                reject(error);
-            });
-        });
-    }
-    storeData(type, fileId, iv, salt, storageToken, data) {
-        return new Promise((resolve, reject) => {
-            SBFetch(this.server + '/storeData?type=' + type + '&key=' + ensureSafe(fileId), {
+            SBFetch(this.server + '/storeData?type=' + type + '&key=' + stripA32(fileId), {
                 method: 'POST',
                 body: assemblePayload({
                     iv: iv,
@@ -2281,6 +2309,64 @@ class StorageApi {
             }).catch((error) => {
                 reject(error);
             });
+        });
+    }
+    storeData(buf, type, roomId, metadata) {
+        return new Promise((resolve, reject) => {
+            if (typeof buf === 'string') {
+                const errMsg = "NEW in 1.2.x - storeData() and storeObject() have switched places, you probably meant to use storeObject()";
+                console.error(errMsg);
+                reject("errMsg");
+            }
+            if (buf instanceof Uint8Array) {
+                if (DBG2)
+                    console.log('converting Uint8Array to ArrayBuffer');
+                buf = new Uint8Array(buf).buffer;
+            }
+            if (!(buf instanceof ArrayBuffer) && buf.constructor.name != 'ArrayBuffer') {
+                if (DBG2)
+                    console.log('buf must be an ArrayBuffer:');
+                console.log(buf);
+                reject('buf must be an ArrayBuffer');
+            }
+            const bufSize = buf.byteLength;
+            if (!metadata) {
+                const paddedBuf = this.#padBuf(buf);
+                sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
+                    this.#_allocateObject(fullHash.id32, type)
+                        .then((p) => {
+                        const r = {
+                            [SB_OBJECT_HANDLE_SYMBOL]: true,
+                            version: currentSBOHVersion,
+                            type: type,
+                            id: fullHash.id32,
+                            key: fullHash.key32,
+                            iv: p.iv,
+                            salt: p.salt,
+                            actualSize: bufSize,
+                            verification: this.#_storeObject(paddedBuf, fullHash.id32, fullHash.key32, type, roomId, p.iv, p.salt)
+                        };
+                        resolve(r);
+                    })
+                        .catch((e) => reject(e));
+                });
+            }
+            else {
+                metadata.id = stripA32(metadata.id);
+                metadata.key = stripA32(metadata.key);
+                const r = {
+                    [SB_OBJECT_HANDLE_SYMBOL]: true,
+                    version: currentSBOHVersion,
+                    type: type,
+                    id: stripA32(metadata.id),
+                    key: stripA32(metadata.key),
+                    iv: metadata.iv,
+                    salt: metadata.salt,
+                    actualSize: bufSize,
+                    verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
+                };
+                resolve(r);
+            }
         });
     }
     #processData(payload, h) {
@@ -2362,7 +2448,7 @@ class StorageApi {
             const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server);
             if (DBG)
                 console.log("fetchData(), fetching from server: " + useServer);
-            SBFetch(useServer + '/fetchData?id=' + ensureSafe(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+            SBFetch(useServer + '/fetchData?id=' + stripA32(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
                 .then((response) => {
                 if (!response.ok)
                     reject(new Error('Network response was not OK'));
@@ -2380,12 +2466,13 @@ class StorageApi {
                 .catch((error) => { reject(error); });
         });
     }
-    async retrieveImage(imageMetaData, controlMessages, imageId, imageKey, imageType) {
+    async retrieveImage(imageMetaData, controlMessages, imageId, imageKey, imageType, imgObjVersion) {
         console.trace("retrieveImage()");
         console.log(imageMetaData);
         const id = imageId ? imageId : imageMetaData.previewId;
         const key = imageKey ? imageKey : imageMetaData.previewKey;
         const type = imageType ? imageType : 'p';
+        const objVersion = imgObjVersion ? imgObjVersion : (imageMetaData.imgObjVersion ? imageMetaData.imgObjVersion : '2');
         const control_msg = controlMessages.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == id);
         console.log(control_msg);
         if (control_msg) {
@@ -2393,6 +2480,7 @@ class StorageApi {
             _sb_assert(control_msg.id, "retrieveImage(): id missing (?)");
             const obj = {
                 type: type,
+                version: objVersion,
                 id: control_msg.id,
                 key: key,
                 verification: new Promise((resolve, reject) => {
@@ -2446,9 +2534,12 @@ class Snackabra {
         return new Promise(async (resolve, reject) => {
             try {
                 const { channelData, exportable_privateKey } = await newChannelData(keys);
+                if (!channelData.roomId) {
+                    throw new Error('Unable to determine roomId from key and id (it is empty)');
+                }
                 channelData.SERVER_SECRET = serverSecret;
                 const data = new TextEncoder().encode(JSON.stringify(channelData));
-                let resp = await SBFetch(sbServer.channel_server + '/api/room/' + channelData.roomId + '/uploadRoom', {
+                let resp = await SBFetch(sbServer.channel_server + '/api/room/' + stripA32(channelData.roomId) + '/uploadRoom', {
                     method: 'POST',
                     body: data
                 });

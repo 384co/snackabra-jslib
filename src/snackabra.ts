@@ -34,7 +34,7 @@
 
 // working on 1.2.0
 // const version = '1.2.3 (pre) build 01'
-const version = '2.0.0 (pre) build 01'
+const version = '2.0.0 (pre) build 02'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -438,8 +438,8 @@ export interface SBObjectMetadata {
   [SB_OBJECT_HANDLE_SYMBOL]: boolean;
   version: SBObjectHandleVersions;
   type: SBObjectType;
-  id32: string;
-  key32: string;
+  id: Base62Encoded;
+  key: Base62Encoded;
   paddedBuffer: ArrayBuffer;
   iv: Uint8Array;
   salt: Uint8Array;
@@ -1672,7 +1672,9 @@ class SBCrypto {  /*************************************************************
   /**
    * Hashes and splits into two (h1 and h1) signature of data, h1
    * is used to request (salt, iv) pair and then h2 is used for
-   * encryption (h2, salt, iv)
+   * encryption (h2, salt, iv).
+   * 
+   * Hash pair is nowadays version '2' (A32 format), without prefix.
    *
    * @param buf blob of data to be stored
    *
@@ -1684,8 +1686,8 @@ class SBCrypto {  /*************************************************************
           const _id = digest.slice(0, 32);
           const _key = digest.slice(32);
           resolve({
-            id32: arrayBuffer32ToBase62(_id),
-            key32: arrayBuffer32ToBase62(_key)
+            id32: stripA32(arrayBuffer32ToBase62(_id)),
+            key32: stripA32(arrayBuffer32ToBase62(_key))
           })
         })
       } catch (e) {
@@ -3574,7 +3576,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     // same in base62
     Object.defineProperty(this, 'id32', {
       get: () => {
-        return arrayBuffer32ToBase62(this.#id_binary!);
+        return stripA32(arrayBuffer32ToBase62(this.#id_binary!));
       },
       enumerable: false,  // Or false if you don't want it to be serialized
       configurable: false // Allows this property to be redefined or deleted
@@ -3598,7 +3600,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     // same in base62
     Object.defineProperty(this, 'key32', {
       get: () => {
-        return arrayBuffer32ToBase62(this.#key_binary!);
+        return stripA32(arrayBuffer32ToBase62(this.#key_binary!));
       },
       enumerable: false,  // Or false if you don't want it to be serialized
       configurable: false // Allows this property to be redefined or deleted
@@ -3883,35 +3885,36 @@ class StorageApi {
     });
   }
 
-  /**
-   *
-   * StorageApi.getObjectMetadata()
-   *
-   */
-  getObjectMetadata(buf: ArrayBuffer, type: SBObjectType): Promise<SBObjectMetadata> {
-    // export async function saveImage(sbImage, roomId, sendSystemMessage)
-    return new Promise((resolve, reject) => {
-      const paddedBuf = this.#padBuf(buf)
-      sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
-        // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
-        this.#_allocateObject(fullHash.id32, type)
-          .then((p) => {
-            const r: SBObjectMetadata = {
-              [SB_OBJECT_HANDLE_SYMBOL]: true,
-              version: currentSBOHVersion,
-              type: type,
-              id32: stripA32(fullHash.id32),
-              key32: stripA32(fullHash.key32),
-              iv: p.iv,
-              salt: p.salt,
-              paddedBuffer: paddedBuf
-            }
-            resolve(r)
-          })
-          .catch((e) => reject(e))
-      })
-    })
-  }
+  // /**
+  //  *
+  //  * StorageApi.getObjectMetadata()
+  //  *
+  //  * DEPRECATED
+  //  */
+  // getObjectMetadata(buf: ArrayBuffer, type: SBObjectType): Promise<SBObjectMetadata> {
+  //   // export async function saveImage(sbImage, roomId, sendSystemMessage)
+  //   return new Promise((resolve, reject) => {
+  //     const paddedBuf = this.#padBuf(buf)
+  //     sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
+  //       // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
+  //       this.#_allocateObject(fullHash.id32, type)
+  //         .then((p) => {
+  //           const r: SBObjectMetadata = {
+  //             [SB_OBJECT_HANDLE_SYMBOL]: true,
+  //             version: currentSBOHVersion,
+  //             type: type,
+  //             id: stripA32(fullHash.id32),
+  //             key: stripA32(fullHash.key32),
+  //             iv: p.iv,
+  //             salt: p.salt,
+  //             paddedBuffer: paddedBuf
+  //           }
+  //           resolve(r)
+  //         })
+  //         .catch((e) => reject(e))
+  //     })
+  //   })
+  // }
 
   /**
    * StorageApi.storeData
@@ -3962,8 +3965,8 @@ class StorageApi {
                 // key: fullHash.key64,
                 // id: base64ToBase62(fullHash.id32),
                 // key: base64ToBase62(fullHash.key32),
-                id: stripA32(fullHash.id32),
-                key: stripA32(fullHash.key32),
+                id: fullHash.id32,
+                key: fullHash.key32,
                 iv: p.iv,
                 salt: p.salt,
                 actualSize: bufSize,
@@ -3975,18 +3978,21 @@ class StorageApi {
         })
       } else {
         // TODO: this variation should probably not exist ...
+        // unsure of format that might be incoming ...
+        metadata.id = stripA32(metadata.id)
+        metadata.key = stripA32(metadata.key)
         const r: Interfaces.SBObjectHandle = {
           [SB_OBJECT_HANDLE_SYMBOL]: true,
           version: currentSBOHVersion,
           type: type,
           // id: metadata.id,
           // key: metadata.key,
-          id: stripA32(metadata.id32),
-          key: stripA32(metadata.key32),
+          id: stripA32(metadata.id),
+          key: stripA32(metadata.key),
           iv: metadata.iv,
           salt: metadata.salt,
           actualSize: bufSize,
-          verification: this.#_storeObject(metadata.paddedBuffer, metadata.id32, metadata.key32, type, roomId, metadata.iv, metadata.salt)
+          verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
         }
         resolve(r)
       }
