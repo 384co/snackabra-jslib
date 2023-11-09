@@ -708,9 +708,10 @@ const b64_regex = /^([A-Za-z0-9+/_\-=]*)$/
  * Works same on browsers and nodejs.
  */
 function _assertBase64(base64: string) {
-  // return (b64_regex.exec(base64)?.[0] === base64);
-  const z = b64_regex.exec(base64)
-  if (z) return (z[0] === base64); else return false;
+  return b64_regex.test(base64)
+  // // return (b64_regex.exec(base64)?.[0] === base64);
+  // const z = b64_regex.exec(base64)
+  // if (z) return (z[0] === base64); else return false;
 }
 const isBase64Encoded = _assertBase64 // alias
 
@@ -726,7 +727,14 @@ function ensureSafe(base64: string): string {
 // "external" uses of A32 format (eg users of the library should
 // never see the 'a32.' prefix directly)
 function stripA32(value: string | Base62Encoded): string {
-  return value.replace(/^a32\./, '')
+  if ((value) && (value !== '')) {
+    if (value.startsWith('a32.'))
+      console.warn("[stripA32] removing 'a32.' prefix, these should be cleaned up by now")
+    return value.replace(/^a32\./, '')
+  } else {
+    console.warn("[stripA32] asked to strip an empty/missing string?")
+    return ''
+  }
 }
 
 /*
@@ -961,9 +969,10 @@ type Base62Encoded = string & { _brand?: 'Base62Encoded' };
  * @param s base62 encoded string
  * @returns ArrayBuffer32
  */
-export function base62ToArrayBuffer32(s: Base62Encoded ): ArrayBuffer {
-  if (!base62Regex.test(s)) throw new Error(`base62ToArrayBuffer32: string must match: ${base62Regex}`);
-  s = s.slice(4); // remove the 'a32.' prefix
+export function base62ToArrayBuffer32(s: Base62Encoded): ArrayBuffer {
+  if (!base62Regex.test(s)) throw new Error(`base62ToArrayBuffer32: string must match: ${base62Regex}, value provided was ${s}`);
+  // remove the 'a32.' prefix, if present
+  if (s.startsWith('a32.')) s = s.slice(4); 
   let n = BigInt(0);
   for (let i = 0; i < s.length; i++)
     n = n * 62n + BigInt(base62.indexOf(s[i]));
@@ -976,21 +985,34 @@ export function base62ToArrayBuffer32(s: Base62Encoded ): ArrayBuffer {
   return buffer;
 }
 
+
 /**
- * arrayBuffer32ToBase62 converts an ArrayBuffer32 to a base62 encoded string.
+ * arrayBufferToBase62 converts an ArrayBuffer32 to a base62 encoded string.
+ * Does not include a32. prefix.
  * 
  * @param buffer ArrayBuffer32
  * @returns base62 encoded string
  */
-export function arrayBuffer32ToBase62(buffer: ArrayBuffer): Base62Encoded {
+export function arrayBufferToBase62(buffer: ArrayBuffer): Base62Encoded {
   if (buffer.byteLength !== 32)
-    throw new Error('arrayBuffer32ToBase62: buffer must be exactly 32 bytes (256 bits).');
+    throw new Error('arrayBufferToBase62: buffer must be exactly 32 bytes (256 bits).');
   let result = '';
   for (let n = BigInt('0x' + Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join(''));
     n > 0n;
     n = n / 62n)
     result = base62[Number(n % 62n)] + result;
-  return 'a32.' + result.padStart(43, '0');
+  return result.padStart(43, '0');
+}
+
+/**
+ * arrayBuffer32ToBase62 converts an ArrayBuffer32 to a base62 encoded string.
+ * Inlcudes a32. prefix, was used internally while transitioning from base64.
+ * 
+ * @param buffer ArrayBuffer32
+ * @returns base62 encoded string
+ */
+export function arrayBuffer32ToBase62(buffer: ArrayBuffer): Base62Encoded {
+  return 'a32.' + arrayBufferToBase62(buffer);
 }
 
 /**
@@ -1014,7 +1036,7 @@ export function base62ToBase64(s: Base62Encoded): string {
  * @throws Error if the string is not a valid base64 encoded string
  */
 export function base64ToBase62(s: string): Base62Encoded {
-  return arrayBuffer32ToBase62(base64ToArrayBuffer(s));
+  return arrayBufferToBase62(base64ToArrayBuffer(s));
 }
 
 // and a type guard
@@ -1510,7 +1532,7 @@ class SBCrypto {  /*************************************************************
       case KeyPrefix.SBAES256Key: {
         // AES keys are conveniently already 256 bits
         const buffer = base64ToArrayBuffer((key as SBAES256Key).k);
-        return prefix + arrayBuffer32ToBase62(buffer).slice(4);
+        return prefix + arrayBufferToBase62(buffer).slice(4);
       }
       case KeyPrefix.SBPublicKey: {
         // public keys are two 384-bit numbers, which splits into 3x 256 bits
@@ -1519,9 +1541,9 @@ class SBCrypto {  /*************************************************************
         combined.set(base64ToArrayBuffer(publicKey.x), 0);
         combined.set(base64ToArrayBuffer(publicKey.y), 48);
         return prefix +
-          arrayBuffer32ToBase62(combined.slice(0, 32).buffer).slice(4) +
-          arrayBuffer32ToBase62(combined.slice(32, 64).buffer).slice(4) +
-          arrayBuffer32ToBase62(combined.slice(64, 96).buffer).slice(4);
+          arrayBufferToBase62(combined.slice(0, 32).buffer).slice(4) +
+          arrayBufferToBase62(combined.slice(32, 64).buffer).slice(4) +
+          arrayBufferToBase62(combined.slice(64, 96).buffer).slice(4);
       }
       case KeyPrefix.SBPrivateKey: {
         // private keys are a bit cumbersome, we pad with 128 bits of zero
@@ -1532,11 +1554,11 @@ class SBCrypto {  /*************************************************************
         combined.set(base64ToArrayBuffer(privateKey.d).slice(4), 96);
         // it will already be zero-padded
         return prefix +
-          arrayBuffer32ToBase62(combined.slice(0, 32).buffer).slice(4) +
-          arrayBuffer32ToBase62(combined.slice(32, 64).buffer).slice(4) +
-          arrayBuffer32ToBase62(combined.slice(64, 96).buffer).slice(4) +
-          arrayBuffer32ToBase62(combined.slice(96, 128).buffer).slice(4) +
-          arrayBuffer32ToBase62(combined.slice(128, 160).buffer).slice(4);
+          arrayBufferToBase62(combined.slice(0, 32).buffer).slice(4) +
+          arrayBufferToBase62(combined.slice(32, 64).buffer).slice(4) +
+          arrayBufferToBase62(combined.slice(64, 96).buffer).slice(4) +
+          arrayBufferToBase62(combined.slice(96, 128).buffer).slice(4) +
+          arrayBufferToBase62(combined.slice(128, 160).buffer).slice(4);
       }
       default: {
         throw new Error("Unknown SBKey type.");
@@ -1674,21 +1696,26 @@ class SBCrypto {  /*************************************************************
    * is used to request (salt, iv) pair and then h2 is used for
    * encryption (h2, salt, iv).
    * 
-   * Hash pair is nowadays version '2' (A32 format), without prefix.
+   * Transitioning to internal binary format
    *
    * @param buf blob of data to be stored
    *
    */
-  generateIdKey(buf: ArrayBuffer): Promise<{ id32: Base62Encoded, key32: Base62Encoded }> {
+  generateIdKey(buf: ArrayBuffer): Promise<{ id_binary: ArrayBuffer, key_material: ArrayBuffer }> {
     return new Promise((resolve, reject) => {
       try {
         crypto.subtle.digest('SHA-512', buf).then((digest) => {
           const _id = digest.slice(0, 32);
           const _key = digest.slice(32);
           resolve({
-            id32: stripA32(arrayBuffer32ToBase62(_id)),
-            key32: stripA32(arrayBuffer32ToBase62(_key))
+            id_binary: _id,
+            key_material: _key
           })
+
+          // resolve({
+          //   id32: stripA32(arrayBuffer32ToBase62(_id)),
+          //   key32: stripA32(arrayBuffer32ToBase62(_key))
+          // })
         })
       } catch (e) {
         reject(e)
@@ -3501,7 +3528,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
   #id_binary?: ArrayBuffer;
   #key_binary?: ArrayBuffer;
 
-  // verification?: Promise<string> | string;
+  #verification?: Promise<string> | string;
   shardServer?: string;
   iv?: Uint8Array | string;
   salt?: Uint8Array | string;
@@ -3521,7 +3548,6 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     } = options;
 
     if (type) this.#_type = type
-
 
     if (version) {
       this.version = version
@@ -3576,7 +3602,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     // same in base62
     Object.defineProperty(this, 'id32', {
       get: () => {
-        return stripA32(arrayBuffer32ToBase62(this.#id_binary!));
+        return arrayBufferToBase62(this.#id_binary!);
       },
       enumerable: false,  // Or false if you don't want it to be serialized
       configurable: false // Allows this property to be redefined or deleted
@@ -3600,7 +3626,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     // same in base62
     Object.defineProperty(this, 'key32', {
       get: () => {
-        return stripA32(arrayBuffer32ToBase62(this.#key_binary!));
+        return arrayBufferToBase62(this.#key_binary!);
       },
       enumerable: false,  // Or false if you don't want it to be serialized
       configurable: false // Allows this property to be redefined or deleted
@@ -3611,13 +3637,13 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     if (typeof value === 'string') {
       if (this.version === '1') {
         if (isBase64Encoded(value)) {
-          throw new Error('Requested version 1, but id is not b64');
+          this.id_binary = base64ToArrayBuffer(value);
         } else {
-          this.#id_binary = base64ToArrayBuffer(value);
+          throw new Error('Requested version 1, but id is not b64');
         }
       } else if (this.version === '2') {
         if (isBase62Encoded(value)) {
-          this.#id_binary = base62ToArrayBuffer32(value);
+          this.id_binary = base62ToArrayBuffer32(value);
         } else {
           throw new Error('Requested version 2, but id is not b62');
         }
@@ -3625,7 +3651,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     } else if (value instanceof ArrayBuffer) {
       // assert it is 32 bytes
       if (value.byteLength !== 32) throw new Error('Invalid ID length');
-      this.#id_binary = value;
+      this.id_binary = value;
     } else {
       throw new Error('Invalid ID type');
     }
@@ -3636,9 +3662,9 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     if (typeof value === 'string') {
       if (this.version === '1') {
         if (isBase64Encoded(value)) {
-          throw new Error('Requested version 1, but key is not b64');
-        } else {
           this.#key_binary = base64ToArrayBuffer(value);
+        } else {
+          throw new Error('Requested version 1, but key is not b64');
         }
       } else if (this.version === '2') {
         if (isBase62Encoded(value)) {
@@ -3664,7 +3690,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     if (this.version === '1') {
       return arrayBufferToBase64(this.#id_binary!);
     } else if (this.version === '2') {
-      return stripA32(arrayBuffer32ToBase62(this.#id_binary!));
+      return arrayBufferToBase62(this.#id_binary!);
     } else {
       throw new Error('Invalid or missing version (internal error, should not happen)');
     }
@@ -3676,7 +3702,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     if (this.version === '1') {
       return arrayBufferToBase64(this.#key_binary!);
     } else if (this.version === '2') {
-      return stripA32(arrayBuffer32ToBase62(this.#key_binary!));
+      return arrayBufferToBase62(this.#key_binary!);
     } else {
       throw new Error('Invalid or missing version (internal error, should not happen)');
     }
@@ -3685,13 +3711,15 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
   // convenience getters - these are placeholders for type definitions
   get id64(): string { throw new Error('Invalid id_binary'); }
   get id32(): Base62Encoded { throw new Error('Invalid id_binary'); }
-  get key64(): string { throw new Error('Invalid key_binary');  }
+  get key64(): string { throw new Error('Invalid key_binary'); }
   get key32(): Base62Encoded { throw new Error('Invalid key_binary'); }
 
-  set verification(value: Promise<string> | string) { this.verification = value; /* this.#setId32(); */ }
+  set verification(value: Promise<string> | string) {
+    this.#verification = value; /* this.#setId32(); */ 
+  }
   get verification(): Promise<string> | string {
-    _sb_assert(this.verification, 'object handle verification is undefined');
-    return this.verification!;
+    _sb_assert(this.#verification, 'object handle verification is undefined');
+    return this.#verification!;
   }
 
   get type(): SBObjectType { return this.#_type; }
@@ -3714,8 +3742,6 @@ class StorageApi {
     this.channelServer = channelServer + '/api/room/'
     if (shardServer)
       this.shardServer = shardServer + '/api/v1'
-    // else
-    //  this.shardServer = 'https://shard.3.8.4.land/api/v1'
   }
 
   /**
@@ -3765,10 +3791,10 @@ class StorageApi {
   }
 
   /** @private */
-  #getObjectKey(fileHash: Base62Encoded, _salt: ArrayBuffer): Promise<CryptoKey> {
+  #getObjectKey(fileHashBuffer: BufferSource, _salt: ArrayBuffer): Promise<CryptoKey> {
     return new Promise((resolve, reject) => {
       try {
-        sbCrypto.importKey('raw', base62ToArrayBuffer32(fileHash) /* base64ToArrayBuffer(decodeURIComponent(fileHash))*/,
+        sbCrypto.importKey('raw', fileHashBuffer /* base64ToArrayBuffer(decodeURIComponent(fileHash))*/,
           'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
             // @psm TODO - Support deriving from PBKDF2 in sbCrypto.deriveKey function
             crypto.subtle.deriveKey({
@@ -3790,9 +3816,9 @@ class StorageApi {
   /** @private
    * get "permission" to store in the form of a token
    */
-  #_allocateObject(image_id: Base62Encoded, type: SBObjectType): Promise<{ salt: Uint8Array, iv: Uint8Array }> {
+  #_allocateObject(image_id: ArrayBuffer, type: SBObjectType): Promise<{ salt: Uint8Array, iv: Uint8Array }> {
     return new Promise((resolve, reject) => {
-      SBFetch(this.server + "/storeRequest?name=" + stripA32(image_id) + "&type=" + type)
+      SBFetch(this.server + "/storeRequest?name=" + arrayBufferToBase62(image_id) + "&type=" + type)
         .then((r) => { /* console.log('got storage reply:'); console.log(r); */ return r.arrayBuffer(); })
         .then((b) => {
           const par = extractPayload(b)
@@ -3809,7 +3835,7 @@ class StorageApi {
   #_storeObject(
     image: ArrayBuffer,
     image_id: Base62Encoded,
-    keyData: Base62Encoded,
+    keyData: ArrayBuffer,
     type: SBObjectType,
     roomId: SBChannelId,
     iv: Uint8Array,
@@ -3861,7 +3887,7 @@ class StorageApi {
         console.error(errMsg)
         reject("errMsg")
       }
-      
+
       SBFetch(this.server + '/storeData?type=' + type + '&key=' + stripA32(fileId), { // ToDo: bit of a hack in handling "a32"
         // psm: need to clean up these types
         method: 'POST',
@@ -3884,37 +3910,6 @@ class StorageApi {
         });
     });
   }
-
-  // /**
-  //  *
-  //  * StorageApi.getObjectMetadata()
-  //  *
-  //  * DEPRECATED
-  //  */
-  // getObjectMetadata(buf: ArrayBuffer, type: SBObjectType): Promise<SBObjectMetadata> {
-  //   // export async function saveImage(sbImage, roomId, sendSystemMessage)
-  //   return new Promise((resolve, reject) => {
-  //     const paddedBuf = this.#padBuf(buf)
-  //     sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
-  //       // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
-  //       this.#_allocateObject(fullHash.id32, type)
-  //         .then((p) => {
-  //           const r: SBObjectMetadata = {
-  //             [SB_OBJECT_HANDLE_SYMBOL]: true,
-  //             version: currentSBOHVersion,
-  //             type: type,
-  //             id: stripA32(fullHash.id32),
-  //             key: stripA32(fullHash.key32),
-  //             iv: p.iv,
-  //             salt: p.salt,
-  //             paddedBuffer: paddedBuf
-  //           }
-  //           resolve(r)
-  //         })
-  //         .catch((e) => reject(e))
-  //     })
-  //   })
-  // }
 
   /**
    * StorageApi.storeData
@@ -3954,9 +3949,11 @@ class StorageApi {
         const paddedBuf = this.#padBuf(buf as ArrayBuffer)
         sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
           // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
-          this.#_allocateObject(fullHash.id32, type)
+          this.#_allocateObject(fullHash.id_binary, type)
             .then((p) => {
               // storage server returns the salt and nonce it wants us to use
+              const id32 = arrayBufferToBase62(fullHash.id_binary)
+              const key32 = arrayBufferToBase62(fullHash.key_material)
               const r: Interfaces.SBObjectHandle = {
                 [SB_OBJECT_HANDLE_SYMBOL]: true,
                 version: currentSBOHVersion,
@@ -3965,36 +3962,38 @@ class StorageApi {
                 // key: fullHash.key64,
                 // id: base64ToBase62(fullHash.id32),
                 // key: base64ToBase62(fullHash.key32),
-                id: fullHash.id32,
-                key: fullHash.key32,
+                id: id32,
+                key: key32,
                 iv: p.iv,
                 salt: p.salt,
                 actualSize: bufSize,
-                verification: this.#_storeObject(paddedBuf, fullHash.id32, fullHash.key32, type, roomId, p.iv, p.salt)
+                verification: this.#_storeObject(paddedBuf, id32, fullHash.key_material, type, roomId, p.iv, p.salt)
               }
               resolve(r)
             })
             .catch((e) => reject(e))
         })
       } else {
-        // TODO: this variation should probably not exist ...
-        // unsure of format that might be incoming ...
-        metadata.id = stripA32(metadata.id)
-        metadata.key = stripA32(metadata.key)
-        const r: Interfaces.SBObjectHandle = {
-          [SB_OBJECT_HANDLE_SYMBOL]: true,
-          version: currentSBOHVersion,
-          type: type,
-          // id: metadata.id,
-          // key: metadata.key,
-          id: stripA32(metadata.id),
-          key: stripA32(metadata.key),
-          iv: metadata.iv,
-          salt: metadata.salt,
-          actualSize: bufSize,
-          verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
-        }
-        resolve(r)
+        console.warn("storeData() called with metadata - this is deprecated (let us know how/where this is needed)")
+        reject("storeData() called with metadata - this is deprecated")
+        // // TODO: this variation should probably not exist ...
+        // // unsure of format that might be incoming ...
+        // metadata.id = stripA32(metadata.id)
+        // metadata.key = stripA32(metadata.key)
+        // const r: Interfaces.SBObjectHandle = {
+        //   [SB_OBJECT_HANDLE_SYMBOL]: true,
+        //   version: currentSBOHVersion,
+        //   type: type,
+        //   // id: metadata.id,
+        //   // key: metadata.key,
+        //   id: stripA32(metadata.id),
+        //   key: stripA32(metadata.key),
+        //   iv: metadata.iv,
+        //   salt: metadata.salt,
+        //   actualSize: bufSize,
+        //   verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
+        // }
+        // resolve(r)
       }
 
     })
@@ -4005,7 +4004,7 @@ class StorageApi {
   // is now internal-only (#_allocateObject)
 
   /** @private */
-  #processData(payload: ArrayBuffer, h: Interfaces.SBObjectHandle): Promise<ArrayBuffer> {
+  #processData(payload: ArrayBuffer, h: SBObjectHandle): Promise<ArrayBuffer> {
     return new Promise((resolve, reject) => {
       try {
         let j = jsonParseWrapper(sbCrypto.ab2str(new Uint8Array(payload)), 'L3062')
@@ -4057,7 +4056,15 @@ class StorageApi {
           console.log(`salt : ${arrayBufferToBase64(salt)}`)
         }
         // const image_key: CryptoKey = await this.#getObjectKey(imageMetaData!.previewKey!, salt)
-        this.#getObjectKey(h.key!, salt).then((image_key) => {
+        var h_key_material
+        if (h.version === '1') {
+          h_key_material = base64ToArrayBuffer(h.key)
+        } else if (h.version === '2') {
+          h_key_material = base62ToArrayBuffer32(h.key)
+        } else {
+          throw new Error('Invalid or missing version (internal error, should not happen)');
+        }
+        this.#getObjectKey(h_key_material, salt).then((image_key) => {
           // TODO: test this, it used to call ab2str()? how could that work?
           // const encrypted_image = sbCrypto.ab2str(new Uint8Array(data.image))
           // const encrypted_image = new Uint8Array(data.image)
@@ -4094,9 +4101,9 @@ class StorageApi {
    * @param returnType 'string' | 'arrayBuffer' - the type of data to return (default: 'arrayBuffer')
    * @returns Promise<ArrayBuffer | string> - the shard data
    */
-  fetchData(h: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>
-  fetchData(h: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>
-  fetchData(h: Interfaces.SBObjectHandle, returnType: 'string' | 'arrayBuffer' = 'arrayBuffer'): Promise<ArrayBuffer | string> {
+  fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>
+  fetchData(handle: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>
+  fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string' | 'arrayBuffer' = 'arrayBuffer'): Promise<ArrayBuffer | string> {
     // TODO: change SBObjectHandle from being an interface to being a class
     // update: we have an object class, but still using interface; still a todo here
     // how to nicely validate 'h'
@@ -4105,11 +4112,12 @@ class StorageApi {
     // _sb_assert(verificationToken, "fetchData(): missing verification token (?)")
 
     return new Promise(async (resolve, reject) => {
+      const h = new SBObjectHandle(handle)
       if (!h) reject('SBObjectHandle is null or undefined')
       const verificationToken = await h.verification
       const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
       if (DBG) console.log("fetchData(), fetching from server: " + useServer)
-      SBFetch(useServer + '/fetchData?id=' + stripA32(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+      SBFetch(useServer + '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
         .then((response: Response) => {
           if (!response.ok) reject(new Error('Network response was not OK'))
           // console.log(response)
@@ -4131,8 +4139,14 @@ class StorageApi {
    * StorageApi().retrieveData()
    * retrieves an object from storage
    */
-  async retrieveImage(imageMetaData: ImageMetaData,
-    controlMessages: Array<ChannelMessage>, imageId?: string, imageKey?: string, imageType?: SBObjectType, imgObjVersion?: SBObjectHandleVersions): Promise<Dictionary<any>> {
+  async retrieveImage(
+    imageMetaData: ImageMetaData,
+    controlMessages: Array<ChannelMessage>,
+    imageId?: string,
+    imageKey?: string,
+    imageType?: SBObjectType,
+    imgObjVersion?: SBObjectHandleVersions): Promise<Dictionary<any>>
+  {
     console.trace("retrieveImage()")
     console.log(imageMetaData)
     const id = imageId ? imageId : imageMetaData.previewId;
