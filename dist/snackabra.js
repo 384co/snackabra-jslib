@@ -179,11 +179,7 @@ export function getRandomValues(buffer) {
 const messageIdRegex = /([A-Za-z0-9+/_\-=]{64})([01]{42})/;
 const b64_regex = /^([A-Za-z0-9+/_\-=]*)$/;
 function _assertBase64(base64) {
-    const z = b64_regex.exec(base64);
-    if (z)
-        return (z[0] === base64);
-    else
-        return false;
+    return b64_regex.test(base64);
 }
 const isBase64Encoded = _assertBase64;
 function ensureSafe(base64) {
@@ -192,7 +188,15 @@ function ensureSafe(base64) {
     return base64;
 }
 function stripA32(value) {
-    return value.replace(/^a32\./, '');
+    if ((value) && (value !== '')) {
+        if (value.startsWith('a32.'))
+            console.warn("[stripA32] removing 'a32.' prefix, these should be cleaned up by now");
+        return value.replace(/^a32\./, '');
+    }
+    else {
+        console.warn("[stripA32] asked to strip an empty/missing string?");
+        return '';
+    }
 }
 const b64lookup = [];
 const urlLookup = [];
@@ -335,8 +339,9 @@ const base62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const base62Regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
 export function base62ToArrayBuffer32(s) {
     if (!base62Regex.test(s))
-        throw new Error(`base62ToArrayBuffer32: string must match: ${base62Regex}`);
-    s = s.slice(4);
+        throw new Error(`base62ToArrayBuffer32: string must match: ${base62Regex}, value provided was ${s}`);
+    if (s.startsWith('a32.'))
+        s = s.slice(4);
     let n = BigInt(0);
     for (let i = 0; i < s.length; i++)
         n = n * 62n + BigInt(base62.indexOf(s[i]));
@@ -348,19 +353,22 @@ export function base62ToArrayBuffer32(s) {
         view.setUint32((8 - i - 1) * 4, Number(BigInt.asUintN(32, n)));
     return buffer;
 }
-export function arrayBuffer32ToBase62(buffer) {
+export function arrayBufferToBase62(buffer) {
     if (buffer.byteLength !== 32)
-        throw new Error('arrayBuffer32ToBase62: buffer must be exactly 32 bytes (256 bits).');
+        throw new Error('arrayBufferToBase62: buffer must be exactly 32 bytes (256 bits).');
     let result = '';
     for (let n = BigInt('0x' + Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('')); n > 0n; n = n / 62n)
         result = base62[Number(n % 62n)] + result;
-    return 'a32.' + result.padStart(43, '0');
+    return result.padStart(43, '0');
+}
+export function arrayBuffer32ToBase62(buffer) {
+    return 'a32.' + arrayBufferToBase62(buffer);
 }
 export function base62ToBase64(s) {
     return arrayBufferToBase64(base62ToArrayBuffer32(s));
 }
 export function base64ToBase62(s) {
-    return arrayBuffer32ToBase62(base64ToArrayBuffer(s));
+    return arrayBufferToBase62(base64ToArrayBuffer(s));
 }
 export function isBase62Encoded(value) {
     return base62Regex.test(value);
@@ -575,7 +583,7 @@ class SBCrypto {
         switch (prefix) {
             case KeyPrefix.SBAES256Key: {
                 const buffer = base64ToArrayBuffer(key.k);
-                return prefix + arrayBuffer32ToBase62(buffer).slice(4);
+                return prefix + arrayBufferToBase62(buffer).slice(4);
             }
             case KeyPrefix.SBPublicKey: {
                 const publicKey = key;
@@ -583,9 +591,9 @@ class SBCrypto {
                 combined.set(base64ToArrayBuffer(publicKey.x), 0);
                 combined.set(base64ToArrayBuffer(publicKey.y), 48);
                 return prefix +
-                    arrayBuffer32ToBase62(combined.slice(0, 32).buffer).slice(4) +
-                    arrayBuffer32ToBase62(combined.slice(32, 64).buffer).slice(4) +
-                    arrayBuffer32ToBase62(combined.slice(64, 96).buffer).slice(4);
+                    arrayBufferToBase62(combined.slice(0, 32).buffer).slice(4) +
+                    arrayBufferToBase62(combined.slice(32, 64).buffer).slice(4) +
+                    arrayBufferToBase62(combined.slice(64, 96).buffer).slice(4);
             }
             case KeyPrefix.SBPrivateKey: {
                 const privateKey = key;
@@ -594,11 +602,11 @@ class SBCrypto {
                 combined.set(base64ToArrayBuffer(privateKey.y).slice(4), 48);
                 combined.set(base64ToArrayBuffer(privateKey.d).slice(4), 96);
                 return prefix +
-                    arrayBuffer32ToBase62(combined.slice(0, 32).buffer).slice(4) +
-                    arrayBuffer32ToBase62(combined.slice(32, 64).buffer).slice(4) +
-                    arrayBuffer32ToBase62(combined.slice(64, 96).buffer).slice(4) +
-                    arrayBuffer32ToBase62(combined.slice(96, 128).buffer).slice(4) +
-                    arrayBuffer32ToBase62(combined.slice(128, 160).buffer).slice(4);
+                    arrayBufferToBase62(combined.slice(0, 32).buffer).slice(4) +
+                    arrayBufferToBase62(combined.slice(32, 64).buffer).slice(4) +
+                    arrayBufferToBase62(combined.slice(64, 96).buffer).slice(4) +
+                    arrayBufferToBase62(combined.slice(96, 128).buffer).slice(4) +
+                    arrayBufferToBase62(combined.slice(128, 160).buffer).slice(4);
             }
             default: {
                 throw new Error("Unknown SBKey type.");
@@ -727,8 +735,8 @@ class SBCrypto {
                     const _id = digest.slice(0, 32);
                     const _key = digest.slice(32);
                     resolve({
-                        id32: stripA32(arrayBuffer32ToBase62(_id)),
-                        key32: stripA32(arrayBuffer32ToBase62(_key))
+                        id_binary: _id,
+                        key_material: _key
                     });
                 });
             }
@@ -1999,6 +2007,7 @@ export class SBObjectHandle {
     #_type = 'b';
     #id_binary;
     #key_binary;
+    #verification;
     shardServer;
     iv;
     salt;
@@ -2062,7 +2071,7 @@ export class SBObjectHandle {
         });
         Object.defineProperty(this, 'id32', {
             get: () => {
-                return stripA32(arrayBuffer32ToBase62(this.#id_binary));
+                return arrayBufferToBase62(this.#id_binary);
             },
             enumerable: false,
             configurable: false
@@ -2083,7 +2092,7 @@ export class SBObjectHandle {
         });
         Object.defineProperty(this, 'key32', {
             get: () => {
-                return stripA32(arrayBuffer32ToBase62(this.#key_binary));
+                return arrayBufferToBase62(this.#key_binary);
             },
             enumerable: false,
             configurable: false
@@ -2093,15 +2102,15 @@ export class SBObjectHandle {
         if (typeof value === 'string') {
             if (this.version === '1') {
                 if (isBase64Encoded(value)) {
-                    throw new Error('Requested version 1, but id is not b64');
+                    this.id_binary = base64ToArrayBuffer(value);
                 }
                 else {
-                    this.#id_binary = base64ToArrayBuffer(value);
+                    throw new Error('Requested version 1, but id is not b64');
                 }
             }
             else if (this.version === '2') {
                 if (isBase62Encoded(value)) {
-                    this.#id_binary = base62ToArrayBuffer32(value);
+                    this.id_binary = base62ToArrayBuffer32(value);
                 }
                 else {
                     throw new Error('Requested version 2, but id is not b62');
@@ -2111,7 +2120,7 @@ export class SBObjectHandle {
         else if (value instanceof ArrayBuffer) {
             if (value.byteLength !== 32)
                 throw new Error('Invalid ID length');
-            this.#id_binary = value;
+            this.id_binary = value;
         }
         else {
             throw new Error('Invalid ID type');
@@ -2121,10 +2130,10 @@ export class SBObjectHandle {
         if (typeof value === 'string') {
             if (this.version === '1') {
                 if (isBase64Encoded(value)) {
-                    throw new Error('Requested version 1, but key is not b64');
+                    this.#key_binary = base64ToArrayBuffer(value);
                 }
                 else {
-                    this.#key_binary = base64ToArrayBuffer(value);
+                    throw new Error('Requested version 1, but key is not b64');
                 }
             }
             else if (this.version === '2') {
@@ -2151,7 +2160,7 @@ export class SBObjectHandle {
             return arrayBufferToBase64(this.#id_binary);
         }
         else if (this.version === '2') {
-            return stripA32(arrayBuffer32ToBase62(this.#id_binary));
+            return arrayBufferToBase62(this.#id_binary);
         }
         else {
             throw new Error('Invalid or missing version (internal error, should not happen)');
@@ -2163,7 +2172,7 @@ export class SBObjectHandle {
             return arrayBufferToBase64(this.#key_binary);
         }
         else if (this.version === '2') {
-            return stripA32(arrayBuffer32ToBase62(this.#key_binary));
+            return arrayBufferToBase62(this.#key_binary);
         }
         else {
             throw new Error('Invalid or missing version (internal error, should not happen)');
@@ -2173,10 +2182,12 @@ export class SBObjectHandle {
     get id32() { throw new Error('Invalid id_binary'); }
     get key64() { throw new Error('Invalid key_binary'); }
     get key32() { throw new Error('Invalid key_binary'); }
-    set verification(value) { this.verification = value; }
+    set verification(value) {
+        this.#verification = value;
+    }
     get verification() {
-        _sb_assert(this.verification, 'object handle verification is undefined');
-        return this.verification;
+        _sb_assert(this.#verification, 'object handle verification is undefined');
+        return this.#verification;
     }
     get type() { return this.#_type; }
 }
@@ -2221,10 +2232,10 @@ class StorageApi {
         }
         return data_buffer.slice(0, _size);
     }
-    #getObjectKey(fileHash, _salt) {
+    #getObjectKey(fileHashBuffer, _salt) {
         return new Promise((resolve, reject) => {
             try {
-                sbCrypto.importKey('raw', base62ToArrayBuffer32(fileHash), 'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
+                sbCrypto.importKey('raw', fileHashBuffer, 'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
                     crypto.subtle.deriveKey({
                         'name': 'PBKDF2',
                         'salt': _salt,
@@ -2242,7 +2253,7 @@ class StorageApi {
     }
     #_allocateObject(image_id, type) {
         return new Promise((resolve, reject) => {
-            SBFetch(this.server + "/storeRequest?name=" + stripA32(image_id) + "&type=" + type)
+            SBFetch(this.server + "/storeRequest?name=" + arrayBufferToBase62(image_id) + "&type=" + type)
                 .then((r) => { return r.arrayBuffer(); })
                 .then((b) => {
                 const par = extractPayload(b);
@@ -2333,18 +2344,20 @@ class StorageApi {
             if (!metadata) {
                 const paddedBuf = this.#padBuf(buf);
                 sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
-                    this.#_allocateObject(fullHash.id32, type)
+                    this.#_allocateObject(fullHash.id_binary, type)
                         .then((p) => {
+                        const id32 = arrayBufferToBase62(fullHash.id_binary);
+                        const key32 = arrayBufferToBase62(fullHash.key_material);
                         const r = {
                             [SB_OBJECT_HANDLE_SYMBOL]: true,
                             version: currentSBOHVersion,
                             type: type,
-                            id: fullHash.id32,
-                            key: fullHash.key32,
+                            id: id32,
+                            key: key32,
                             iv: p.iv,
                             salt: p.salt,
                             actualSize: bufSize,
-                            verification: this.#_storeObject(paddedBuf, fullHash.id32, fullHash.key32, type, roomId, p.iv, p.salt)
+                            verification: this.#_storeObject(paddedBuf, id32, fullHash.key_material, type, roomId, p.iv, p.salt)
                         };
                         resolve(r);
                     })
@@ -2352,20 +2365,8 @@ class StorageApi {
                 });
             }
             else {
-                metadata.id = stripA32(metadata.id);
-                metadata.key = stripA32(metadata.key);
-                const r = {
-                    [SB_OBJECT_HANDLE_SYMBOL]: true,
-                    version: currentSBOHVersion,
-                    type: type,
-                    id: stripA32(metadata.id),
-                    key: stripA32(metadata.key),
-                    iv: metadata.iv,
-                    salt: metadata.salt,
-                    actualSize: bufSize,
-                    verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
-                };
-                resolve(r);
+                console.warn("storeData() called with metadata - this is deprecated (let us know how/where this is needed)");
+                reject("storeData() called with metadata - this is deprecated");
             }
         });
     }
@@ -2420,7 +2421,17 @@ class StorageApi {
                     console.log(`iv: ${arrayBufferToBase64(iv)}`);
                     console.log(`salt : ${arrayBufferToBase64(salt)}`);
                 }
-                this.#getObjectKey(h.key, salt).then((image_key) => {
+                var h_key_material;
+                if (h.version === '1') {
+                    h_key_material = base64ToArrayBuffer(h.key);
+                }
+                else if (h.version === '2') {
+                    h_key_material = base62ToArrayBuffer32(h.key);
+                }
+                else {
+                    throw new Error('Invalid or missing version (internal error, should not happen)');
+                }
+                this.#getObjectKey(h_key_material, salt).then((image_key) => {
                     const encrypted_image = data.image;
                     if (DBG2) {
                         console.log("data.image:      ");
@@ -2440,15 +2451,16 @@ class StorageApi {
             }
         });
     }
-    fetchData(h, returnType = 'arrayBuffer') {
+    fetchData(handle, returnType = 'arrayBuffer') {
         return new Promise(async (resolve, reject) => {
+            const h = new SBObjectHandle(handle);
             if (!h)
                 reject('SBObjectHandle is null or undefined');
             const verificationToken = await h.verification;
             const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server);
             if (DBG)
                 console.log("fetchData(), fetching from server: " + useServer);
-            SBFetch(useServer + '/fetchData?id=' + stripA32(h.id) + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+            SBFetch(useServer + '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
                 .then((response) => {
                 if (!response.ok)
                     reject(new Error('Network response was not OK'));

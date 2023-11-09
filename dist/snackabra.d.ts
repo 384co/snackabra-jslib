@@ -172,6 +172,7 @@ type Base62Encoded = string & {
     _brand?: 'Base62Encoded';
 };
 export declare function base62ToArrayBuffer32(s: Base62Encoded): ArrayBuffer;
+export declare function arrayBufferToBase62(buffer: ArrayBuffer): Base62Encoded;
 export declare function arrayBuffer32ToBase62(buffer: ArrayBuffer): Base62Encoded;
 export declare function base62ToBase64(s: Base62Encoded): string;
 export declare function base64ToBase62(s: string): Base62Encoded;
@@ -222,8 +223,8 @@ declare class SBCrypto {
     addKnownKey(key: Key): Promise<void>;
     lookupKeyGlobal(hash: SB384Hash): knownKeysInfo | undefined;
     generateIdKey(buf: ArrayBuffer): Promise<{
-        id32: Base62Encoded;
-        key32: Base62Encoded;
+        id_binary: ArrayBuffer;
+        key_material: ArrayBuffer;
     }>;
     extractPubKey(privateKey: JsonWebKey): JsonWebKey | null;
     sb384Hash(key?: JsonWebKey | CryptoKey): Promise<SB384Hash | undefined>;
@@ -372,8 +373,8 @@ declare class StorageApi {
     constructor(server: string, channelServer: string, shardServer?: string);
     storeObject(type: string, fileId: Base62Encoded, iv: Uint8Array, salt: Uint8Array, storageToken: string, data: ArrayBuffer): Promise<Dictionary<any>>;
     storeData(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId, metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle>;
-    fetchData(h: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>;
-    fetchData(h: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
+    fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>;
+    fetchData(handle: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
     retrieveImage(imageMetaData: ImageMetaData, controlMessages: Array<ChannelMessage>, imageId?: string, imageKey?: string, imageType?: SBObjectType, imgObjVersion?: SBObjectHandleVersions): Promise<Dictionary<any>>;
 }
 declare class Snackabra {
