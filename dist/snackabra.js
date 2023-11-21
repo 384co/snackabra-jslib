@@ -1287,7 +1287,8 @@ class Channel extends SB384 {
     #channelApi = '';
     #channelServer = '';
     constructor(sbServer, key, channelId) {
-        console.log("CONSTRUCTOR new channel");
+        if (DBG2)
+            console.log("CONSTRUCTOR new channel");
         _sb_assert(channelId, "Channel(): as of jslib 1.1.x the channelId must be provided");
         super(key);
         this.#sbServer = sbServer;
@@ -1820,7 +1821,8 @@ export class ChannelSocket extends Channel {
         console.warn(e);
     }
     #firstMessageEventHandler(e) {
-        console.log("FIRST MESSAGE HANDLER CALLED");
+        if (this.#traceSocket)
+            console.log("FIRST MESSAGE HANDLER CALLED");
         const blocker = this.#insideFirstMessageHandler.bind(this);
         this.#ws.websocket.addEventListener('message', blocker);
         this.#ws.websocket.removeEventListener('message', this.#firstMessageEventHandlerReference);
@@ -1861,7 +1863,8 @@ export class ChannelSocket extends Channel {
     get onMessage() { return this.#onMessage; }
     set enableTrace(b) {
         this.#traceSocket = b;
-        console.log(`==== jslib ChannelSocket: Tracing ${b ? 'en' : 'dis'}abled ====`);
+        if (b)
+            console.log("==== jslib ChannelSocket: Tracing enabled ====");
     }
     send(msg) {
         let message = typeof msg === 'string' ? new SBMessage(this, msg) : msg;
@@ -1880,7 +1883,7 @@ export class ChannelSocket extends Channel {
                     switch (this.#ws.websocket.readyState) {
                         case 1:
                             if (this.#traceSocket) {
-                                console.log("Wrapping message contents:");
+                                console.log("++++++++ ChannelSocket.send(): Wrapping message contents:");
                                 console.log(Object.assign({}, message.contents));
                             }
                             sbCrypto.wrap(message.encryptionKey, JSON.stringify(message.contents), 'string')
@@ -1889,13 +1892,15 @@ export class ChannelSocket extends Channel {
                                     encrypted_contents: wrappedMessage,
                                     recipient: message.sendToPubKey ? message.sendToPubKey : undefined
                                 });
-                                console.log("++++++++ ChannelSocket.send(): sending message:");
-                                console.log(wrappedMessage.content);
+                                if (this.#traceSocket) {
+                                    console.log("++++++++ ChannelSocket.send(): sending message:");
+                                    console.log(wrappedMessage.content.slice(0, 100) + "  ...  " + wrappedMessage.content.slice(-100));
+                                }
                                 crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content))
                                     .then((hash) => {
                                     const messageHash = arrayBufferToBase64(hash);
-                                    if (DBG) {
-                                        console.log("Which has hash:");
+                                    if (this.#traceSocket) {
+                                        console.log("++++++++ ChannelSocket.send():Which has hash:");
                                         console.log(messageHash);
                                     }
                                     this.#ack.set(messageHash, resolve);
