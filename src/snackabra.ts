@@ -2608,7 +2608,7 @@ abstract class Channel extends SB384 {
   abstract send(message: SBMessage): Promise<string>
 
   constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
-    console.log("CONSTRUCTOR new channel")
+    if (DBG2) console.log("CONSTRUCTOR new channel")
     _sb_assert(channelId, "Channel(): as of jslib 1.1.x the channelId must be provided")
     super(key)
     this.#sbServer = sbServer
@@ -3255,7 +3255,7 @@ export class ChannelSocket extends Channel {
 
   // we use (bound) message handlers orchestrate who handles first message (and only once)
   #firstMessageEventHandler(e: MessageEvent) {
-    console.log("FIRST MESSAGE HANDLER CALLED")
+    if (this.#traceSocket) console.log("FIRST MESSAGE HANDLER CALLED")
     const blocker = this.#insideFirstMessageHandler.bind(this)
     this.#ws.websocket!.addEventListener('message', blocker)
     this.#ws.websocket!.removeEventListener('message', this.#firstMessageEventHandlerReference)
@@ -3303,7 +3303,7 @@ export class ChannelSocket extends Channel {
   /** Enables debug output */
   set enableTrace(b: boolean) {
     this.#traceSocket = b;
-    console.log(`==== jslib ChannelSocket: Tracing ${b ? 'en' : 'dis'}abled ====`);
+    if (b) console.log("==== jslib ChannelSocket: Tracing enabled ====")
   }
 
   /**
@@ -3328,7 +3328,7 @@ export class ChannelSocket extends Channel {
           switch (this.#ws.websocket!.readyState) {
             case 1: // OPEN
               if (this.#traceSocket) {
-                console.log("Wrapping message contents:")
+                console.log("++++++++ ChannelSocket.send(): Wrapping message contents:")
                 console.log(Object.assign({}, message.contents))
               }
               sbCrypto.wrap(message.encryptionKey!, JSON.stringify(message.contents), 'string')
@@ -3337,13 +3337,15 @@ export class ChannelSocket extends Channel {
                     encrypted_contents: wrappedMessage,
                     recipient: message.sendToPubKey ? message.sendToPubKey : undefined
                   })
-                  console.log("++++++++ ChannelSocket.send(): sending message:")
-                  console.log(wrappedMessage.content as string)
+                  if (this.#traceSocket) {
+                    console.log("++++++++ ChannelSocket.send(): sending message:")
+                    console.log((wrappedMessage.content as string).slice(0, 100) + "  ...  " + (wrappedMessage.content as string).slice(-100))
+                  }
                   crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content as string))
                     .then((hash) => {
                       const messageHash = arrayBufferToBase64(hash)
-                      if (DBG) {
-                        console.log("Which has hash:")
+                      if (this.#traceSocket) {
+                        console.log("++++++++ ChannelSocket.send():Which has hash:")
                         console.log(messageHash)
                       }
                       // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
