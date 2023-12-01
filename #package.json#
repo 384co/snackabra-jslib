@@ -1,0 +1,57 @@
+{
+  "name": "snackabra",
+  "version": "2.0.0 (pre) build 03",
+  "description": "Snackabra Core Library ('jslib')",
+  "main": "dist/snackabra.min.js",
+  "types": "dist/snackabra.d.ts",
+  "scripts": {
+    "start": "npm run build:watch",
+
+    "build": "npm run clean && npm run build:jslib && npm run minify",
+    "build:watch": "npm run build:jslib:watch & npm run minify:watch",
+
+    "build:jslib": "tsc -p ./tsconfig.json",
+    "build:jslib:watch": "tsc -p -w ./tsconfig.json",
+
+    "minify": "webpack --config webpack.config.js",
+    "minify:watch": "webpack --config webpack.config.js --watch",
+
+    "clean": "rm -rf dist/*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snackabra/snackabra-jslib.git"
+  },
+  "keywords": [
+    "typescript",
+    "snackabra",
+    "chat",
+    "messaging",
+    "photo",
+    "file",
+    "storage",
+    "share"
+  ],
+  "author": "Magnusson Institute",
+  "license": "GPL-3.0-only",
+  "bugs": {
+    "url": "https://github.com/snackabra/snackabra-jslib/issues"
+  },
+  "homepage": "https://snackabra.readthedocs.io",
+  "files": [
+    "dist/snackabra.min.js",
+    "dist/snackabra.d.ts",
+    "dist/snackabra.d.ts.map",
+    "dist/snackabra.js",
+    "dist/snackabra.js.map",
+    "dist/snackabra.ts"
+  ],
+  "sideEffects": false,
+  "devDependencies": {
+    "@rollup/plugin-terser": "^0.4.0",
+    "typescript": "^5.0.4",
+    "webpack": "^5.75.0",
+    "webpack-cli": "^5.0.1"
+  },
+  "packageManager": "yarn@1.22.19"
+}

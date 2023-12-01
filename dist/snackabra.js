@@ -1118,9 +1118,15 @@ function ExceptionReject(target, _propertyKey, descriptor) {
 const sbCrypto = new SBCrypto();
 const SBKnownServers = [
     {
-        channel_server: 'https://channel.384co.workers.dev',
-        channel_ws: 'wss://channel.384co.workers.dev',
-        storage_server: 'https://storage.384co.workers.dev',
+        channel_server: 'http://localhost:3845',
+        channel_ws: 'ws://localhost:3845',
+        storage_server: 'http://localhost:3843',
+        shard_server: 'http://localhost:3841',
+    },
+    {
+        channel_server: 'https://channel.384.dev',
+        channel_ws: 'wss://channel.384.dev',
+        storage_server: 'https://storage.384.dev',
         shard_server: 'https://shard.3.8.4.land'
     },
     {
@@ -1128,6 +1134,14 @@ const SBKnownServers = [
         channel_ws: 'wss://r.384co.workers.dev',
         storage_server: 'https://s.384co.workers.dev'
     },
+];
+const knownStorageAndShardServers = [
+    'http://localhost:3841',
+    'http://localhost:3843',
+    'https://shard.3.8.4.land',
+    'https://storage.384.dev',
+    'https://storage.384co.workers.dev',
+    'https://shard.384.dev'
 ];
 class SB384 {
     ready;
@@ -1413,9 +1427,8 @@ class Channel extends SB384 {
         }
         const method = body ? 'POST' : 'GET';
         return new Promise(async (resolve, reject) => {
-            if (!this.channelId) {
+            if (!this.channelId)
                 reject("ChannelApi.#callApi: no channel ID (?)");
-            }
             await (this.ready);
             let authString = '';
             const token_data = new Date().getTime().toString();
@@ -2461,6 +2474,38 @@ class StorageApi {
             }
         });
     }
+    async #_fetchData(useServer, url, h, returnType) {
+        return new Promise((resolve, _reject) => {
+            try {
+                const body = { method: 'GET' };
+                SBFetch(useServer + url, body)
+                    .then((response) => {
+                    if (!response.ok)
+                        return (null);
+                    return response.arrayBuffer();
+                })
+                    .then((payload) => {
+                    if (payload === null)
+                        return (null);
+                    return this.#processData(payload, h);
+                })
+                    .then((payload) => {
+                    if (payload === null)
+                        resolve(null);
+                    if (returnType === 'string')
+                        resolve(sbCrypto.ab2str(new Uint8Array(payload)));
+                    else
+                        resolve(payload);
+                })
+                    .catch((_error) => {
+                    resolve(null);
+                });
+            }
+            catch (e) {
+                resolve(null);
+            }
+        });
+    }
     fetchData(handle, returnType = 'arrayBuffer') {
         return new Promise(async (resolve, reject) => {
             const h = new SBObjectHandle(handle);
@@ -2470,22 +2515,19 @@ class StorageApi {
             const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server);
             if (DBG)
                 console.log("fetchData(), fetching from server: " + useServer);
-            SBFetch(useServer + '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
-                .then((response) => {
-                if (!response.ok)
-                    reject(new Error('Network response was not OK'));
-                return response.arrayBuffer();
-            })
-                .then((payload) => {
-                return this.#processData(payload, h);
-            })
-                .then((payload) => {
-                if (returnType === 'string')
-                    resolve(sbCrypto.ab2str(new Uint8Array(payload)));
-                else
-                    resolve(payload);
-            })
-                .catch((error) => { reject(error); });
+            const queryString = '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken;
+            const result = await this.#_fetchData(useServer, queryString, h, returnType);
+            if (result)
+                resolve(result);
+            for (let i = 0; i < knownStorageAndShardServers.length; i++) {
+                const tryServer = knownStorageAndShardServers[i] + '/api/v1';
+                if (tryServer !== useServer) {
+                    const result = await this.#_fetchData(tryServer, queryString, h, returnType);
+                    if (result)
+                        resolve(result);
+                }
+            }
+            reject('fetchData() failed - tried all servers');
         });
     }
     async retrieveImage(imageMetaData, controlMessages, imageId, imageKey, imageType, imgObjVersion) {

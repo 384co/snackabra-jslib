@@ -2268,10 +2268,17 @@ const sbCrypto = new SBCrypto();
  */
 const SBKnownServers: Array<SBServer> = [
   {
+    // local servers
+    channel_server: 'http://localhost:3845',
+    channel_ws: 'ws://localhost:3845',
+    storage_server: 'http://localhost:3843',
+    shard_server: 'http://localhost:3841',
+  },
+  {
     // Preview / Development Servers
-    channel_server: 'https://channel.384co.workers.dev',
-    channel_ws: 'wss://channel.384co.workers.dev',
-    storage_server: 'https://storage.384co.workers.dev',
+    channel_server: 'https://channel.384.dev',
+    channel_ws: 'wss://channel.384.dev',
+    storage_server: 'https://storage.384.dev',
     shard_server: 'https://shard.3.8.4.land'
   },
   {
@@ -2280,6 +2287,15 @@ const SBKnownServers: Array<SBServer> = [
     channel_ws: 'wss://r.384co.workers.dev',
     storage_server: 'https://s.384co.workers.dev'
   },
+]
+
+const knownStorageAndShardServers = [
+  'http://localhost:3841',
+  'http://localhost:3843',
+  'https://shard.3.8.4.land',
+  'https://storage.384.dev',
+  'https://storage.384co.workers.dev',
+  'https://shard.384.dev'
 ]
 
 // let availableReadServers = new Promise<Array<string>>((resolve, _reject) => {
@@ -2763,9 +2779,7 @@ abstract class Channel extends SB384 {
     }
     const method = body ? 'POST' : 'GET'
     return new Promise(async (resolve, reject) => {
-      if (!this.channelId) {
-        reject("ChannelApi.#callApi: no channel ID (?)")
-      }
+      if (!this.channelId) reject("ChannelApi.#callApi: no channel ID (?)")
       await (this.ready)
       let authString = '';
       const token_data: string = new Date().getTime().toString()
@@ -4101,6 +4115,36 @@ class StorageApi {
     })
   }
 
+  // any failure conditions returns 'null', facilitating trying multiple servers
+  async #_fetchData(useServer: string, url: string, h: SBObjectHandle, returnType: 'string' | 'arrayBuffer'): Promise<string | ArrayBuffer | null> {
+    return new Promise((resolve, _reject) => {
+      try {
+        const body = { method: 'GET' }
+        SBFetch(useServer + url, body)
+          .then((response: Response) => {
+            if (!response.ok) return (null)
+            return response.arrayBuffer()
+          })
+          .then((payload: ArrayBuffer | null) => {
+            if (payload === null) return (null)
+            return this.#processData(payload, h)
+          })
+          .then((payload) => {
+            if (payload === null) resolve (null)
+            if (returnType === 'string') resolve(sbCrypto.ab2str(new Uint8Array(payload!)))
+            else resolve(payload)
+          })
+          .catch((_error: Error) => {
+            // reject(error)
+            resolve(null)
+          });
+      } catch (e) {
+        resolve(null)
+      }
+    });
+  }
+
+
   /**
    * StorageApi().fetchData()
    *
@@ -4129,23 +4173,27 @@ class StorageApi {
       const verificationToken = await h.verification
       const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
       if (DBG) console.log("fetchData(), fetching from server: " + useServer)
-      SBFetch(useServer + '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
-        .then((response: Response) => {
-          if (!response.ok) reject(new Error('Network response was not OK'))
-          // console.log(response)
-          return response.arrayBuffer()
-        })
-        .then((payload: ArrayBuffer) => {
-          return this.#processData(payload, h)
-        })
-        .then((payload) => {
-          // _localStorage.setItem(`${h.id}_cache`, arrayBufferToBase64(payload))
-          if (returnType === 'string') resolve(sbCrypto.ab2str(new Uint8Array(payload)))
-          else resolve(payload)
-        })
-        .catch((error: Error) => { reject(error) })
+      const queryString = '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken
+
+      // SBFetch(useServer + '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
+      const result = await this.#_fetchData(useServer, queryString, h, returnType)
+      if (result) resolve(result)
+
+      // upon failure we farm out and try all known servers
+      // ToDo: add an interface where we accumulated knowledge of more servers
+      for (let i = 0; i < knownStorageAndShardServers.length; i++) {
+        const tryServer = knownStorageAndShardServers[i] + '/api/v1'
+        if (tryServer !== useServer) {
+          const result = await this.#_fetchData(tryServer, queryString, h, returnType)
+          if (result) resolve(result)
+        }
+      }
+      reject('fetchData() failed - tried all servers')
     })
   }
+
+
+
 
   /**
    * StorageApi().retrieveData()
