@@ -1,4 +1,4 @@
-declare const version = "2.0.0 (pre) build 02";
+declare const version = "2.0.0 (pre) build 03";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -23,6 +23,7 @@ interface ChannelData {
     encryptionKey: string;
     signKey: string;
     motherChannel?: SBChannelId;
+    storageToken?: string;
     SERVER_SECRET?: string;
     size?: number;
 }
@@ -228,7 +229,7 @@ declare class SBCrypto {
     }>;
     extractPubKey(privateKey: JsonWebKey): JsonWebKey | null;
     sb384Hash(key?: JsonWebKey | CryptoKey): Promise<SB384Hash | undefined>;
-    compareHashWithKey(hash: SB384Hash, key: JsonWebKey): Promise<boolean>;
+    compareHashWithKey(hash: SB384Hash, key: JsonWebKey | null): Promise<boolean>;
     verifyChannelId(owner_key: JsonWebKey, channel_id: SBChannelId): Promise<boolean>;
     generateKeys(): Promise<CryptoKeyPair>;
     importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
@@ -255,7 +256,7 @@ declare class SB384 {
     #private;
     ready: Promise<SB384>;
     sb384Ready: Promise<SB384>;
-    constructor(key?: JsonWebKey);
+    constructor(key?: JsonWebKey | null);
     get readyFlag(): boolean;
     get exportable_pubKey(): JsonWebKey;
     get exportable_privateKey(): JsonWebKey;
@@ -287,7 +288,7 @@ declare abstract class Channel extends SB384 {
     verifiedGuest: boolean;
     userName: string;
     abstract send(message: SBMessage): Promise<string>;
-    constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string);
+    constructor(sbServer: SBServer, key: JsonWebKey | null, channelId?: string);
     get keys(): ChannelKeys;
     get sbServer(): SBServer;
     get readyFlag(): boolean;
@@ -314,6 +315,7 @@ declare abstract class Channel extends SB384 {
     lock(): Promise<unknown>;
     acceptVisitor(pubKey: string): Promise<unknown>;
     ownerKeyRotation(): void;
+    getStorageToken(size: number): Promise<string>;
     budd(): Promise<SBChannelHandle>;
     budd(options: {
         keys?: JsonWebKey;
@@ -325,7 +327,7 @@ export declare class ChannelSocket extends Channel {
     #private;
     ready: Promise<ChannelSocket>;
     channelSocketReady: Promise<ChannelSocket>;
-    constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string);
+    constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey | null, channelId?: string);
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set onMessage(f: (m: ChannelMessage) => void);
     get onMessage(): (m: ChannelMessage) => void;
@@ -334,7 +336,7 @@ export declare class ChannelSocket extends Channel {
     get exportable_owner_pubKey(): CryptoKey;
 }
 export declare class ChannelEndpoint extends Channel {
-    constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string);
+    constructor(sbServer: SBServer, key?: JsonWebKey | null, channelId?: string);
     send(_m: SBMessage | string, _messageType?: 'string' | 'SBMessage'): Promise<string>;
     set onMessage(_f: CallableFunction);
 }
@@ -368,20 +370,21 @@ export declare class SBObjectHandle implements Interfaces.SBObjectHandle_base {
 declare class StorageApi {
     #private;
     server: string;
-    shardServer?: string;
     channelServer: string;
-    constructor(server: string, channelServer: string, shardServer?: string);
+    shardServer?: string;
+    sbServer: SBServer;
+    constructor(sbServer: SBServer);
     storeObject(type: string, fileId: Base62Encoded, iv: Uint8Array, salt: Uint8Array, storageToken: string, data: ArrayBuffer): Promise<Dictionary<any>>;
-    storeData(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId, metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle>;
+    storeData(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId | ChannelEndpoint, metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle>;
     fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>;
     fetchData(handle: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
     retrieveImage(imageMetaData: ImageMetaData, controlMessages: Array<ChannelMessage>, imageId?: string, imageKey?: string, imageType?: SBObjectType, imgObjVersion?: SBObjectHandleVersions): Promise<Dictionary<any>>;
 }
 declare class Snackabra {
     #private;
-    constructor(args?: SBServer, DEBUG?: boolean);
-    connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string): Promise<ChannelSocket>;
-    create(sbServer: SBServer, serverSecret: string, keys?: JsonWebKey): Promise<SBChannelHandle>;
+    constructor(sbServer?: SBServer, DEBUG?: boolean);
+    connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey | null, channelId?: string): Promise<ChannelSocket>;
+    create(sbServer: SBServer, serverSecretOrBudgetChannel?: string | ChannelEndpoint, keys?: JsonWebKey): Promise<SBChannelHandle>;
     get channel(): Channel;
     get storage(): StorageApi;
     get crypto(): SBCrypto;

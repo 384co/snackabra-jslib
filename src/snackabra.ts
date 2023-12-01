@@ -28,16 +28,17 @@
 
 // update package.json too; we flag 'pre' if it's a pre-release of 
 // a version, e.g. if it's not published to npm etc yet
-
 // eg: const version = '1.1.25 (pre) build 02'
 // will be labeled '1.1.25' upon publishing
 
-// working on 1.2.0
-// const version = '1.2.3 (pre) build 01'
-const version = '2.0.0 (pre) build 02'
+// working on 2.0.0
+const version = '2.0.0 (pre) build 03'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
+
+// minimum when creating a new channel
+const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024; // 8 MB
 
 
 export interface SBServer {
@@ -119,7 +120,8 @@ interface ChannelData {
   encryptionKey: string;
   signKey: string;
   motherChannel?: SBChannelId;
-  SERVER_SECRET?: string; // used internally for storage budget authentication
+  storageToken?: string; // used internally for storage budget authentication
+  SERVER_SECRET?: string; // used internally for storage budget authentication (dev or local servers only)
   size?: number; // used internally
 }
 
@@ -577,7 +579,7 @@ function _sb_assert(val: unknown, msg: string) {
 
 // used to create NEW channel
 /** @private */
-async function newChannelData(keys?: JsonWebKey): Promise<{ channelData: ChannelData, exportable_privateKey: Dictionary<any> }> {
+async function newChannelData(keys: JsonWebKey | null): Promise<{ channelData: ChannelData, exportable_privateKey: Dictionary<any> }> {
   const owner384 = new SB384(keys)
   await owner384.ready
   // const ownerKeyPair = await owner384.ready.then((x) => x.keyPair!)
@@ -972,7 +974,7 @@ type Base62Encoded = string & { _brand?: 'Base62Encoded' };
 export function base62ToArrayBuffer32(s: Base62Encoded): ArrayBuffer {
   if (!base62Regex.test(s)) throw new Error(`base62ToArrayBuffer32: string must match: ${base62Regex}, value provided was ${s}`);
   // remove the 'a32.' prefix, if present
-  if (s.startsWith('a32.')) s = s.slice(4); 
+  if (s.startsWith('a32.')) s = s.slice(4);
   let n = BigInt(0);
   for (let i = 0; i < s.length; i++)
     n = n * 62n + BigInt(base62.indexOf(s[i]));
@@ -1817,7 +1819,7 @@ class SBCrypto {  /*************************************************************
    * b64-encoded hash without iteration or other processing.
    * 
    */
-  async compareHashWithKey(hash: SB384Hash, key: JsonWebKey) {
+  async compareHashWithKey(hash: SB384Hash, key: JsonWebKey | null) {
     if (!hash || !key) return false
     let x = key.x
     let y = key.y
@@ -2371,7 +2373,7 @@ class SB384 {
    * default to creating a new identity ("384").
    *
    */
-  constructor(key?: JsonWebKey) {
+  constructor(key: JsonWebKey | null = null) {
     this.ready = new Promise<SB384>(async (resolve, reject) => {
       try {
         if (key) {
@@ -2607,7 +2609,7 @@ abstract class Channel extends SB384 {
 
   abstract send(message: SBMessage): Promise<string>
 
-  constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
+  constructor(sbServer: SBServer, key: JsonWebKey | null, channelId?: string) {
     console.log("CONSTRUCTOR new channel")
     _sb_assert(channelId, "Channel(): as of jslib 1.1.x the channelId must be provided")
     super(key)
@@ -2956,6 +2958,20 @@ abstract class Channel extends SB384 {
     throw new Error("ownerKeyRotation() replaced by new budd() approach")
   }
 
+  /**
+   * returns a storage token (promise); basic consumption of channel budget
+   */
+  getStorageToken(size: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+      this.#callApi(`/storageRequest?size=${size}`)
+        .then((storageTokenReq) => {
+          if (storageTokenReq.hasOwnProperty('error')) reject(`storage token request error (${storageTokenReq.error})`)
+          resolve(JSON.stringify(storageTokenReq))
+        })
+        .catch((e: Error) => { reject("ChannelApi (getStorageToken) Error [3]: " + WrapError(e)) })
+    });
+  }
+
   // ToDo: if both keys and storage are specified, should we check for server secret?
 
   /**
@@ -3013,7 +3029,7 @@ abstract class Channel extends SB384 {
           resolve(this.#callApi(`/budd?targetChannel=${targetChannel}&transferBudget=${storage}`))
         } else {
           // we are creating a new channel
-          const { channelData, exportable_privateKey } = await newChannelData(keys);
+          const { channelData, exportable_privateKey } = await newChannelData(keys ? keys : null);
           let resp: Dictionary<any> = await this.#callApi(`/budd?targetChannel=${channelData.roomId}&transferBudget=${storage}`, channelData)
           if (resp.success) {
             resolve({ channelId: channelData.roomId!, key: exportable_privateKey })
@@ -3033,8 +3049,8 @@ abstract class Channel extends SB384 {
   // ownerUnread() { }
   // registerDevice() { }
 
-} /* class ChannelAPI */
-//#region - class ChannelAPI - TODO implement these methods
+} /* class Channel */
+//#region
 
 // catch and call out if this is missing
 function noMessageHandler(_m: ChannelMessage): void { _sb_assert(false, "NO MESSAGE HANDLER"); }
@@ -3092,7 +3108,7 @@ export class ChannelSocket extends Channel {
    * @param key 
    * @param channelId 
    */
-  constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string) {
+  constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey | null, channelId?: string) {
     super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
     _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
     _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
@@ -3394,7 +3410,7 @@ export class ChannelSocket extends Channel {
  * in the future for non-socket use cases)
  */
 export class ChannelEndpoint extends Channel {
-  constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
+  constructor(sbServer: SBServer, key: JsonWebKey | null = null, channelId?: string) {
     super(sbServer, key, channelId)
   }
 
@@ -3715,7 +3731,7 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
   get key32(): Base62Encoded { throw new Error('Invalid key_binary'); }
 
   set verification(value: Promise<string> | string) {
-    this.#verification = value; /* this.#setId32(); */ 
+    this.#verification = value; /* this.#setId32(); */
   }
   get verification(): Promise<string> | string {
     _sb_assert(this.#verification, 'object handle verification is undefined');
@@ -3734,14 +3750,17 @@ export class SBObjectHandle implements Interfaces.SBObjectHandle_base {
  */
 class StorageApi {
   server: string;
+  channelServer: string;
   shardServer?: string;
-  channelServer: string; // approves budget, TODO this needs some thought
+  sbServer: SBServer;
 
-  constructor(server: string, channelServer: string, shardServer?: string) {
-    this.server = server + '/api/v1';
-    this.channelServer = channelServer + '/api/room/'
-    if (shardServer)
-      this.shardServer = shardServer + '/api/v1'
+  // constructor(server: string, channelServer: string, shardServer?: string) {
+  constructor(sbServer: SBServer) {
+    const { storage_server, channel_server, shard_server } = sbServer
+    this.server = storage_server + '/api/v1';
+    this.channelServer = channel_server + '/api/room/'
+    if (shard_server) this.shardServer = shard_server + '/api/v1'
+    this.sbServer = sbServer
   }
 
   /**
@@ -3762,10 +3781,7 @@ class StorageApi {
     let finalArray = _appendBuffer(buf, (new Uint8Array(_target - image_size)).buffer);
     // set the (original) size in the last 4 bytes
     (new DataView(finalArray)).setUint32(_target - 4, image_size)
-    if (DBG2) {
-      console.log("#padBuf bytes:");
-      console.log(finalArray.slice(-4))
-    }
+    if (DBG2) console.log("#padBuf bytes:", finalArray.slice(-4));
     return finalArray
   }
 
@@ -3813,6 +3829,23 @@ class StorageApi {
     });
   }
 
+  // // returns a storage token (promise); basic consumption of channel budget
+  // getStorageToken(roomId: SBChannelId, size: number): Promise<string> {
+  //   return new Promise((resolve, reject) => {
+  //     SBFetch(this.channelServer + stripA32(roomId) + '/storageRequest?size=' + size)
+  //       .then((r) => r.json())
+  //       .then((storageTokenReq) => {
+  //         if (storageTokenReq.hasOwnProperty('error')) reject(`storage token request error (${storageTokenReq.error})`)
+  //         resolve(JSON.stringify(storageTokenReq))
+  //       })
+  //       .catch((e) => {
+  //         const msg = `getStorageToken] storage token request failed: ${e}`
+  //         console.error(msg)
+  //         reject(msg)
+  //       });
+  //   });
+  // }
+
   /** @private
    * get "permission" to store in the form of a token
    */
@@ -3831,38 +3864,31 @@ class StorageApi {
     })
   }
 
-  /** @private */
-  #_storeObject(
+  // this returns a promise to the verification string  
+  async #_storeObject(
     image: ArrayBuffer,
     image_id: Base62Encoded,
     keyData: ArrayBuffer,
     type: SBObjectType,
-    roomId: SBChannelId,
+    // roomId: SBChannelId,
+    budgetChannel: ChannelEndpoint,
     iv: Uint8Array,
     salt: Uint8Array
   ): Promise<string> {
-    return new Promise((resolve, reject) => {
-      this.#getObjectKey(keyData, salt).then((key) => {
-        sbCrypto.encrypt(image, key, iv, 'arrayBuffer').then((data) => {
-          // const storageTokenReq = await(await
-          SBFetch(this.channelServer + stripA32(roomId) + '/storageRequest?size=' + data.byteLength)
-            .then((r) => r.json())
-            .then((storageTokenReq) => {
-              if (storageTokenReq.hasOwnProperty('error')) reject(`storage token request error (${storageTokenReq.error})`)
-              let storageToken = JSON.stringify(storageTokenReq)
-              this.storeObject(type, image_id, iv, salt, storageToken, data)
-                .then((resp_json) => {
-                  if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
-                  if (resp_json.image_id != stripA32(image_id)) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
-                  resolve(resp_json.verification_token)
-                })
-                .catch((e: any) => {
-                  console.log("ERROR in _storeObject(): ${e}")
-                  reject(e)
-                })
-            })
-        })
-      })
+    return new Promise(async (resolve, reject) => {
+      try {
+        const key = await this.#getObjectKey(keyData, salt)
+        const data = await sbCrypto.encrypt(image, key, iv, 'arrayBuffer')
+        const storageToken = await budgetChannel.getStorageToken(data.byteLength)
+        const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data)
+        if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
+        if (resp_json.image_id != stripA32(image_id)) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
+        resolve(resp_json.verification_token)
+      } catch (e) {
+        const msg = `storeObject() failed: ${e}`
+        console.error(msg)
+        reject(msg)
+      }
     })
   }
 
@@ -3922,11 +3948,8 @@ class StorageApi {
    * 
    * It is a bit outdated ... it accepts metadata for historical reasons
    */
-  storeData(
-    buf: BodyInit | Uint8Array,
-    type: SBObjectType,
-    roomId: SBChannelId,
-    metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle> {
+  storeData(buf: BodyInit | Uint8Array, type: SBObjectType, roomId: SBChannelId | ChannelEndpoint, metadata?: SBObjectMetadata): Promise<Interfaces.SBObjectHandle>
+  {
     // used to be integrated with image uploading and matching control message, for reference:
     // export async function saveImage(sbImage, roomId, sendSystemMessage)
     return new Promise((resolve, reject) => {
@@ -3945,57 +3968,44 @@ class StorageApi {
         reject('buf must be an ArrayBuffer')
       }
       const bufSize = (buf as ArrayBuffer).byteLength
-      if (!metadata) {
-        const paddedBuf = this.#padBuf(buf as ArrayBuffer)
-        sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
-          // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
-          this.#_allocateObject(fullHash.id_binary, type)
-            .then((p) => {
-              // storage server returns the salt and nonce it wants us to use
-              const id32 = arrayBufferToBase62(fullHash.id_binary)
-              const key32 = arrayBufferToBase62(fullHash.key_material)
-              const r: Interfaces.SBObjectHandle = {
-                [SB_OBJECT_HANDLE_SYMBOL]: true,
-                version: currentSBOHVersion,
-                type: type,
-                // id: fullHash.id64,
-                // key: fullHash.key64,
-                // id: base64ToBase62(fullHash.id32),
-                // key: base64ToBase62(fullHash.key32),
-                id: id32,
-                key: key32,
-                iv: p.iv,
-                salt: p.salt,
-                actualSize: bufSize,
-                verification: this.#_storeObject(paddedBuf, id32, fullHash.key_material, type, roomId, p.iv, p.salt)
-              }
-              resolve(r)
-            })
-            .catch((e) => reject(e))
-        })
-      } else {
+      if (metadata) {
+        // i think this is old/ancient?
         console.warn("storeData() called with metadata - this is deprecated (let us know how/where this is needed)")
-        reject("storeData() called with metadata - this is deprecated")
-        // // TODO: this variation should probably not exist ...
-        // // unsure of format that might be incoming ...
         // metadata.id = stripA32(metadata.id)
         // metadata.key = stripA32(metadata.key)
-        // const r: Interfaces.SBObjectHandle = {
-        //   [SB_OBJECT_HANDLE_SYMBOL]: true,
-        //   version: currentSBOHVersion,
-        //   type: type,
-        //   // id: metadata.id,
-        //   // key: metadata.key,
-        //   id: stripA32(metadata.id),
-        //   key: stripA32(metadata.key),
-        //   iv: metadata.iv,
-        //   salt: metadata.salt,
-        //   actualSize: bufSize,
-        //   verification: this.#_storeObject(metadata.paddedBuffer, metadata.id, metadata.key, type, roomId, metadata.iv, metadata.salt)
-        // }
-        // resolve(r)
+        reject("storeData() called with metadata - this is deprecated")
       }
 
+      // our budget channel is either directly provided, or we create a new channel object from the roomId
+      const channel = (roomId instanceof ChannelEndpoint) ? roomId : new ChannelEndpoint(this.sbServer, undefined, roomId)
+
+      const paddedBuf = this.#padBuf(buf as ArrayBuffer)
+      sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
+        // return { full: { id: fullHash.id, key: fullHash.key }, preview: { id: previewHash.id, key: previewHash.key } }
+        this.#_allocateObject(fullHash.id_binary, type)
+          .then((p) => {
+            // storage server returns the salt and nonce it wants us to use
+            const id32 = arrayBufferToBase62(fullHash.id_binary)
+            const key32 = arrayBufferToBase62(fullHash.key_material)
+            const r: Interfaces.SBObjectHandle = {
+              [SB_OBJECT_HANDLE_SYMBOL]: true,
+              version: currentSBOHVersion,
+              type: type,
+              // id: fullHash.id64,
+              // key: fullHash.key64,
+              // id: base64ToBase62(fullHash.id32),
+              // key: base64ToBase62(fullHash.key32),
+              id: id32,
+              key: key32,
+              iv: p.iv,
+              salt: p.salt,
+              actualSize: bufSize,
+              verification: this.#_storeObject(paddedBuf, id32, fullHash.key_material, type, channel, p.iv, p.salt)
+            }
+            resolve(r)
+          })
+          .catch((e) => reject(e))
+      })
     })
   }
 
@@ -4145,8 +4155,7 @@ class StorageApi {
     imageId?: string,
     imageKey?: string,
     imageType?: SBObjectType,
-    imgObjVersion?: SBObjectHandleVersions): Promise<Dictionary<any>>
-  {
+    imgObjVersion?: SBObjectHandleVersions): Promise<Dictionary<any>> {
     console.trace("retrieveImage()")
     console.log(imageMetaData)
     const id = imageId ? imageId : imageMetaData.previewId;
@@ -4216,11 +4225,12 @@ class Snackabra {
   * 
   * @param DEBUG - optional boolean to enable debug logging
   */
-  constructor(args?: SBServer, DEBUG: boolean = false) {
+  constructor(sbServer?: SBServer, DEBUG: boolean = false) {
     console.warn(`==== CREATING Snackabra object generation: ${this.version} ====`)
-    if (args) {
-      this.#preferredServer = Object.assign({}, args)
-      this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined)
+    if (sbServer) {
+      this.#preferredServer = Object.assign({}, sbServer)
+      // this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined)
+      this.#storage = new StorageApi(sbServer)
       if (DEBUG) DBG = true
       if (DBG) console.warn("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
     }
@@ -4244,7 +4254,7 @@ class Snackabra {
    * @param channelId - optional channel id to use for encryption/decryption
    * @returns a channel object
    */
-  connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
+  connect(onMessage: (m: ChannelMessage) => void, key: JsonWebKey | null = null, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
     if (DBG) {
       console.log("++++ Snackabra.connect() ++++")
       if (key) console.log(key)
@@ -4283,17 +4293,28 @@ class Snackabra {
    * it just creates (authorizes) it.
    * 
    * @param sbServer - the server to use
-   * @param serverSecret - the server secret
+   * @param serverSecret - the server secret (dev only)
    * @param keys - optional keys to use for encryption/decryption
+   * @param budgetChannel - NECESSARY unless local/dev; provides a channel to pay for storage
+   * 
+   * Note that if you have a full budget channel, you can budd off it (which
+   * will take all the storage). Providing a budget channel here will allows
+   * you to create new channels when a 'guest' on some channel (for example).
    */
-  create(sbServer: SBServer, serverSecret: string, keys?: JsonWebKey): Promise<SBChannelHandle> {
+  create(sbServer: SBServer, serverSecretOrBudgetChannel?: string | ChannelEndpoint, keys?: JsonWebKey): Promise<SBChannelHandle> {
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       try {
-        const { channelData, exportable_privateKey } = await newChannelData(keys)
+        const { channelData, exportable_privateKey } = await newChannelData(keys ? keys : null)
         if (!channelData.roomId) {
           throw new Error('Unable to determine roomId from key and id (it is empty)')
         }
-        channelData.SERVER_SECRET = serverSecret
+        const budgetChannel = (serverSecretOrBudgetChannel instanceof ChannelEndpoint) ? serverSecretOrBudgetChannel : undefined
+        if (serverSecretOrBudgetChannel && typeof serverSecretOrBudgetChannel === 'string') channelData.SERVER_SECRET = serverSecretOrBudgetChannel
+        if (budgetChannel) {
+          const storageToken = await budgetChannel.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET)
+          if (!storageToken) reject('[create channel] Failed to get storage token for the provided channel')
+          channelData.storageToken = storageToken
+        }
         const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
         let resp: Dictionary<any> = await SBFetch(sbServer.channel_server + '/api/room/' + stripA32(channelData.roomId) + '/uploadRoom', {
           method: 'POST',
@@ -4308,7 +4329,9 @@ class Snackabra {
           reject(JSON.stringify(resp));
         }
       } catch (e) {
-        reject(e);
+        const msg = `create() failed: ${e}`
+        console.error(msg)
+        reject(msg);
       }
     });
   }

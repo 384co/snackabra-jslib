@@ -4,7 +4,8 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0 (pre) build 02';
+const version = '2.0.0 (pre) build 03';
+const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = false;
 var DBG2 = false;
 const currentSBOHVersion = '2';
@@ -1136,7 +1137,7 @@ class SB384 {
     #exportable_privateKey;
     #privateKey;
     #hash;
-    constructor(key) {
+    constructor(key = null) {
         this.ready = new Promise(async (resolve, reject) => {
             try {
                 if (key) {
@@ -1548,6 +1549,17 @@ class Channel extends SB384 {
     ownerKeyRotation() {
         throw new Error("ownerKeyRotation() replaced by new budd() approach");
     }
+    getStorageToken(size) {
+        return new Promise((resolve, reject) => {
+            this.#callApi(`/storageRequest?size=${size}`)
+                .then((storageTokenReq) => {
+                if (storageTokenReq.hasOwnProperty('error'))
+                    reject(`storage token request error (${storageTokenReq.error})`);
+                resolve(JSON.stringify(storageTokenReq));
+            })
+                .catch((e) => { reject("ChannelApi (getStorageToken) Error [3]: " + WrapError(e)); });
+        });
+    }
     budd(options) {
         let { keys, storage, targetChannel } = options ?? {};
         return new Promise(async (resolve, reject) => {
@@ -1564,7 +1576,7 @@ class Channel extends SB384 {
                     resolve(this.#callApi(`/budd?targetChannel=${targetChannel}&transferBudget=${storage}`));
                 }
                 else {
-                    const { channelData, exportable_privateKey } = await newChannelData(keys);
+                    const { channelData, exportable_privateKey } = await newChannelData(keys ? keys : null);
                     let resp = await this.#callApi(`/budd?targetChannel=${channelData.roomId}&transferBudget=${storage}`, channelData);
                     if (resp.success) {
                         resolve({ channelId: channelData.roomId, key: exportable_privateKey });
@@ -1939,7 +1951,7 @@ __decorate([
     Ready
 ], ChannelSocket.prototype, "exportable_owner_pubKey", null);
 export class ChannelEndpoint extends Channel {
-    constructor(sbServer, key, channelId) {
+    constructor(sbServer, key = null, channelId) {
         super(sbServer, key, channelId);
     }
     send(_m, _messageType) {
@@ -2193,13 +2205,16 @@ export class SBObjectHandle {
 }
 class StorageApi {
     server;
-    shardServer;
     channelServer;
-    constructor(server, channelServer, shardServer) {
-        this.server = server + '/api/v1';
-        this.channelServer = channelServer + '/api/room/';
-        if (shardServer)
-            this.shardServer = shardServer + '/api/v1';
+    shardServer;
+    sbServer;
+    constructor(sbServer) {
+        const { storage_server, channel_server, shard_server } = sbServer;
+        this.server = storage_server + '/api/v1';
+        this.channelServer = channel_server + '/api/room/';
+        if (shard_server)
+            this.shardServer = shard_server + '/api/v1';
+        this.sbServer = sbServer;
     }
     #padBuf(buf) {
         const image_size = buf.byteLength;
@@ -2212,10 +2227,8 @@ class StorageApi {
             _target = (Math.ceil((image_size + 4) / 1048576)) * 1048576;
         let finalArray = _appendBuffer(buf, (new Uint8Array(_target - image_size)).buffer);
         (new DataView(finalArray)).setUint32(_target - 4, image_size);
-        if (DBG2) {
-            console.log("#padBuf bytes:");
-            console.log(finalArray.slice(-4));
-        }
+        if (DBG2)
+            console.log("#padBuf bytes:", finalArray.slice(-4));
         return finalArray;
     }
     #unpadData(data_buffer) {
@@ -2265,31 +2278,24 @@ class StorageApi {
             });
         });
     }
-    #_storeObject(image, image_id, keyData, type, roomId, iv, salt) {
-        return new Promise((resolve, reject) => {
-            this.#getObjectKey(keyData, salt).then((key) => {
-                sbCrypto.encrypt(image, key, iv, 'arrayBuffer').then((data) => {
-                    SBFetch(this.channelServer + stripA32(roomId) + '/storageRequest?size=' + data.byteLength)
-                        .then((r) => r.json())
-                        .then((storageTokenReq) => {
-                        if (storageTokenReq.hasOwnProperty('error'))
-                            reject(`storage token request error (${storageTokenReq.error})`);
-                        let storageToken = JSON.stringify(storageTokenReq);
-                        this.storeObject(type, image_id, iv, salt, storageToken, data)
-                            .then((resp_json) => {
-                            if (resp_json.error)
-                                reject(`storeObject() failed: ${resp_json.error}`);
-                            if (resp_json.image_id != stripA32(image_id))
-                                reject(`received imageId ${resp_json.image_id} but expected ${image_id}`);
-                            resolve(resp_json.verification_token);
-                        })
-                            .catch((e) => {
-                            console.log("ERROR in _storeObject(): ${e}");
-                            reject(e);
-                        });
-                    });
-                });
-            });
+    async #_storeObject(image, image_id, keyData, type, budgetChannel, iv, salt) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const key = await this.#getObjectKey(keyData, salt);
+                const data = await sbCrypto.encrypt(image, key, iv, 'arrayBuffer');
+                const storageToken = await budgetChannel.getStorageToken(data.byteLength);
+                const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data);
+                if (resp_json.error)
+                    reject(`storeObject() failed: ${resp_json.error}`);
+                if (resp_json.image_id != stripA32(image_id))
+                    reject(`received imageId ${resp_json.image_id} but expected ${image_id}`);
+                resolve(resp_json.verification_token);
+            }
+            catch (e) {
+                const msg = `storeObject() failed: ${e}`;
+                console.error(msg);
+                reject(msg);
+            }
         });
     }
     storeObject(type, fileId, iv, salt, storageToken, data) {
@@ -2341,33 +2347,32 @@ class StorageApi {
                 reject('buf must be an ArrayBuffer');
             }
             const bufSize = buf.byteLength;
-            if (!metadata) {
-                const paddedBuf = this.#padBuf(buf);
-                sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
-                    this.#_allocateObject(fullHash.id_binary, type)
-                        .then((p) => {
-                        const id32 = arrayBufferToBase62(fullHash.id_binary);
-                        const key32 = arrayBufferToBase62(fullHash.key_material);
-                        const r = {
-                            [SB_OBJECT_HANDLE_SYMBOL]: true,
-                            version: currentSBOHVersion,
-                            type: type,
-                            id: id32,
-                            key: key32,
-                            iv: p.iv,
-                            salt: p.salt,
-                            actualSize: bufSize,
-                            verification: this.#_storeObject(paddedBuf, id32, fullHash.key_material, type, roomId, p.iv, p.salt)
-                        };
-                        resolve(r);
-                    })
-                        .catch((e) => reject(e));
-                });
-            }
-            else {
+            if (metadata) {
                 console.warn("storeData() called with metadata - this is deprecated (let us know how/where this is needed)");
                 reject("storeData() called with metadata - this is deprecated");
             }
+            const channel = (roomId instanceof ChannelEndpoint) ? roomId : new ChannelEndpoint(this.sbServer, undefined, roomId);
+            const paddedBuf = this.#padBuf(buf);
+            sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
+                this.#_allocateObject(fullHash.id_binary, type)
+                    .then((p) => {
+                    const id32 = arrayBufferToBase62(fullHash.id_binary);
+                    const key32 = arrayBufferToBase62(fullHash.key_material);
+                    const r = {
+                        [SB_OBJECT_HANDLE_SYMBOL]: true,
+                        version: currentSBOHVersion,
+                        type: type,
+                        id: id32,
+                        key: key32,
+                        iv: p.iv,
+                        salt: p.salt,
+                        actualSize: bufSize,
+                        verification: this.#_storeObject(paddedBuf, id32, fullHash.key_material, type, channel, p.iv, p.salt)
+                    };
+                    resolve(r);
+                })
+                    .catch((e) => reject(e));
+            });
         });
     }
     #processData(payload, h) {
@@ -2516,18 +2521,18 @@ class Snackabra {
     #channel;
     #preferredServer;
     #version = version;
-    constructor(args, DEBUG = false) {
+    constructor(sbServer, DEBUG = false) {
         console.warn(`==== CREATING Snackabra object generation: ${this.version} ====`);
-        if (args) {
-            this.#preferredServer = Object.assign({}, args);
-            this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined);
+        if (sbServer) {
+            this.#preferredServer = Object.assign({}, sbServer);
+            this.#storage = new StorageApi(sbServer);
             if (DEBUG)
                 DBG = true;
             if (DBG)
                 console.warn("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
         }
     }
-    connect(onMessage, key, channelId) {
+    connect(onMessage, key = null, channelId) {
         if (DBG) {
             console.log("++++ Snackabra.connect() ++++");
             if (key)
@@ -2542,14 +2547,22 @@ class Snackabra {
                 resolve(Promise.any(SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId)).ready)));
         });
     }
-    create(sbServer, serverSecret, keys) {
+    create(sbServer, serverSecretOrBudgetChannel, keys) {
         return new Promise(async (resolve, reject) => {
             try {
-                const { channelData, exportable_privateKey } = await newChannelData(keys);
+                const { channelData, exportable_privateKey } = await newChannelData(keys ? keys : null);
                 if (!channelData.roomId) {
                     throw new Error('Unable to determine roomId from key and id (it is empty)');
                 }
-                channelData.SERVER_SECRET = serverSecret;
+                const budgetChannel = (serverSecretOrBudgetChannel instanceof ChannelEndpoint) ? serverSecretOrBudgetChannel : undefined;
+                if (serverSecretOrBudgetChannel && typeof serverSecretOrBudgetChannel === 'string')
+                    channelData.SERVER_SECRET = serverSecretOrBudgetChannel;
+                if (budgetChannel) {
+                    const storageToken = await budgetChannel.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET);
+                    if (!storageToken)
+                        reject('[create channel] Failed to get storage token for the provided channel');
+                    channelData.storageToken = storageToken;
+                }
                 const data = new TextEncoder().encode(JSON.stringify(channelData));
                 let resp = await SBFetch(sbServer.channel_server + '/api/room/' + stripA32(channelData.roomId) + '/uploadRoom', {
                     method: 'POST',
@@ -2564,7 +2577,9 @@ class Snackabra {
                 }
             }
             catch (e) {
-                reject(e);
+                const msg = `create() failed: ${e}`;
+                console.error(msg);
+                reject(msg);
             }
         });
     }
