@@ -288,7 +288,7 @@ declare abstract class Channel extends SB384 {
     verifiedGuest: boolean;
     userName: string;
     abstract send(message: SBMessage): Promise<string>;
-    constructor(sbServer: SBServer, key: JsonWebKey | null, channelId?: string);
+    constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string);
     get keys(): ChannelKeys;
     get sbServer(): SBServer;
     get readyFlag(): boolean;
@@ -327,7 +327,7 @@ export declare class ChannelSocket extends Channel {
     #private;
     ready: Promise<ChannelSocket>;
     channelSocketReady: Promise<ChannelSocket>;
-    constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey | null, channelId?: string);
+    constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string);
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set onMessage(f: (m: ChannelMessage) => void);
     get onMessage(): (m: ChannelMessage) => void;
@@ -336,7 +336,7 @@ export declare class ChannelSocket extends Channel {
     get exportable_owner_pubKey(): CryptoKey;
 }
 export declare class ChannelEndpoint extends Channel {
-    constructor(sbServer: SBServer, key?: JsonWebKey | null, channelId?: string);
+    constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string);
     send(_m: SBMessage | string, _messageType?: 'string' | 'SBMessage'): Promise<string>;
     set onMessage(_f: CallableFunction);
 }
@@ -383,7 +383,7 @@ declare class StorageApi {
 declare class Snackabra {
     #private;
     constructor(sbServer?: SBServer, DEBUG?: boolean);
-    connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey | null, channelId?: string): Promise<ChannelSocket>;
+    connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string): Promise<ChannelSocket>;
     create(sbServer: SBServer, serverSecretOrBudgetChannel?: string | ChannelEndpoint, keys?: JsonWebKey): Promise<SBChannelHandle>;
     get channel(): Channel;
     get storage(): StorageApi;

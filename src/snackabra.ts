@@ -2609,8 +2609,8 @@ abstract class Channel extends SB384 {
 
   abstract send(message: SBMessage): Promise<string>
 
-  constructor(sbServer: SBServer, key: JsonWebKey | null, channelId?: string) {
-    console.log("CONSTRUCTOR new channel")
+  constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
+    if (DBG2) console.log("CONSTRUCTOR new channel")
     _sb_assert(channelId, "Channel(): as of jslib 1.1.x the channelId must be provided")
     super(key)
     this.#sbServer = sbServer
@@ -3108,7 +3108,7 @@ export class ChannelSocket extends Channel {
    * @param key 
    * @param channelId 
    */
-  constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey | null, channelId?: string) {
+  constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string) {
     super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
     _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
     _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
@@ -3271,7 +3271,7 @@ export class ChannelSocket extends Channel {
 
   // we use (bound) message handlers orchestrate who handles first message (and only once)
   #firstMessageEventHandler(e: MessageEvent) {
-    console.log("FIRST MESSAGE HANDLER CALLED")
+    if (this.#traceSocket) console.log("FIRST MESSAGE HANDLER CALLED")
     const blocker = this.#insideFirstMessageHandler.bind(this)
     this.#ws.websocket!.addEventListener('message', blocker)
     this.#ws.websocket!.removeEventListener('message', this.#firstMessageEventHandlerReference)
@@ -3319,7 +3319,7 @@ export class ChannelSocket extends Channel {
   /** Enables debug output */
   set enableTrace(b: boolean) {
     this.#traceSocket = b;
-    console.log(`==== jslib ChannelSocket: Tracing ${b ? 'en' : 'dis'}abled ====`);
+    if (b) console.log("==== jslib ChannelSocket: Tracing enabled ====")
   }
 
   /**
@@ -3344,7 +3344,7 @@ export class ChannelSocket extends Channel {
           switch (this.#ws.websocket!.readyState) {
             case 1: // OPEN
               if (this.#traceSocket) {
-                console.log("Wrapping message contents:")
+                console.log("++++++++ ChannelSocket.send(): Wrapping message contents:")
                 console.log(Object.assign({}, message.contents))
               }
               sbCrypto.wrap(message.encryptionKey!, JSON.stringify(message.contents), 'string')
@@ -3353,13 +3353,15 @@ export class ChannelSocket extends Channel {
                     encrypted_contents: wrappedMessage,
                     recipient: message.sendToPubKey ? message.sendToPubKey : undefined
                   })
-                  console.log("++++++++ ChannelSocket.send(): sending message:")
-                  console.log(wrappedMessage.content as string)
+                  if (this.#traceSocket) {
+                    console.log("++++++++ ChannelSocket.send(): sending message:")
+                    console.log((wrappedMessage.content as string).slice(0, 100) + "  ...  " + (wrappedMessage.content as string).slice(-100))
+                  }
                   crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content as string))
                     .then((hash) => {
                       const messageHash = arrayBufferToBase64(hash)
-                      if (DBG) {
-                        console.log("Which has hash:")
+                      if (this.#traceSocket) {
+                        console.log("++++++++ ChannelSocket.send():Which has hash:")
                         console.log(messageHash)
                       }
                       // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
@@ -3410,7 +3412,7 @@ export class ChannelSocket extends Channel {
  * in the future for non-socket use cases)
  */
 export class ChannelEndpoint extends Channel {
-  constructor(sbServer: SBServer, key: JsonWebKey | null = null, channelId?: string) {
+  constructor(sbServer: SBServer, key?: JsonWebKey, channelId?: string) {
     super(sbServer, key, channelId)
   }
 
@@ -4254,7 +4256,7 @@ class Snackabra {
    * @param channelId - optional channel id to use for encryption/decryption
    * @returns a channel object
    */
-  connect(onMessage: (m: ChannelMessage) => void, key: JsonWebKey | null = null, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
+  connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
     if (DBG) {
       console.log("++++ Snackabra.connect() ++++")
       if (key) console.log(key)
