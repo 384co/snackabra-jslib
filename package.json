@@ -1,21 +1,17 @@
 {
   "name": "snackabra",
-  "version": "2.0.0 (pre)",
+  "version": "2.0.0-alpha.4",
   "description": "Snackabra Core Library ('jslib')",
   "main": "dist/snackabra.min.js",
   "types": "dist/snackabra.d.ts",
   "scripts": {
     "start": "npm run build:watch",
-
     "build": "npm run clean && npm run build:jslib && npm run minify",
     "build:watch": "npm run build:jslib:watch & npm run minify:watch",
-
     "build:jslib": "tsc -p ./tsconfig.json",
     "build:jslib:watch": "tsc -p -w ./tsconfig.json",
-
     "minify": "webpack --config webpack.config.js",
     "minify:watch": "webpack --config webpack.config.js --watch",
-
     "clean": "rm -rf dist/*"
   },
   "repository": {
