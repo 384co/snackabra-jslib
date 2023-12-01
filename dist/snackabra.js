@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0 (pre) build 03';
+const version = '2.0.0-alpha.5 (build 06)';
 const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = false;
 var DBG2 = false;
@@ -41,11 +41,26 @@ export class MessageBus {
     }
 }
 function SBFetch(input, init) {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    if (url.includes("a32.")) {
-        return Promise.reject(new Error("URL contains forbidden substring 'a32.'"));
-    }
-    return fetch(input, init ?? { method: 'GET' });
+    return new Promise((resolve, reject) => {
+        try {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+            if (url.includes("a32."))
+                reject(`[SBFetch] ERROR: url contains substring 'a32.' (${url})`);
+            fetch(input, init ?? { method: 'GET' })
+                .then((response) => {
+                resolve(response);
+            }).catch((error) => {
+                const msg = `[SBFetch] Error (fetch through a reject, might be normal): ${error}`;
+                console.warn(msg);
+                reject(msg);
+            });
+        }
+        catch (e) {
+            const msg = `[SBFetch] Error (fetch exception, might be normal operation): ${e}`;
+            console.warn(msg);
+            reject();
+        }
+    });
 }
 function WrapError(e) {
     if (e instanceof Error)
@@ -2620,11 +2635,13 @@ class Snackabra {
                     resolve({ channelId: channelData.roomId, key: exportable_privateKey, server: sbServer.channel_server });
                 }
                 else {
-                    reject(JSON.stringify(resp));
+                    const msg = `Creating channel did not succeed (${JSON.stringify(resp)})`;
+                    console.error(msg);
+                    reject(msg);
                 }
             }
             catch (e) {
-                const msg = `create() failed: ${e}`;
+                const msg = `Creating channel did not succeed: ${e}`;
                 console.error(msg);
                 reject(msg);
             }

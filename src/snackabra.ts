@@ -32,7 +32,7 @@
 // will be labeled '1.1.25' upon publishing
 
 // working on 2.0.0
-const version = '2.0.0-alpha.5 (build 04)'
+const version = '2.0.0-alpha.5 (build 06)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -512,29 +512,29 @@ export class MessageBus {
  *
  * A "safe" fetch() that over time integrates with SB mesh.
  *
- * See also :ref:`design note 5 <DN005>` for issues of connectivity.
- *
- * TODO: this will be integrated with SB (Snackabra) object and exposed
- *       to platform API for possible app use.
- *
  * @param input - the URL to fetch
  * @param init - the options for the request
  */
 function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  // console.log("SBFetch()"); console.log(input); console.log(init);
-  // if (navigator.onLine === false) console.info("Note: you are offline, according to the browser") /* return Promise.reject(new Error("you are offline")) */
-  // check if the string "a32." is in the URL, if so, we need to throw an error
-  // if (init) return fetch(input, init)
-  // else return fetch(input, { method: 'GET' /*, credentials: 'include' */ })
-
-  // Extract the URL as a string
-  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-  // Check for the substring "a32."  - this is for transitioning code, a32 internal coding should not "leak"
-  if (url.includes("a32.")) {
-    return Promise.reject(new Error("URL contains forbidden substring 'a32.'"));
-  }
-  // Perform the fetch operation
-  return fetch(input, init ?? { method: 'GET' });
+  return new Promise((resolve, reject) => {
+    try {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("a32.")) // for code transitioning, 'a32' prefix should be only internal to jslib
+        reject(`[SBFetch] ERROR: url contains substring 'a32.' (${url})`);
+      fetch(input, init ?? { method: 'GET' })
+        .then((response) => {
+          resolve(response); // we don't check for status here, we'll do that in the caller
+        }).catch((error) => {
+          const msg = `[SBFetch] Error (fetch through a reject, might be normal): ${error}`;
+          console.warn(msg); // not necessarily an error but helps trace up through callee
+          reject(msg);
+        });
+    } catch (e) {
+      const msg = `[SBFetch] Error (fetch exception, might be normal operation): ${e}`;
+      console.warn(msg); // not necessarily an error but helps trace up through callee
+      reject();
+    }
+  });
 }
 
 /** @private */
@@ -4376,10 +4376,12 @@ class Snackabra {
           // _localStorage.setItem(channelId, JSON.stringify(exportable_privateKey)) // TODO
           resolve({ channelId: channelData.roomId!, key: exportable_privateKey, server: sbServer.channel_server })
         } else {
-          reject(JSON.stringify(resp));
+          const msg = `Creating channel did not succeed (${JSON.stringify(resp)})`
+          console.error(msg)
+          reject(msg);
         }
       } catch (e) {
-        const msg = `create() failed: ${e}`
+        const msg = `Creating channel did not succeed: ${e}`
         console.error(msg)
         reject(msg);
       }
