@@ -12,7 +12,9 @@
     "build:jslib:watch": "tsc -p -w ./tsconfig.json",
     "minify": "webpack --config webpack.config.js",
     "minify:watch": "webpack --config webpack.config.js --watch",
-    "clean": "rm -rf dist/*"
+    "clean": "rm -rf dist/*",
+    "prepublish": "git fetch && [ $(git rev-parse HEAD) = $(git rev-parse @{u}) ] || (echo 'COMMIT before you publish' && exit 1)",
+    "postpublish": "git tag v$npm_package_version && git push origin v$npm_package_version"
   },
   "repository": {
     "type": "git",
