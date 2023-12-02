@@ -3775,7 +3775,7 @@ class StorageApi {
     const { storage_server, channel_server, shard_server } = sbServer
     this.server = storage_server + '/api/v1';
     this.channelServer = channel_server + '/api/room/'
-    if (shard_server) this.shardServer = shard_server + '/api/v1'
+    if (shard_server) this.shardServer = shard_server
     this.sbServer = sbServer
   }
 
@@ -4117,31 +4117,27 @@ class StorageApi {
 
   // any failure conditions returns 'null', facilitating trying multiple servers
   async #_fetchData(useServer: string, url: string, h: SBObjectHandle, returnType: 'string' | 'arrayBuffer'): Promise<string | ArrayBuffer | null> {
-    return new Promise((resolve, _reject) => {
-      try {
-        const body = { method: 'GET' }
-        SBFetch(useServer + url, body)
-          .then((response: Response) => {
-            if (!response.ok) return (null)
-            return response.arrayBuffer()
-          })
-          .then((payload: ArrayBuffer | null) => {
-            if (payload === null) return (null)
-            return this.#processData(payload, h)
-          })
-          .then((payload) => {
-            if (payload === null) resolve (null)
-            if (returnType === 'string') resolve(sbCrypto.ab2str(new Uint8Array(payload!)))
-            else resolve(payload)
-          })
-          .catch((_error: Error) => {
-            // reject(error)
-            resolve(null)
-          });
-      } catch (e) {
-        resolve(null)
-      }
-    });
+    const body = { method: 'GET' }
+    return new Promise(async (resolve, _reject) => {
+      SBFetch(useServer + url, body)
+        .then((response: Response) => {
+          if (!response.ok) return (null)
+          return response.arrayBuffer()
+        })
+        .then((payload: ArrayBuffer | null) => {
+          if (payload === null) return (null)
+          return this.#processData(payload, h)
+        })
+        .then((payload) => {
+          if (payload === null) resolve (null)
+          if (returnType === 'string') resolve (sbCrypto.ab2str(new Uint8Array(payload!)))
+          else resolve (payload)
+        })
+        .catch((_error: Error) => {
+          // reject(error)
+          return (null)
+        });
+      })
   }
 
 
@@ -4177,18 +4173,24 @@ class StorageApi {
 
       // SBFetch(useServer + '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
       const result = await this.#_fetchData(useServer, queryString, h, returnType)
-      if (result) resolve(result)
-
-      // upon failure we farm out and try all known servers
-      // ToDo: add an interface where we accumulated knowledge of more servers
-      for (let i = 0; i < knownStorageAndShardServers.length; i++) {
-        const tryServer = knownStorageAndShardServers[i] + '/api/v1'
-        if (tryServer !== useServer) {
-          const result = await this.#_fetchData(tryServer, queryString, h, returnType)
-          if (result) resolve(result)
+      if (result !== null) {
+        console.warn(`[fetchData] success: fetched from '${useServer}'`, result)
+        resolve(result)
+      } else {
+        // upon failure we farm out and try all known servers
+        console.warn(`[fetchData] having issues talking to '${useServer}' - not to worry, trying other servers (might generate network errors)`)
+        // ToDo: add an interface where we accumulated knowledge of more servers
+        for (let i = 0; i < knownStorageAndShardServers.length; i++) {
+          const tryServer = knownStorageAndShardServers[i] + '/api/v1'
+          if (tryServer !== useServer) {
+            const result = await this.#_fetchData(tryServer, queryString, h, returnType)
+            if (result !== null)
+              resolve(result)
+            console.warn(`[fetchData] if you got a network error for ${tryServer}, don't worry about it`)
+          }
         }
+        reject('fetchData() failed - tried all servers')
       }
-      reject('fetchData() failed - tried all servers')
     })
   }
 
