@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0-alpha.5 (build 06)';
+const version = '2.0.0-alpha.5 (build 07)';
 const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = false;
 var DBG2 = false;
@@ -2246,7 +2246,7 @@ class StorageApi {
         this.server = storage_server + '/api/v1';
         this.channelServer = channel_server + '/api/room/';
         if (shard_server)
-            this.shardServer = shard_server + '/api/v1';
+            this.shardServer = shard_server;
         this.sbServer = sbServer;
     }
     #padBuf(buf) {
@@ -2490,35 +2490,30 @@ class StorageApi {
         });
     }
     async #_fetchData(useServer, url, h, returnType) {
-        return new Promise((resolve, _reject) => {
-            try {
-                const body = { method: 'GET' };
-                SBFetch(useServer + url, body)
-                    .then((response) => {
-                    if (!response.ok)
-                        return (null);
-                    return response.arrayBuffer();
-                })
-                    .then((payload) => {
-                    if (payload === null)
-                        return (null);
-                    return this.#processData(payload, h);
-                })
-                    .then((payload) => {
-                    if (payload === null)
-                        resolve(null);
-                    if (returnType === 'string')
-                        resolve(sbCrypto.ab2str(new Uint8Array(payload)));
-                    else
-                        resolve(payload);
-                })
-                    .catch((_error) => {
+        const body = { method: 'GET' };
+        return new Promise(async (resolve, _reject) => {
+            SBFetch(useServer + url, body)
+                .then((response) => {
+                if (!response.ok)
+                    return (null);
+                return response.arrayBuffer();
+            })
+                .then((payload) => {
+                if (payload === null)
+                    return (null);
+                return this.#processData(payload, h);
+            })
+                .then((payload) => {
+                if (payload === null)
                     resolve(null);
-                });
-            }
-            catch (e) {
-                resolve(null);
-            }
+                if (returnType === 'string')
+                    resolve(sbCrypto.ab2str(new Uint8Array(payload)));
+                else
+                    resolve(payload);
+            })
+                .catch((_error) => {
+                return (null);
+            });
         });
     }
     fetchData(handle, returnType = 'arrayBuffer') {
@@ -2532,17 +2527,23 @@ class StorageApi {
                 console.log("fetchData(), fetching from server: " + useServer);
             const queryString = '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken;
             const result = await this.#_fetchData(useServer, queryString, h, returnType);
-            if (result)
+            if (result !== null) {
+                console.warn(`[fetchData] success: fetched from '${useServer}'`, result);
                 resolve(result);
-            for (let i = 0; i < knownStorageAndShardServers.length; i++) {
-                const tryServer = knownStorageAndShardServers[i] + '/api/v1';
-                if (tryServer !== useServer) {
-                    const result = await this.#_fetchData(tryServer, queryString, h, returnType);
-                    if (result)
-                        resolve(result);
-                }
             }
-            reject('fetchData() failed - tried all servers');
+            else {
+                console.warn(`[fetchData] having issues talking to '${useServer}' - not to worry, trying other servers (might generate network errors)`);
+                for (let i = 0; i < knownStorageAndShardServers.length; i++) {
+                    const tryServer = knownStorageAndShardServers[i] + '/api/v1';
+                    if (tryServer !== useServer) {
+                        const result = await this.#_fetchData(tryServer, queryString, h, returnType);
+                        if (result !== null)
+                            resolve(result);
+                        console.warn(`[fetchData] if you got a network error for ${tryServer}, don't worry about it`);
+                    }
+                }
+                reject('fetchData() failed - tried all servers');
+            }
         });
     }
     async retrieveImage(imageMetaData, controlMessages, imageId, imageKey, imageType, imgObjVersion) {

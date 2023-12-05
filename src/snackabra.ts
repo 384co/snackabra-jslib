@@ -32,7 +32,7 @@
 // will be labeled '1.1.25' upon publishing
 
 // working on 2.0.0
-const version = '2.0.0-alpha.5 (build 06)'
+const version = '2.0.0-alpha.5 (build 07)'
 
 /******************************************************************************************************/
 //#region Interfaces - Types

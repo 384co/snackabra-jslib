@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 06)";
+declare const version = "2.0.0-alpha.5 (build 07)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
