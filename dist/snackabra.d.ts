@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 07)";
+declare const version = "2.0.0-alpha.5 (build 08)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -76,9 +76,10 @@ export interface ChannelKeys {
     guestKey?: CryptoKey;
     encryptionKey: CryptoKey;
     signKey: CryptoKey;
-    lockedKey?: JsonWebKey;
     publicSignKey: CryptoKey;
     privateKey?: CryptoKey;
+    lockedKey?: CryptoKey;
+    encryptedLockedKey?: string;
 }
 interface ChannelKeyStrings {
     encryptionKey: string;
@@ -281,9 +282,7 @@ declare abstract class Channel extends SB384 {
     #private;
     channelReady: Promise<Channel>;
     motd?: string;
-    locked?: boolean;
     owner: boolean;
-    admin: boolean;
     adminData?: Dictionary<any>;
     verifiedGuest: boolean;
     userName: string;
@@ -312,7 +311,10 @@ declare abstract class Channel extends SB384 {
         success: boolean;
     }>;
     storageRequest(byteLength: number): Promise<Dictionary<any>>;
-    lock(): Promise<unknown>;
+    lock(key?: CryptoKey): Promise<{
+        locked: boolean;
+        lockedKey: JsonWebKey;
+    }>;
     acceptVisitor(pubKey: string): Promise<unknown>;
     ownerKeyRotation(): void;
     getStorageToken(size: number): Promise<string>;

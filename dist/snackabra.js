@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0-alpha.5 (build 07)';
+const version = '2.0.0-alpha.5 (build 08)';
 const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = false;
 var DBG2 = false;
@@ -970,8 +970,8 @@ class SBCrypto {
                     resolve(d);
             }
             catch (e) {
-                console.error(`unwrap(): unknown issue - rejecting: ${e}`);
-                console.trace();
+                if (DBG)
+                    console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`);
                 reject(e);
             }
         });
@@ -1304,9 +1304,7 @@ class Channel extends SB384 {
     #ChannelReadyFlag = false;
     #sbServer;
     motd = '';
-    locked = false;
     owner = false;
-    admin = false;
     adminData;
     verifiedGuest = false;
     userName = '';
@@ -1539,28 +1537,26 @@ class Channel extends SB384 {
     storageRequest(byteLength) {
         return this.#callApi('/storageRequest?size=' + byteLength);
     }
-    lock() {
-        console.warn("WARNING: lock() on channel api has not been tested/debugged fully ..");
+    lock(key) {
+        console.warn("WARNING: lock() on channel api is in the process of being updated and tested ...");
         return new Promise(async (resolve, reject) => {
-            if (this.keys.lockedKey == null && this.admin) {
-                const _locked_key = await crypto.subtle.generateKey({
-                    name: 'AES-GCM', length: 256
-                }, true, ['encrypt', 'decrypt']);
-                const _exportable_locked_key = await crypto.subtle.exportKey('jwk', _locked_key);
-                this.#callApi('/lockRoom')
-                    .then((data) => {
-                    if (data.locked) {
-                        this.acceptVisitor(JSON.stringify(this.exportable_pubKey))
-                            .then(() => {
-                            resolve({ locked: data.locked, lockedKey: _exportable_locked_key });
-                        });
-                    }
-                })
-                    .catch((error) => { reject(error); });
-            }
-            else {
-                reject(new Error('no lock key or not admin'));
-            }
+            if (this.keys.lockedKey)
+                reject(new Error("lock(): channel already locked (rotating key not yet supported"));
+            if (!this.owner)
+                reject(new Error("lock(): only owner can lock channel"));
+            const _locked_key = key ? key : await crypto.subtle.generateKey({
+                name: 'AES-GCM', length: 256
+            }, true, ['encrypt', 'decrypt']);
+            const _exportable_locked_key = await crypto.subtle.exportKey('jwk', _locked_key);
+            this.#callApi('/lockRoom')
+                .then((data) => {
+                if (data.locked) {
+                    this.acceptVisitor(JSON.stringify(this.exportable_pubKey))
+                        .then(() => {
+                        resolve({ locked: data.locked, lockedKey: _exportable_locked_key });
+                    });
+                }
+            }).catch((error) => { reject(error); });
         });
     }
     acceptVisitor(pubKey) {
@@ -1571,7 +1567,7 @@ class Channel extends SB384 {
             const shared_key = await sbCrypto.deriveKey(this.privateKey, await sbCrypto.importKey('jwk', jsonParseWrapper(pubKey, 'L2276'), 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']);
             const _encrypted_locked_key = await sbCrypto.encrypt(sbCrypto.str2ab(JSON.stringify(this.keys.lockedKey)), shared_key);
             resolve(this.#callApi('/acceptVisitor', {
-                pubKey: pubKey, lockedKey: JSON.stringify(_encrypted_locked_key)
+                pubKey: pubKey, encryptedLockedKey: JSON.stringify(_encrypted_locked_key)
             }));
         });
     }
@@ -1875,12 +1871,11 @@ export class ChannelSocket extends Channel {
             console.log(message);
         _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)');
         this.motd = message.motd;
-        this.locked = message.roomLocked;
         const exportable_owner_pubKey = jsonParseWrapper(message.keys.ownerKey, 'L2246');
         _sb_assert(this.keys.ownerPubKeyX === exportable_owner_pubKey.x, 'ChannelSocket.readyPromise(): owner key mismatch??');
         _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)');
         this.owner = sbCrypto.compareKeys(exportable_owner_pubKey, this.exportable_pubKey);
-        this.admin = false;
+        this.adminData = this.api.getAdminData();
         this.#ws.websocket.addEventListener('message', this.#processMessage.bind(this));
         this.#ws.websocket.removeEventListener('message', blocker);
         if (DBG)
@@ -1998,7 +1993,7 @@ export class ChannelEndpoint extends Channel {
 }
 async function deCryptChannelMessage(m00, m01, keys) {
     const z = messageIdRegex.exec(m00);
-    let encryptionKey = keys.encryptionKey;
+    let encryptionKey = keys.lockedKey ? keys.lockedKey : keys.encryptionKey;
     if (z) {
         let m = {
             type: 'encrypted',
@@ -2007,7 +2002,28 @@ async function deCryptChannelMessage(m00, m01, keys) {
             _id: z[1] + z[2],
             encrypted_contents: encryptedContentsMakeBinary(m01)
         };
-        const unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents, 'string');
+        let unwrapped;
+        try {
+            unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents, 'string');
+        }
+        catch (e) {
+            if (encryptionKey === keys.lockedKey) {
+                try {
+                    encryptionKey = keys.encryptionKey;
+                    unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents, 'string');
+                }
+                catch (e) {
+                    if (DBG)
+                        console.error("ERROR: cannot decrypt message with either locked or unlocked key");
+                    throw e;
+                }
+            }
+            else {
+                if (DBG)
+                    console.error("ERROR: cannot decrypt message and it's not a locked channel");
+                throw e;
+            }
+        }
         let m2 = { ...m, ...jsonParseWrapper(unwrapped, 'L1977') };
         if (m2.contents) {
             m2.text = m2.contents;
