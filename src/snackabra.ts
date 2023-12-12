@@ -67,8 +67,9 @@ export interface SBServer {
  */
 export interface SBChannelHandle {
   channelId: SBChannelId,
-  key: JsonWebKey,
-  server?: string
+  // key: JsonWebKey, // deprecated
+  userId: SBUserId,
+  channelServer?: string // preferred channel server (if any)
 }
 
 interface WSProtocolOptions {
@@ -2262,37 +2263,49 @@ const sbCrypto = new SBCrypto();
  * currently this will be mostly development servers. Please let us
  * know if there are global servers you would like us to add.
  */
-const SBKnownServers: Array<SBServer> = [
-  {
-    // local servers
-    channel_server: 'http://localhost:3845',
-    channel_ws: 'ws://localhost:3845',
-    storage_server: 'http://localhost:3843',
-    shard_server: 'http://localhost:3841',
-  },
-  {
-    // Preview / Development Servers
-    channel_server: 'https://channel.384.dev',
-    channel_ws: 'wss://channel.384.dev',
-    storage_server: 'https://storage.384.dev',
-    shard_server: 'https://shard.3.8.4.land'
-  },
-  {
-    // This is both "384.chat" (production) and "sn.ac"
-    channel_server: 'https://r.384co.workers.dev',
-    channel_ws: 'wss://r.384co.workers.dev',
-    storage_server: 'https://s.384co.workers.dev'
-  },
+
+const knownChannelServers: Array<string> = [
+  'http://localhost:3845',
+  'https://channel.384.dev',
+  'https://r.384co.workers.dev'
 ]
 
-const knownStorageAndShardServers = [
-  'http://localhost:3841',
+const knownStorageServers: Array<string> = [
   'http://localhost:3843',
-  'https://shard.3.8.4.land',
   'https://storage.384.dev',
-  'https://storage.384co.workers.dev',
+  'https://s.384co.workers.dev',
+  'https://storage.384co.workers.dev'
+]
+
+const knownShardServers: Array<string> = [
+  'http://localhost:3841',
+  'https://shard.3.8.4.land',
   'https://shard.384.dev'
 ]
+
+
+// const SBKnownServers: Array<SBServer> = [
+//   {
+//     // local servers
+//     channel_server: 'http://localhost:3845',
+//     channel_ws: 'ws://localhost:3845',
+//     storage_server: 'http://localhost:3843',
+//     shard_server: 'http://localhost:3841',
+//   },
+//   {
+//     // Preview / Development Servers
+//     channel_server: 'https://channel.384.dev',
+//     channel_ws: 'wss://channel.384.dev',
+//     storage_server: 'https://storage.384.dev',
+//     shard_server: 'https://shard.3.8.4.land'
+//   },
+//   {
+//     // This is both "384.chat" (production) and "sn.ac"
+//     channel_server: 'https://r.384co.workers.dev',
+//     channel_ws: 'wss://r.384co.workers.dev',
+//     storage_server: 'https://s.384co.workers.dev'
+//   },
+// ]
 
 // let availableReadServers = new Promise<Array<string>>((resolve, _reject) => {
 //   const servers = [ 'http://localhost:3841', 'http://localhost:4000' ]
@@ -4395,6 +4408,22 @@ class StorageApi {
 
 } /* class StorageApi */
 
+/**
+ * snackabraOptions
+ * 
+ * Pretty much any combination of these will work. Note that any servers that have
+ * been provided will be priotized over any "known" or discovered servers.
+ */
+export type snackabraOptions = {
+  knownChannelServers?: Array<string>,
+  knownStorageServers?: Array<string>,
+  knownShardServers?: Array<string>,
+  preferredChannelServer?: string,
+  preferredStorageServer?: string,
+  preferredShardServer?: string,
+  DEBUG?: boolean,
+  DEBUG2?: boolean,
+}
 
 /**
  * Snackabra
@@ -4405,6 +4434,19 @@ class Snackabra {
   #preferredServer?: SBServer
   #version = version
 
+  knownChannelServers: Array<string> = []
+  knownStorageServers: Array<string> = []
+  knownShardServers: Array<string> = []
+  preferredChannelServer?: string
+  preferredWebsocketServer?: string
+  preferredStorageServer?: string
+  preferredShardServer?: string
+
+  // helper to merge two arrays and remove duplicates
+  mergeUnique(arr1: string[], arr2: string[]): string[] {
+    return [...arr1, ...arr2.filter(item => !arr1.includes(item))];
+  }
+  
   /**
   * @param args - optional object with URLs of preferred servers.
   * 
@@ -4423,11 +4465,39 @@ class Snackabra {
   * 
   * @param DEBUG - optional boolean to enable debug logging
   */
-  constructor(sbServer?: SBServer, setDBG: boolean = false, setDBG2?: boolean) {
+  constructor(sbServerOrSnackabraOptions?: SBServer | snackabraOptions, setDBG: boolean = false, setDBG2?: boolean) {
     console.warn(`==== CREATING Snackabra object generation: ${this.version} ====`)
-    if (sbServer) {
+    if (typeof sbServerOrSnackabraOptions === 'object') {
+      // we have an object, so we assume it is a snackabraOptions object
+      var { knownChannelServers, knownStorageServers, knownShardServers, preferredChannelServer, preferredStorageServer, preferredShardServer, DEBUG, DEBUG2 } = sbServerOrSnackabraOptions as snackabraOptions
+      if (DEBUG) setDBG = true
+      if (DEBUG2) setDBG2 = true
+      if (knownChannelServers) this.knownChannelServers = knownChannelServers
+      if (knownStorageServers) this.knownStorageServers = knownStorageServers
+      if (knownShardServers) this.knownShardServers = knownShardServers
+      // storage servers double as shard servers
+      this.knownShardServers = this.mergeUnique(this.knownShardServers, this.knownStorageServers)
+      if (!preferredChannelServer && knownChannelServers && knownChannelServers.length > 0) preferredChannelServer = knownChannelServers[0]
+      if (preferredChannelServer) this.preferredChannelServer = preferredChannelServer
+      if (!preferredStorageServer && knownStorageServers && knownStorageServers.length > 0) preferredStorageServer = knownStorageServers[0]
+      if (preferredStorageServer) this.preferredStorageServer = preferredStorageServer
+      if (!preferredShardServer && knownShardServers && knownShardServers.length > 0) preferredShardServer = knownShardServers[0]
+      if (!preferredShardServer && preferredStorageServer) preferredShardServer = preferredStorageServer
+      if (preferredShardServer) this.preferredShardServer = preferredShardServer
+      // websocket server is simply a channelserver where a prefix of "http" is replaced by "ws"
+      if (preferredChannelServer) this.preferredWebsocketServer = preferredChannelServer.replace(/^http/, 'ws')
+      if (preferredChannelServer && preferredStorageServer) {
+        this.#preferredServer = {
+          channel_server: preferredChannelServer,
+          channel_ws: this.preferredWebsocketServer!,
+          storage_server: preferredStorageServer,
+          shard_server: preferredShardServer
+        }
+      }
+    } else if (typeof sbServerOrSnackabraOptions === 'string') {
+      // we have a string, so we assume it is a channel server
+      const sbServer = sbServerOrSnackabraOptions as SBServer
       this.#preferredServer = Object.assign({}, sbServer)
-      // this.#storage = new StorageApi(args.storage_server, args.channel_server, args.shard_server ? args.shard_server : undefined)
       this.#storage = new StorageApi(sbServer)
       if (setDBG === true) DBG = true;
       if (setDBG2 && (setDBG2 === true)) (DBG2 = true) && (DBG);
