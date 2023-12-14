@@ -59,6 +59,8 @@ Follow format from [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
   For a 16-char (4-set) stronpin, entropy loss if you
   enable ''setCount'' is less than 1/100 bit.
 
+- disabling getLastMessageTimes on channel server, needs
+  a few issues to be resolved (see source)
 
 ## [1.1.0] - 2023-03-01
 
