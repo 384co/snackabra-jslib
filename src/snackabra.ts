@@ -95,7 +95,7 @@ interface WSProtocolOptions {
 // for future use / tighter typing
 // type StorableDataType = string | number | bigint | boolean | symbol | object
 
-// TODO: there are many uses of 'Dictionary<any>' that should be tightened up
+// ToDo: there are many uses of 'Dictionary<any>' that should be tightened up
 interface Dictionary<T> {
   [index: string]: T;
 }
@@ -169,7 +169,7 @@ export interface ChannelMessage {
   encrypted?: boolean,
   encrypted_contents?: EncryptedContents,
   contents?: string, // if present means unencrypted
-  text?: string, // backwards compat, same as contents, TODO: should be removed
+  text?: string, // backwards compat, same as contents, ToDo: should be removed
   sign?: string,
   image?: string,
   image_sign?: string,
@@ -384,7 +384,7 @@ export type SBObjectType = 'f' | 'p' | 'b' | 't'
 export type SBObjectHandleVersions = '1' | '2'
 const currentSBOHVersion: SBObjectHandleVersions = '2'
 
-// TODO: we haven't modularized jslib yet, when we do this
+// todo: we haven't modularized jslib yet, when we do this
 //       will be superfluous
 export namespace Interfaces {
 
@@ -2668,7 +2668,7 @@ class SBMessage {
         })
       })
     })
-    // TODO: i've punted on queue here <--- queueMicrotaks maybe?
+    // todo: i've punted on queue here <--- queueMicrotaks maybe?
   }
 } /* class SBMessage */
 
@@ -2688,7 +2688,7 @@ class Channel extends SBChannelKeys {
   #locked?: boolean = false // TODO: need to make sure we're tracking whenever this has changed
 
   // this is actually info for lock status, and is now available to Owner (no admin status anymore)
-  adminData?: Dictionary<any> // TODO: make into getter
+  adminData?: Dictionary<any> // todo: make into getter
 
   // we no longer have admin concept; the SSO model is being deprecated in SB 2.x
   // admin: boolean = false
@@ -2950,7 +2950,7 @@ class Channel extends SBChannelKeys {
 
       // if it's a whisper, we unwrap from text to whisper
       if (m2.whispered === true) {
-        // TODO TODO: add the whisper 
+        // ToDo: add the whisper 
         console.error("ERROR: whisper not yet implemented in SB 2.0")
       }
 
@@ -2969,7 +2969,7 @@ class Channel extends SBChannelKeys {
    * Channel.getLastMessageTimes
    */
   getLastMessageTimes() {
-    // TODO: needs a few things fixed, see channel server source code
+    // ToDo: needs a few things fixed, see channel server source code
 
     throw new Error("Channel.getLastMessageTimes(): not supported in 2.0 yet")
     // return this.#callApi('/getLastMessageTimes')
@@ -3000,7 +3000,7 @@ class Channel extends SBChannelKeys {
    *
    */
   getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
-    // xTODO: convert to new API call model
+    // ToDo: convert to new API call model
     return new Promise(async (resolve, reject) => {
       if (!this.channelId) {
         reject("Channel.getOldMessages: no channel ID (?)")
@@ -3012,7 +3012,7 @@ class Channel extends SBChannelKeys {
         if (!this.#channelKeys)
           reject("Channel.getOldMessages: no channel keys (?) despite waiting")
       }
-      // TODO: we want to cache (merge) these messages into a local cached list (since they are immutable)
+      // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)
       let cursorOption = '';
       if (paginate)
         cursorOption = '&cursor=' + this.#cursor;
@@ -3590,7 +3590,7 @@ class ChannelSocket extends Channel {
       console.log(`++++++++ #processMessage: caught exception while decyphering (${e}), passing it along unchanged`)
       this.onMessage(message)
       // console.error(`#processmessage: cannot handle locked channels yet (${e})`)
-      // TODO: locked key might never resolve (if we don't have it)
+      // ToDo: locked key might never resolve (if we don't have it)?
       // TODO: ... generally speaking need to test/fix locked channels
       // unwrapped = await sbCrypto.unwrap(this.keys.lockedKey, message.encrypted_contents, 'string')
     }
@@ -3698,7 +3698,7 @@ class ChannelSocket extends Channel {
                       // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
                       this.#ack.set(messageHash, resolve)
                       this.#ws.websocket!.send(m)
-                      // TODO: not sure why we needed separate 'ack' interaction, just resolve on seeing message back?
+                      // todo: not sure why we needed separate 'ack' interaction, just resolve on seeing message back?
                       // this.#ws.websocket!.send(JSON.stringify(ackPayload));
                       setTimeout(() => {
                         if (this.#ack.has(messageHash)) {
@@ -4088,7 +4088,7 @@ class StorageApi {
       try {
         sbCrypto.importKey('raw', fileHashBuffer /* base64ToArrayBuffer(decodeURIComponent(fileHash))*/,
           'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
-            // @psm TODO - Support deriving from PBKDF2 in sbCrypto.deriveKey function
+            // @psm todo - Support deriving from PBKDF2 in sbCrypto.deriveKey function
             crypto.subtle.deriveKey({
               'name': 'PBKDF2', // salt: crypto.getRandomValues(new Uint8Array(16)),
               'salt': _salt,
@@ -4342,7 +4342,7 @@ class StorageApi {
           throw new Error('Invalid or missing version (internal error, should not happen)');
         }
         this.#getObjectKey(h_key_material, salt).then((image_key) => {
-          // TODO: test this, it used to call ab2str()? how could that work?
+          // ToDo: test this, it used to call ab2str()? how could that work?
           // const encrypted_image = sbCrypto.ab2str(new Uint8Array(data.image))
           // const encrypted_image = new Uint8Array(data.image)
           const encrypted_image = data.image;
@@ -4407,7 +4407,7 @@ class StorageApi {
   fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>
   fetchData(handle: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>
   fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string' | 'arrayBuffer' = 'arrayBuffer'): Promise<ArrayBuffer | string> {
-    // TODO: change SBObjectHandle from being an interface to being a class
+    // todo: perhaps change SBObjectHandle from being an interface to being a class
     // update: we have an object class, but still using interface; still a todo here
     // how to nicely validate 'h'
     // _sb_assert(SBValidateObject(h, 'SBObjectHandle'), "fetchData() ERROR: parameter is not an SBOBjectHandle")
@@ -4682,8 +4682,6 @@ class Snackabra {
   create(ownerKeys: SB384, budgetChannel: Channel): Promise<SBChannelHandle> // new interface
   create(sbServer: SBServer, erverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle> // old interface
   create(sbServerOrSB384: SBServer | SB384, serverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle> {
-    // TODO: needs this variant:
-    //   
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       try {
         if (sbServerOrSB384 instanceof SB384) {
