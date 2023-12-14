@@ -2393,7 +2393,6 @@ class SB384 {
   // #exportable_pubKey?: JsonWebKey
 
   // #exportable_privateKey?: JsonWebKey
-  #pubJwk?: JsonWebKey // this replaces 'exportable_pubKey' in some cases
   #jwk?: JsonWebKey // this replaces 'exportable_privateKey'
   #privateKey?: CryptoKey // internal representation of private key
   #sbUserKey?: SBKey // ditto, variation
@@ -2705,16 +2704,9 @@ class Channel extends SBChannelKeys {
 
   #cursor: string = ''; // last (oldest) message key seen
   #channelServer: string = '';
-  #channelApi: string = '';
-
-  #channelReadyResolve: (value: Channel) => void = () => { }
-  #channelReadyReject: (reason?: any) => void = () => { }
+  // #channelApi: string = '';
 
   // abstract send(message: SBMessage): Promise<string>
-
-
-
-
 
   /**
   * 
@@ -2752,10 +2744,6 @@ class Channel extends SBChannelKeys {
   constructor(handle: SBChannelHandle);
   constructor(sbServer: SBServer, userKey: JsonWebKey, channelId: SBChannelId);
   constructor(sbServerOrHandle: SBServer | SBChannelHandle, userKey?: JsonWebKey, channelId?: SBChannelId) {
-    // let _sbServer: SBServer | undefined
-    // let _userKey: JsonWebKey | SBUserId | null = null
-    // let _channelId: string | null = null
-
     if (typeof sbServerOrHandle === 'object' && 'channelId' in sbServerOrHandle && 'key' in sbServerOrHandle) {
       // single parameter, handle
       _sb_assert(userKey || channelId, "If you pass a handle, you cannot pass userKey or channelId")
@@ -2763,10 +2751,11 @@ class Channel extends SBChannelKeys {
       super(handle.userId);
       if (!handle.channelServer) throw new Error("Channel(): no channel server provided")
       this.#channelServer = handle.channelServer
-      this.#channelApi = handle.channelServer + '/api/'
+      // this.#channelApi = handle.channelServer + '/api/'
       this.#channelId = handle.channelId;
     } else {
       // backwards compatibility: the case with sbServer, userKey, and channelId
+      // constructor(sbServer?: SBServer, userKey?: JsonWebKey, channelId?: string) {
       _sb_assert(!userKey || !channelId, "If first parameter is SBServer, you must pass userKey and channelId")
       console.warn("Deprecated channel constructor use ... ")
       super(userKey);
@@ -2774,42 +2763,44 @@ class Channel extends SBChannelKeys {
       this.#channelId = channelId!
       if (!sbServer.channel_server) throw new Error("Channel(): no channel server provided")
       this.#channelServer = sbServer.channel_server
-      this.#channelApi = sbServer.channel_server + '/api/'
+      // this.#channelApi = sbServer.channel_server + '/api/'
     }
+    
+    this.channelReady =
+      this.sb384Ready
+        .then(() => this.#getChannelKeys())
+        .then(() => {
+          this.#ChannelReadyFlag = true;
+          return this;
+        })
+        .catch(e => { throw e; });
 
-    // constructor(sbServer?: SBServer, userKey?: JsonWebKey, channelId?: string) {
-
-    this.channelReady = new Promise<Channel>(async (resolve, reject) => {
-      this.#channelReadyResolve = resolve
-      this.#channelReadyReject = reject
-      await this.sb384Ready // wait for super to be done
-    })
   }
 
-  // async #getChannelKeys() {
-  //   return new Promise<void>((resolve, reject) => {
-  //     SBFetch(this.#channelServer + '/api/room/' + stripA32(this.#channelId!) + '/getChannelKeys',
-  //       {
-  //         method: 'GET',
-  //         headers: { 'Content-Type': 'application/json' },
-  //       })
-  //       .then((response: Response) => {
-  //         if (!response.ok)
-  //           reject("ChannelEndpoint(): failed to get channel keys (network response not ok)");
-  //         return response.json() as unknown as ChannelKeyStrings // continues below
-  //       })
-  //       .then(async (data) => {
-  //         if (data.error)
-  //           reject("ChannelEndpoint(): failed to get channel keys (error in response)");
-  //         // we have the authoritative keys from the server, import them
-  //         await this.#loadKeys(data)
-  //         // now we're ready
-  //         this.#ChannelReadyFlag = true
-  //         resolve()
-  //       })
-  //       .catch((e: Error) => { reject("ChannelApi Error [1]: " + WrapError(e)) })
-  //   })
-  // }
+  async #getChannelKeys() {
+    return new Promise<void>((resolve, reject) => {
+      SBFetch(this.#channelServer + '/api/room/' + stripA32(this.#channelId!) + '/getChannelKeys',
+        {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        })
+        .then((response: Response) => {
+          if (!response.ok)
+            reject("ChannelEndpoint(): failed to get channel keys (network response not ok)");
+          return response.json() as unknown as ChannelKeyStrings // continues below
+        })
+        .then(async (data) => {
+          if (data.error)
+            reject("ChannelEndpoint(): failed to get channel keys (error in response)");
+          // we have the authoritative keys from the server, import them
+          await this.#loadKeys(data)
+          // now we're ready
+          this.#ChannelReadyFlag = true
+          resolve()
+        })
+        .catch((e: Error) => { reject("ChannelApi Error [1]: " + WrapError(e)) })
+    })
+  }
 
   /** @private */
   async #setKeys(k: ChannelKeys) {
@@ -2836,6 +2827,8 @@ class Channel extends SBChannelKeys {
   @Memoize @Ready get channelId() { return this.#channelId }
   @Memoize @Ready get channelSignKey() { return (this.#channelSignKey!) }
   // @Memoize @Ready get capacity() { return this.#capacity }
+
+  @Memoize get channelServer() { return this.#channelServer }
 
 
   async #callApi(path: string): Promise<any>
@@ -3375,9 +3368,9 @@ class ChannelSocket extends Channel {
   ready: Promise<ChannelSocket>
   channelSocketReady: Promise<ChannelSocket>
   #ChannelSocketReadyFlag: boolean = false // must be named <class>ReadyFlag
-
   #ws: WSProtocolOptions
-  #sbServer: SBServer
+  // #sbServer: SBServer
+  #socketServer: string
   #onMessage = this.#noMessageHandler // the user message handler
   #ack: Map<string, (value: string | PromiseLike<string>) => void> = new Map()
   #traceSocket: boolean = false // should not be true in production
@@ -3425,39 +3418,39 @@ class ChannelSocket extends Channel {
   constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string) // old interface
   constructor(sbServerOrHandle: SBServer | SBChannelHandle, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string) {
     // constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string) {
-    if (typeof sbServerOrHandle === 'object') {
-      super(sbServerOrHandle)
-      _sb_assert(sbServerOrHandle.channelId, "ChannelSocket(): no channel ID (?)")
-      _sb_assert(sbServerOrHandle.channelServer, "ChannelSocket(): no channel server (?)")
-      _sb_assert(onMessage, "ChannelSocket(): no onMessage handler (?)")
-      const url = sbServerOrHandle.channelServer + '/api/room/' + sbServerOrHandle.channelId + '/websocket'
-      this.#onMessage = onMessage
-      this.#sbServer = sbServerOrHandle
-      this.#ws = {
-        url: url,
-        // websocket: new WebSocket(url),
-        ready: false,
-        closed: false,
-        timeout: 2000
-      }
-      this.ready = this.channelSocketReady = this.#channelSocketReadyFactory()
-   
-    } else {
-      super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
+    if (typeof sbServerOrHandle !== 'object')
+      throw new Error("ChannelSocket(): first argument must be SBServer or SBChannelHandle")
+    _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
+    // distinguish based on what properties the two interfaces have
+    if (sbServerOrHandle.hasOwnProperty('channelId') && sbServerOrHandle.hasOwnProperty('userId')) {
+      // first, SBChannelHandle must have properties 'channelId' and 'userId'
+      const handle = sbServerOrHandle as SBChannelHandle
+      if (!handle.channelServer) throw new Error("ChannelSocket(): no channel server provided (required)")
+      super(handle) // initialize 'channel' parent
+      this.#socketServer = handle.channelServer.replace(/^http/, 'ws')
+    } else if (sbServerOrHandle.hasOwnProperty('channel_server') && sbServerOrHandle.hasOwnProperty('channel_ws') && sbServerOrHandle.hasOwnProperty('storage_server')) {
+      // next, sbServer must have 'channel_server' and 'channel_ws' and 'storage_server'
+      const sbServer = sbServerOrHandle as SBServer
       _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
-      _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
-      const url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
-      this.#onMessage = onMessage
-      this.#sbServer = sbServer
-      this.#ws = {
-        url: url,
-        // websocket: new WebSocket(url),
-        ready: false,
-        closed: false,
-        timeout: 2000
-      }
-      this.ready = this.channelSocketReady = this.#channelSocketReadyFactory()
+      if (!key) throw new Error("ChannelSocket(): no key provided")
+      if (!channelId) throw new Error("ChannelSocket(): no channelId provided")
+      super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
+      this.#socketServer = sbServer.channel_ws
+      // this.#sbServer = sbServer
+    } else {
+      throw new Error("ChannelSocket(): first argument must be SBServer or SBChannelHandle")
     }
+    this.#onMessage = onMessage
+    // url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
+    const url = this.#socketServer + '/api/room/' + channelId + '/websocket'
+    this.#ws = {
+      url: url,
+      // websocket: new WebSocket(url),
+      ready: false,
+      closed: false,
+      timeout: 2000
+    }
+    this.ready = this.channelSocketReady = this.#channelSocketReadyFactory()
   }
 
   // catch and call out if this is missing
@@ -3495,10 +3488,12 @@ class ChannelSocket extends Channel {
       this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
         this.#ws.closed = true
         if (!e.wasClean) {
-          console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.#sbServer.channel_server}`)
+          // console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.#sbServer.channel_server}`)
+          console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.channelServer}`)
         } else {
           if (e.reason.includes("does not have an owner"))
-            reject(`No such channel on this server (${this.#sbServer.channel_server})`)
+            // reject(`No such channel on this server (${this.#sbServer.channel_server})`)
+            reject(`No such channel on this server (${this.channelServer})`)
           else console.log('ChannelSocket() was closed (cleanly): ', e.reason)
         }
         reject('wbSocket() closed before it was opened (?)')
@@ -4684,32 +4679,46 @@ class Snackabra {
    * will take all the storage). Providing a budget channel here will allows
    * you to create new channels when a 'guest' on some channel (for example).
    */
-  create(sbServer: SBServer, serverSecretOrBudgetChannel?: string | ChannelEndpoint, keys?: JsonWebKey): Promise<SBChannelHandle> {
+  create(ownerKeys: SB384, budgetChannel: Channel): Promise<SBChannelHandle> // new interface
+  create(sbServer: SBServer, erverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle> // old interface
+  create(sbServerOrSB384: SBServer | SB384, serverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle> {
+    // TODO: needs this variant:
+    //   
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       try {
-        const { channelData, exportable_privateKey } = await newChannelData(keys ? keys : null);
-        if (!channelData.roomId) {
-          throw new Error('Unable to determine roomId from key and id (it is empty)')
-        }
-        const budgetChannel = (serverSecretOrBudgetChannel instanceof ChannelEndpoint) ? serverSecretOrBudgetChannel : undefined
-        if (serverSecretOrBudgetChannel && typeof serverSecretOrBudgetChannel === 'string') channelData.SERVER_SECRET = serverSecretOrBudgetChannel
-        if (budgetChannel) {
-          const storageToken = await budgetChannel.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET)
-          if (!storageToken) reject('[create channel] Failed to get storage token for the provided channel')
-          channelData.storageToken = storageToken
-        }
-        const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
-        let resp: Dictionary<any> = await SBFetch(sbServer.channel_server + '/api/room/' + stripA32(channelData.roomId) + '/uploadRoom', {
-          method: 'POST',
-          body: data
-        });
-        resp = await resp.json();
-        if (resp.success) {
-          // await this.connect(channelId, identity);
-          // _localStorage.setItem(channelId, JSON.stringify(exportable_privateKey)) // TODO
-          resolve({ channelId: channelData.roomId!, key: exportable_privateKey, server: sbServer.channel_server })
+        if (sbServerOrSB384 instanceof SB384) {
+          // TODO: start from user keys
+        } else if (typeof sbServerOrSB384 === 'object') {
+          const sbServer = sbServerOrSB384 as SBServer
+          const { channelData, exportable_privateKey } = await newChannelData(keys ? keys : null); // TODO use SBChannelKeys/newKeys
+          if (!channelData.roomId) {
+            throw new Error('Unable to determine roomId from key and id (it is empty)')
+          }
+          const budgetChannel = (serverSecretOrBudgetChannel instanceof Channel) ? serverSecretOrBudgetChannel : undefined
+          if (serverSecretOrBudgetChannel && typeof serverSecretOrBudgetChannel === 'string') channelData.SERVER_SECRET = serverSecretOrBudgetChannel
+          if (budgetChannel) {
+            const storageToken = await budgetChannel.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET)
+            if (!storageToken) reject('[create channel] Failed to get storage token for the provided channel')
+            channelData.storageToken = storageToken
+          }
+          const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
+          let resp: Dictionary<any> = await SBFetch(sbServer.channel_server + '/api/room/' + stripA32(channelData.roomId) + '/uploadRoom', {
+            method: 'POST',
+            body: data
+          });
+          resp = await resp.json();
+          if (resp.success) {
+            // await this.connect(channelId, identity);
+            // _localStorage.setItem(channelId, JSON.stringify(exportable_privateKey)) // TODO
+            // TODO: channel handle uses userId, not key
+            resolve({ channelId: channelData.roomId!, key: exportable_privateKey, server: sbServer.channel_server })
+          } else {
+            const msg = `Creating channel did not succeed (${JSON.stringify(resp)})`
+            console.error(msg)
+            reject(msg);
+          }
         } else {
-          const msg = `Creating channel did not succeed (${JSON.stringify(resp)})`
+          const msg = `Wrong parameters to create channel: ${sbServerOrSB384}`
           console.error(msg)
           reject(msg);
         }
