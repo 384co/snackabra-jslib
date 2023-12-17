@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 11)";
+declare const version = "2.0.0-alpha.5 (build 14)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -159,11 +159,12 @@ export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
 export declare function base64ToArrayBuffer(str: string): Uint8Array;
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
 declare function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array | null, variant?: 'b64' | 'url'): string;
+export declare function arrayBufferToBase62(buffer: ArrayBuffer): string;
+export declare function base62ToArrayBuffer(s: string): ArrayBuffer;
 type Base62Encoded = string & {
     _brand?: 'Base62Encoded';
 };
 export declare function base62ToArrayBuffer32(s: Base62Encoded): ArrayBuffer;
-export declare function arrayBufferToBase62(buffer: ArrayBuffer): Base62Encoded;
 export declare function arrayBuffer32ToBase62(buffer: ArrayBuffer): Base62Encoded;
 export declare function base62ToBase64(s: Base62Encoded): string;
 export declare function base64ToBase62(s: string): Base62Encoded;
@@ -184,9 +185,9 @@ type knownKeysInfo = {
     key?: CryptoKey;
 };
 declare enum KeyPrefix {
-    SBAES256Key = "T881",
-    SBPrivateKey = "Aj3p",
-    SBPublicKey = "pNkk"
+    SBPublicKey = "PNk2",
+    SBAES256Key = "X881",
+    SBPrivateKey = "Xj3p"
 }
 interface SBAES256Key {
     prefix: KeyPrefix.SBAES256Key;
@@ -212,6 +213,7 @@ declare class SBCrypto {
     SBKeyToJWK(key: SBKey | JsonWebKey): JsonWebKey;
     JWKToSBKey(key: JsonWebKey, forcePublic?: boolean): SBKey | undefined;
     SBKeyToString(key: SBKey): string;
+    JWKToSBUserId(key: JsonWebKey): string | undefined;
     StringToSBKey(input: string): SBKey | undefined;
     UserIdToJWK(userId: string): JsonWebKey | undefined;
     JWKToUserId(key?: JsonWebKey): string | undefined;
@@ -240,6 +242,7 @@ declare class SBCrypto {
     str2ab(string: string): Uint8Array;
     ab2str(buffer: Uint8Array): string;
     compareKeys(key1: Dictionary<any>, key2: Dictionary<any>): boolean;
+    channelKeyStringsToCryptoKeys(keyStrings: ChannelKeyStrings): Promise<ChannelKeys>;
 }
 declare const SB_CHANNEL_HANDLE_SYMBOL: unique symbol;
 declare const SB_MESSAGE_SYMBOL: unique symbol;
@@ -252,9 +255,12 @@ declare class SB384 {
     constructor(key?: JsonWebKey | SBUserId);
     get readyFlag(): boolean;
     get privateKey(): CryptoKey;
+    get publicKey(): CryptoKey;
+    get key(): CryptoKey | undefined;
     get ownerChannelId(): string;
     get hash(): SB384Hash;
     get jwk(): JsonWebKey;
+    get jwkPub(): JsonWebKey;
     get userId(): SBUserId;
     get toString(): string;
     get toJSON(): string;
@@ -263,12 +269,18 @@ declare class SBChannelKeys extends SB384 {
     #private;
     ready: Promise<SBChannelKeys>;
     sbChannelKeysReady: Promise<SBChannelKeys>;
-    constructor(key?: JsonWebKey | SBUserId, channelKeyStrings?: ChannelKeyStrings);
+    constructor(source: 'handle', handle: SBChannelHandle, channelKeyStrings?: ChannelKeyStrings);
+    constructor(source: 'jwk', keys: JsonWebKey, channelKeyStrings?: ChannelKeyStrings);
+    constructor(source: 'new');
     get readyFlag(): boolean;
     get encryptionKey(): CryptoKey;
     get channelSignKey(): CryptoKey;
     get owner(): boolean;
     get channelData(): ChannelData;
+    get keys(): ChannelKeys;
+    get channelId(): string | undefined;
+    get channelServer(): string;
+    set channelServer(channelServer: string);
 }
 declare class SBMessage {
     #private;
@@ -293,11 +305,7 @@ declare class Channel extends SBChannelKeys {
     constructor(handle: SBChannelHandle);
     constructor(sbServer: SBServer, userKey: JsonWebKey, channelId: SBChannelId);
     get readyFlag(): boolean;
-    get keys(): ChannelKeys;
     get api(): this;
-    get channelId(): string;
-    get channelSignKey(): CryptoKey;
-    get channelServer(): string;
     deCryptChannelMessage(m00: string, m01: EncryptedContents): Promise<ChannelMessage | undefined>;
     getLastMessageTimes(): void;
     getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
@@ -388,8 +396,8 @@ declare class Snackabra {
     constructor(sbServerOrChannelServer: SBServer | string, setDBG?: boolean, setDBG2?: boolean);
     attach(handle: SBChannelHandle): Promise<Channel>;
     create(ownerKeys: SB384, budgetChannel: Channel): Promise<SBChannelHandle>;
-    create(sbServer: SBServer, erverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle>;
-    connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string): Promise<ChannelSocket>;
+    create(sbServer: SBServer, serverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle>;
+    connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): ChannelSocket;
     get storage(): StorageApi;
     get crypto(): SBCrypto;
     get version(): string;

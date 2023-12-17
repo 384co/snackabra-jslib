@@ -62,6 +62,18 @@ Follow format from [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 - disabling getLastMessageTimes on channel server, needs
   a few issues to be resolved (see source)
 
+- ChannelEndpoint removed
+
+- Shard servers no longer called out in jslib, they are
+  now handled callee-side.
+
+- Now have proper arrayBufferToBase62() and base62ToArrayBuffer()
+  functions (wasn't sure that would be practical.)
+
+- SBKeyToString etc can now be recoded with proper base62 conversions
+
+- Removing the "a32." prefix thing everywhere ... was a bad idea
+
 ## [1.1.0] - 2023-03-01
 
 ### Added

@@ -21,8 +21,7 @@
 
 */
 
-// working on 2.0.0 release
-const version = '2.0.0-alpha.5 (build 11)'
+const version = '2.0.0-alpha.5 (build 14)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -303,7 +302,7 @@ export interface EncryptedContentsBin {
 // these are toggled (globally) by ''new Snackabra(...)''
 // they will stick to 'true' if any Snackabra object is
 // created asking them to be set
-var DBG = false;
+var DBG = true;
 var DBG2 = false; // note, if this is true then DBG will be true too
 
 /**
@@ -515,9 +514,9 @@ export class MessageBus {
 function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
     try {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes("a32.")) // for code transitioning, 'a32' prefix should be only internal to jslib
-        reject(`[SBFetch] ERROR: url contains substring 'a32.' (${url})`);
+      // const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      // if (url.includes("a32.")) // for code transitioning, 'a32' prefix should be only internal to jslib
+      //   reject(`[SBFetch] ERROR: url contains substring 'a32.' (${url})`);
       fetch(input, init ?? { method: 'GET' })
         .then((response) => {
           resolve(response); // we don't check for status here, we'll do that in the caller
@@ -718,27 +717,19 @@ function _assertBase64(base64: string) {
 }
 const isBase64Encoded = _assertBase64 // alias
 
-// refactor helper - replace encodeURIComponent everywhere
-/** @private */
-function ensureSafe(base64: string): string {
-  const z = b64_regex.exec(base64)
-  _sb_assert((z) && (z[0] === base64), 'ensureSafe() tripped: something is not URI safe')
-  return base64
-}
-
-// this also functions as a place to identify "internal" from
-// "external" uses of A32 format (eg users of the library should
-// never see the 'a32.' prefix directly)
-function stripA32(value: string | Base62Encoded): string {
-  if ((value) && (value !== '')) {
-    if (value.startsWith('a32.'))
-      console.warn("[stripA32] removing 'a32.' prefix, these should be cleaned up by now")
-    return value.replace(/^a32\./, '')
-  } else {
-    console.warn("[stripA32] asked to strip an empty/missing string?")
-    return ''
-  }
-}
+// // this also functions as a place to identify "internal" from
+// // "external" uses of A32 format (eg users of the library should
+// // never see the 'a32.' prefix directly)
+// function stripA32(value: string | Base62Encoded): string {
+//   if ((value) && (value !== '')) {
+//     if (value.startsWith('a32.'))
+//       console.warn("[stripA32] removing 'a32.' prefix, these should be cleaned up by now")
+//     return value.replace(/^a32\./, '')
+//   } else {
+//     console.warn("[stripA32] asked to strip an empty/missing string?")
+//     return ''
+//   }
+// }
 
 /*
   we use URI/URL 'safe' characters in our b64 encoding to avoid having
@@ -749,16 +740,16 @@ function stripA32(value: string | Base62Encoded): string {
   we generate GUID from public keys, we iterate hashing until '-' and '_'
   are not present in the hash, which does reduce entropy by about three
   (3) bits (out of 384).
-*/
 
-// For possible future use:
-// RFC 3986 (updates 1738 and obsoletes 1808, 2396, and 2732)
-// type ALPHA = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'I' | 'J' | 'K' | 'L' | 'M' | 'N' | 'O' | 'P' | 'Q' | 'R' | 'S' | 'T' | 'U' | 'V' | 'W' | 'X' | 'Y' | 'Z'
-// type alpha = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm' | 'n' | 'o' | 'p' | 'q' | 'r' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'y' | 'z'
-// type digit = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9'
-// type genDelims = ':' | '/' | '?' | '#' | '[' | ']' | '@'
-// type subDelims = '!' | '$' | '&' | "'" | '(' | ')' | '*' | '+' | ',' | ';' | '='
-// type unReserved = ALPHA | alpha | digit | '-' | '.' | '_' | '~'
+  For possible future use:
+  RFC 3986 (updates 1738 and obsoletes 1808, 2396, and 2732)
+  type ALPHA = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'I' | 'J' | 'K' | 'L' | 'M' | 'N' | 'O' | 'P' | 'Q' | 'R' | 'S' | 'T' | 'U' | 'V' | 'W' | 'X' | 'Y' | 'Z'
+  type alpha = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm' | 'n' | 'o' | 'p' | 'q' | 'r' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'y' | 'z'
+  type digit = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9'
+  type genDelims = ':' | '/' | '?' | '#' | '[' | ']' | '@'
+  type subDelims = '!' | '$' | '&' | "'" | '(' | ')' | '*' | '+' | ',' | ';' | '='
+  type unReserved = ALPHA | alpha | digit | '-' | '.' | '_' | '~'
+*/
 
 /**
  * based on https://github.com/qwtel/base64-encoding/blob/master/base64-js.ts
@@ -882,7 +873,8 @@ export function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array
 /**
  * Standardized 'btoa()'-like function, e.g., takes a binary string
  * ('b') and returns a Base64 encoded version ('a' used to be short
- * for 'ascii').
+ * for 'ascii'). Defaults to URL safe ('url') but can be overriden
+ * to use standardized Base64 ('b64').
  *
  * @param buffer - binary string
  * @param variant - 'b64' or 'url'
@@ -890,13 +882,9 @@ export function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array
  */
 function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array | null, variant: 'b64' | 'url' = 'url'): string {
   if (buffer == null) {
-    _sb_exception('L509', 'arrayBufferToBase64() -> null paramater')
+    _sb_exception('L893', 'arrayBufferToBase64() -> null paramater')
     return ''
   } else {
-    // const view = bs2dv(bufferSource)
-    // const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    // console.log(buffer)
-    // const view = new DataView(buffer)
     const view = bs2dv(buffer)
     const len = view.byteLength
     const extraBytes = len % 3 // if we have 1 byte left, pad 2 bytes
@@ -904,7 +892,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array | null, variant: '
     const parts = new Array(
       Math.floor(len2 / MAX_CHUNK_LENGTH) + Math.sign(extraBytes)
     )
-    const lookup = variant == 'url' ? urlLookup : b64lookup // defaults to url-safe except when overriden
+    const lookup = variant == 'url' ? urlLookup : b64lookup
     const pad = ''
     let j = 0
     for (let i = 0; i < len2; i += MAX_CHUNK_LENGTH) {
@@ -935,11 +923,105 @@ function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array | null, variant: '
   }
 }
 
-// Define the base62 dictionary
+// Define the base62 dictionary (alphanumeric)
 // We want the same sorting order as ASCII, so we go with 0-9A-Za-z
 const base62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-const base62Regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
-// branded string type
+// const base62Regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
+const array32regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
+const b62regex = /^[0-9a-zA-Z]*$/; // kinder and gentler (any b62)
+
+const intervals = new Map<number, number>([
+  [32, 43],
+  [16, 22],
+  [8, 11],
+  [4, 6],
+]);
+const inverseIntervals = new Map(Array.from(intervals, ([key, value]) => [value, key]));
+const inverseKeys = Array.from(inverseIntervals.keys()).sort((a, b) => a - b);
+
+function _arrayBufferToBase62(buffer: ArrayBuffer, c: number): string {
+  if (buffer.byteLength !== c || !intervals.has(c)) throw new Error("[arrayBufferToBase62] Decoding error")
+  let result = '';
+  for (let n = BigInt('0x' + Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join(''));
+    n > 0n;
+    n = n / 62n)
+    result = base62[Number(n % 62n)] + result;
+  return result.padStart(intervals.get(c)!, '0');
+}
+
+/**
+ * Converts any array buffer to base62.
+ * Restriction: ArrayBuffer must be size multiple of 4 bytes (32 bits).
+ */
+export function arrayBufferToBase62(buffer: ArrayBuffer): string {
+  let l = buffer.byteLength;
+  if (l % 4 !== 0) throw new Error("[arrayBufferToBase62] Must be multiple of 4 bytes (32 bits).")
+  let i = 0;
+  let result = '';
+  while (l > 0) {
+    let c = 2 ** Math.min(Math.floor(Math.log2(l)), 5); // next chunk
+    let chunk = buffer.slice(i, i + c);
+    result += _arrayBufferToBase62(chunk, c);
+    i += c;
+    l -= c;
+  }
+  return result
+}
+
+// t is 32, 16, 8, or 4
+function _base62ToArrayBuffer(s: string, t: number): ArrayBuffer {
+  let n = 0n;
+  try {
+    for (let i = 0; i < s.length; i++) {
+      const digit = BigInt(base62.indexOf(s[i]));
+      n = n * 62n + digit;
+    }
+    if (n > 2n ** BigInt(t * 8) - 1n) // check overflow
+      throw new Error(`base62ToArrayBuffer: value exceeds ${t * 8} bits.`);
+    const buffer = new ArrayBuffer(t);
+    const view = new DataView(buffer);
+    for (let i = 0; i < (t / 4); i++) {
+      const uint32 = Number(BigInt.asUintN(32, n));
+      view.setUint32(((t / 4) - i - 1) * 4, uint32);
+      n = n >> 32n;
+    }
+    return buffer;
+  } catch (e) {
+    console.error("[_base62ToArrayBuffer] Error: ", e)
+    throw (e)
+  }
+}
+
+/**
+ * base62ToArrayBuffer
+ * 
+ * Converts a base62 string to matchin ArrayBuffer.
+ * Restriction: the original array buffer size must have
+ * been a multiple of 4 bytes (32 bits), eg. this
+ * function will always return such an ArrayBuffer.
+ */
+export function base62ToArrayBuffer(s: string): ArrayBuffer {
+  if (!b62regex.test(s)) throw new Error('base62ToArrayBuffer32: must be alphanumeric (0-9A-Za-z).');
+  let i = 0, j = 0, c, oldC = 43
+  let result = new Uint8Array(s.length); // more than we need
+  try {
+    while (i < s.length) {
+      c = inverseKeys.filter(num => num <= (s.length - i)).pop()!;
+      if (oldC < 43 && c >= oldC) throw new Error('cannot decypher b62 string (incorrect length)')
+      oldC = c // decoding check: other than with 43, should be decreasing
+      let chunk = s.slice(i, i + c);
+      const newBuf = new Uint8Array(_base62ToArrayBuffer(chunk, inverseIntervals.get(c)!))
+      result.set(newBuf, j);
+      i += c;
+      j += newBuf.byteLength
+    }
+    return result.buffer.slice(0, j);
+  } catch (e) {
+    console.error("[base62ToArrayBuffer] Error:", e)
+    throw (e)
+  }
+}
+
 
 /**
    A 'branded' string type for base62 encoded strings.
@@ -956,67 +1038,26 @@ const base62Regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
     when BigInt was added to JavaScript. BigInt allows us to
     work natively with 256-bit integers.
 
-    The 'a32.' prefix is used to distinguish these from
-    other base64 or other encodings. This is not strictly
-    necessary, but it makes it easier to distinguish.
-    Note that '.' is not a valid base62 nor base64 character.
-    'a32.' refers to 'ArrayBuffer32' (256 bits), which we use
-    as a basic type to represent 256-bit integers in 43
-    characters of base62 [0-9A-Za-z]
- */
+    */
 type Base62Encoded = string & { _brand?: 'Base62Encoded' };
 
 /**
- * base62ToArrayBuffer32 converts a base62 encoded string to an ArrayBuffer32.
- * 
- * @param s base62 encoded string
- * @returns ArrayBuffer32
+ * Convenience wrapper, enforces array32 format
  */
 export function base62ToArrayBuffer32(s: Base62Encoded): ArrayBuffer {
-  if (!base62Regex.test(s)) throw new Error(`base62ToArrayBuffer32: string must match: ${base62Regex}, value provided was ${s}`);
-  // remove the 'a32.' prefix, if present
-  if (s.startsWith('a32.')) s = s.slice(4);
-  let n = BigInt(0);
-  for (let i = 0; i < s.length; i++)
-    n = n * 62n + BigInt(base62.indexOf(s[i]));
-  // base62 x 43 is slightly more than 256 bits, so we need to check for overflow
-  if (n > 2n ** 256n - 1n) throw new Error(`base62ToArrayBuffer32: value exceeds 256 bits.`);
-  const buffer = new ArrayBuffer(32);
-  const view = new DataView(buffer);
-  for (let i = 0; i < 8; i++, n = n >> 32n)
-    view.setUint32((8 - i - 1) * 4, Number(BigInt.asUintN(32, n)));
-  return buffer;
-}
-
-
-/**
- * arrayBufferToBase62 converts an ArrayBuffer32 to a base62 encoded string.
- * Does not include a32. prefix.
- * 
- * @param buffer ArrayBuffer32
- * @returns base62 encoded string
- */
-export function arrayBufferToBase62(buffer: ArrayBuffer): Base62Encoded {
-  if (buffer.byteLength !== 32)
-    throw new Error('arrayBufferToBase62: buffer must be exactly 32 bytes (256 bits).');
-  let result = '';
-  for (let n = BigInt('0x' + Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join(''));
-    n > 0n;
-    n = n / 62n)
-    result = base62[Number(n % 62n)] + result;
-  return result.padStart(43, '0');
+  if (!array32regex.test(s)) throw new Error(`base62ToArrayBuffer32: string must match: ${array32regex}, value provided was ${s}`);
+  return base62ToArrayBuffer(s)
 }
 
 /**
- * arrayBuffer32ToBase62 converts an ArrayBuffer32 to a base62 encoded string.
- * Inlcudes a32. prefix, was used internally while transitioning from base64.
- * 
- * @param buffer ArrayBuffer32
- * @returns base62 encoded string
+ * Convenience wrapper.
  */
 export function arrayBuffer32ToBase62(buffer: ArrayBuffer): Base62Encoded {
-  return 'a32.' + arrayBufferToBase62(buffer);
+  if (buffer.byteLength !== 32)
+    throw new Error('arrayBufferToBase62: buffer must be exactly 32 bytes (256 bits).');
+  return arrayBufferToBase62(buffer)
 }
+
 
 /**
  * base62ToBase64 converts a base62 encoded string to a base64 encoded string.
@@ -1031,6 +1072,8 @@ export function base62ToBase64(s: Base62Encoded): string {
 }
 
 /**
+ * Convenience function.
+ * 
  * base64ToBase62 converts a base64 encoded string to a base62 encoded string.
  * 
  * @param s base64 encoded string
@@ -1044,7 +1087,7 @@ export function base64ToBase62(s: string): Base62Encoded {
 
 // and a type guard
 export function isBase62Encoded(value: string | Base62Encoded): value is Base62Encoded {
-  return base62Regex.test(value);
+  return array32regex.test(value);
 }
 
 /**
@@ -1061,83 +1104,6 @@ function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | 
   tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
   return tmp.buffer;
 }
-
-// /**
-//  * Returns random number
-//  *
-//  * @return {int} integer 0..255
-//  *
-//  */
-// export function simpleRand256() {
-//   return crypto.getRandomValues(new Uint8Array(1))[0];
-// }
-
-// const base32mi = '0123456789abcdefyhEjkLmNHpFrRTUW';
-
-// /**
-//  * Returns a random string in requested encoding
-//  *
-//  * @param {n} number of characters
-//  * @param {code} encoding, supported types: 'base32mi'
-//  * @return {string} random string
-//  *
-//  * base32mi: ``0123456789abcdefyhEjkLmNHpFrRTUW``
-//  */
-// export function simpleRandomString(n: number, code: string): string {
-//   if (code == 'base32mi') {
-//     // yeah, of course we need to add base64 etc
-//     const z = crypto.getRandomValues(new Uint8Array(n));
-//     let r = '';
-//     for (let i = 0; i < n; i++) r += base32mi[z[i] & 31];
-//     return r;
-//   }
-//   _sb_exception('simpleRandomString', 'code ' + code + ' not supported');
-//   return '';
-// }
-
-// /**
-//  * This function disambiguates strings that are known to be 'base32mi' type.
-//  * Below is the list of base32 characters, and the disambiguation table.
-//  * base32mi is designed to be human-friendly, so this function can be 
-//  * safely called anywhere you have human input - including as an 
-//  * event on an input field that immediately makes any correction. 
-//  * 
-//  * You can think of the translation either in terms of many-to-one
-//  * (all entered characters that map to a specific base32mi character),
-//  * or as a one-to-one correspondence (where '.' means 'no change').
-//  *
-//  * @example
-//  *
-//  *     'base32mi': '0123456789abcdefyhEjkLmNHpFrRTUW'
-//  * 
-//  *     Disambiguation transformations:
-//  * 
-//  *     [OoQD] -> '0'
-//  *     [lIiJ] -> '1'
-//  *     [Zz] -> '2'
-//  *     [A] -> '4'
-//  *     [Ss] -> '5'
-//  *     [G] -> '6'
-//  *     [t] -> '7'
-//  *     [B] -> '8'
-//  *     [gq] -> '9'
-//  *     [C] -> 'c'
-//  *     [Y] -> 'y'
-//  *     [KxX] -> 'k'
-//  *     [M] -> 'm'
-//  *     [n] -> 'N'
-//  *     [P] -> 'p'
-//  *     [uvV] -> 'U'
-//  *     [w] -> 'W'
-//  *
-//  *     0123456789abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVXYZ
-//  *     ................9.1..1.N0.9.57UUk.248c0EF6.11kLm.0p0.5..Uky2
-//  *
-//  */
-// export function cleanBase32mi(s: string) {
-//   // this of course is not the most efficient
-//   return s.replace(/[OoQD]/g, '0').replace(/[lIiJ]/g, '1').replace(/[Zz]/g, '2').replace(/[A]/g, '4').replace(/[Ss]/g, '5').replace(/[G]/g, '6').replace(/[t]/g, '7').replace(/[B]/g, '8').replace(/[gq]/g, '9').replace(/[C]/g, 'c').replace(/[Y]/g, 'y').replace(/[KxX]/g, 'k').replace(/[M]/g, 'm').replace(/[n]/g, 'N').replace(/[P]/g, 'p').replace(/[uvV]/g, 'U').replace(/[w]/g, 'w');
-// }
 
 /**
  * Partition
@@ -1162,28 +1128,6 @@ export function jsonParseWrapper(str: string | null, loc?: string) {
   return str as any
 }
 
-
-// .... the below has served us well ... the above is a newer & leaner
-// export function jsonParseWrapper(str: string | null, loc: string) {
-//   if (str == null) return null;
-//   try {
-//     return JSON.parse(str);
-//   } catch (error) {
-//     try {
-//       // This would be simple: 'return JSON.parse(eval(str))' but eval() is not safe
-//       let s2 = '', s3 = '', str2: string | undefined = str
-//       while (str2 != (s3 = s2, s2 = str2, str2 = str2?.match(/^(['"])(.*)\1$/m)?.[2]))
-//         return JSON.parse(`'${s3}'`);
-//     } catch {
-//       try {
-//         // try one last thing
-//         return JSON.parse(str.slice(1, -1));
-//       } catch {
-//         throw new Error(`JSON.parse() error at ${loc} (tried eval and slice)\nString was: ${str}`);
-//       }
-//     }
-//   }
-// }
 
 /** Essentially a dictionary where each entry is an arraybuffer. */
 export interface SBPayload {
@@ -1353,14 +1297,15 @@ type knownKeysInfo = {
   *                       \"y\":\"qW9VP72uf9rgUU117G7AfTkCMncJbT5scIaIRwBXfqET6FYcq20fwSP7R911J2_t\"}"
   * 
   * (private key). These are elliptic curve keys encoded in "JWK" format. 
+  * 
   * The main RFC is 7518 (https://datatracker.ietf.org/doc/html/rfc7518#section-6.2),
   * supervised by IESG except for a tiny addition of one parameter ("ext") that is 
   * supervised by the W3C Crypto WG (https://w3c.github.io/webcrypto/#ecdsa).
   * 
-  * We define an internal SB format that encodes/decodes any sort of key to a variable-
-  * length (a32) string. The most important case are JWK keys.
+  * We define an internal SBKey format that encodes/decodes any sort of key or identifier
+  * to a variable-length (a32) string. The most important case is JWK format.
   * 
-  * EC in JWK has a number of parameters, but in this case the only required ones are:
+  * EC in JWK has a number of parameters, but for us the only required ones are:
   * 
   *  crv: the curve (P-384 in this case)
   *  x: the x coordinate of the public key
@@ -1370,32 +1315,34 @@ type knownKeysInfo = {
   *  ext: the 'extractable' flag
   *  key_ops: (optional) permitted the key operations
   * 
-  * We define ''SBKey'' as a variable length string with a four-character prefix,
-  * which encodes as follows:
+  * Our SBKey format has a four-character prefix to distinguish types, currently:
   * 
-  *  "pNkk": public key; only x and y are present, the rest implied [KeyPrefix.SBPublicKey]
-  *  "Aj3p": private key: x, y, d are present, the rest implied [KeyPrefix.SBPrivateKey]
-  *  "T881": AES 256 key (32 bytes) [KeyPrefix.SBAES256Key]
+  *  "PNk2": public key; only x and y are present, the rest implied [KeyPrefix.SBPublicKey]
+  *  "Xj3p": private key: x, y, d are present, the rest implied [KeyPrefix.SBPrivateKey]
+  *  "X881": AES 256 key (32 bytes) [KeyPrefix.SBAES256Key]
   * 
   * For the AES key, properties will include:
   * 
-  * "k": the key itself, encoded as base64
-  * "alg": "A256GCM"
-  * "key_ops": ["encrypt", "decrypt"]
-  * "kty": "oct"
+  *  "k": the key itself, encoded as base64
+  *  "alg": "A256GCM"
+  *  "key_ops": ["encrypt", "decrypt"]
+  *  "kty": "oct"
   * 
   * Only the "k" property is required, the rest are implied.
   * 
-  * In JWK, x, y, and d are all encoded as 64 characters, or 384 bits.
-  * 
-  *
+  * In JWK, x, y, and d are all encoded as 64 characters (or 384 bits), d is omitted
+  * for public keys.
   *
 */
 
 enum KeyPrefix {
-  SBAES256Key = "T881",
-  SBPrivateKey = "Aj3p",
-  SBPublicKey = "pNkk"
+  // prefixes are random except that:
+  // anything starting with 'P' is public key or identifier
+  SBPublicKey = "PNk2",
+  // anything starting with 'X' is private key, encryption key, or in any
+  // other manner information that should perhaps be secret
+  SBAES256Key = "X881",
+  SBPrivateKey = "Xj3p"
 }
 
 interface SBAES256Key {
@@ -1529,45 +1476,42 @@ class SBCrypto {  /*************************************************************
    */
   SBKeyToString(key: SBKey): string {
     const prefix = key.prefix;
-    // remember throughout that our constraint on base62 is that it's always
-    // a multiple of 256 bits, so we need to split and pad things.
-    // we also consistently need to strip/add the "a32." prefix
     switch (prefix) {
       case KeyPrefix.SBAES256Key: {
-        // AES keys are conveniently already 256 bits
-        const buffer = base64ToArrayBuffer((key as SBAES256Key).k);
-        return prefix + arrayBufferToBase62(buffer).slice(4);
+        // const buffer = base64ToArrayBuffer((key as SBAES256Key).k);
+        // return prefix + arrayBufferToBase62(buffer);
+        return prefix + base64ToBase62((key as SBAES256Key).k);
       }
       case KeyPrefix.SBPublicKey: {
-        // public keys are two 384-bit numbers, which splits into 3x 256 bits
+        // public keys are two 384-bit numbers
         const publicKey = key as SBPublicKey;
         const combined = new Uint8Array(48 * 2);
         combined.set(base64ToArrayBuffer(publicKey.x), 0);
         combined.set(base64ToArrayBuffer(publicKey.y), 48);
-        return prefix +
-          arrayBufferToBase62(combined.slice(0, 32).buffer).slice(4) +
-          arrayBufferToBase62(combined.slice(32, 64).buffer).slice(4) +
-          arrayBufferToBase62(combined.slice(64, 96).buffer).slice(4);
+        return prefix + arrayBufferToBase62(combined)
       }
       case KeyPrefix.SBPrivateKey: {
-        // private keys are a bit cumbersome, we pad with 128 bits of zero
         const privateKey = key as SBPrivateKey;
-        const combined = new Uint8Array(3 * 48 + 16); // this is 5x 256 bits
-        combined.set(base64ToArrayBuffer(privateKey.x).slice(4), 0);
-        combined.set(base64ToArrayBuffer(privateKey.y).slice(4), 48);
-        combined.set(base64ToArrayBuffer(privateKey.d).slice(4), 96);
-        // it will already be zero-padded
-        return prefix +
-          arrayBufferToBase62(combined.slice(0, 32).buffer).slice(4) +
-          arrayBufferToBase62(combined.slice(32, 64).buffer).slice(4) +
-          arrayBufferToBase62(combined.slice(64, 96).buffer).slice(4) +
-          arrayBufferToBase62(combined.slice(96, 128).buffer).slice(4) +
-          arrayBufferToBase62(combined.slice(128, 160).buffer).slice(4);
+        const combined = new Uint8Array(3 * 48);
+        combined.set(base64ToArrayBuffer(privateKey.x), 0);
+        combined.set(base64ToArrayBuffer(privateKey.y), 48);
+        combined.set(base64ToArrayBuffer(privateKey.d), 96);
+        return prefix + arrayBufferToBase62(combined)
       }
       default: {
         throw new Error("Unknown SBKey type.");
       }
     }
+  }
+
+  /**
+   * Convenience function. Note that SBUserId is always 'public'.
+   */
+  JWKToSBUserId(key: JsonWebKey) {
+    const sbKey = this.JWKToSBKey(key, true)
+    return sbKey
+      ? this.SBKeyToString(sbKey)
+      : undefined
   }
 
   StringToSBKey(input: string): SBKey | undefined {
@@ -1578,45 +1522,29 @@ class SBCrypto {  /*************************************************************
       switch (prefix) {
         case KeyPrefix.SBAES256Key: {
           if (data.length !== 43) return undefined;
-          const k = base62ToArrayBuffer32("a32." + data);
+          const k = base62ToArrayBuffer(data);
           return {
             prefix: KeyPrefix.SBAES256Key,
             k: arrayBufferToBase64(k)
           };
         }
         case KeyPrefix.SBPublicKey: {
-          if (data.length !== 86) return undefined;
-          const p1 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(0, 43)));
-          const p2 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(43, 86)));
-          const p3 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(86)));
-          const combined = new Uint8Array(48 * 2);
-          combined.set(p1, 0);
-          combined.set(p2, 32);
-          combined.set(p3, 64);
+          const combined = base62ToArrayBuffer(data)
+          if (combined.byteLength !== (48 * 2)) return undefined;
           return {
             prefix: KeyPrefix.SBPublicKey,
-            x: arrayBufferToBase64(combined.slice(0, 48).buffer),
-            y: arrayBufferToBase64(combined.slice(48, 96).buffer)
+            x: arrayBufferToBase64(combined.slice(0, 48)),
+            y: arrayBufferToBase64(combined.slice(48, 96))
           };
         }
         case KeyPrefix.SBPrivateKey: {
-          if (data.length !== 215) return undefined;
-          const p1 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(0, 43)));
-          const p2 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(43, 86)));
-          const p3 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(86, 129)));
-          const p4 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(129, 172)));
-          const p5 = new Uint8Array(base62ToArrayBuffer32("a32." + data.slice(172, 215)));
-          const combined = new Uint8Array(3 * 48 + 16); // this is 5x 256 bits
-          combined.set(p1, 0);
-          combined.set(p2, 32);
-          combined.set(p3, 64);
-          combined.set(p4, 96);
-          combined.set(p5, 128);
+          const combined = base62ToArrayBuffer(data)
+          if (combined.byteLength !== (48 * 3)) return undefined;
           return {
             prefix: KeyPrefix.SBPrivateKey,
-            x: arrayBufferToBase64(combined.slice(0, 48).buffer),
-            y: arrayBufferToBase64(combined.slice(48, 96).buffer),
-            d: arrayBufferToBase64(combined.slice(96, 144).buffer)
+            x: arrayBufferToBase64(combined.slice(0, 48)),
+            y: arrayBufferToBase64(combined.slice(48, 96)),
+            d: arrayBufferToBase64(combined.slice(96, 144))
           };
         }
         default: {
@@ -1678,14 +1606,15 @@ class SBCrypto {  /*************************************************************
         this.#knownKeys.set(hash, newInfo)
       }
     } else if (key instanceof SB384) {
-      // SB384 is always private
+      // SB384 is always private ... update: no, obviously it's not ...
       await key.ready // just in case
       const hash = key.hash
       // todo: perhaps check if it's there, but for now just overwrite
       const newInfo: knownKeysInfo = {
         hash: hash, // also the map hash
         jwk: key.jwk,
-        key: key.privateKey, // exists iff it's a private key
+        // key: key.privateKey, // exists iff it's a private key
+        key: key.key // priv or pub
       }
       this.#knownKeys.set(hash, newInfo)
     } else if (key instanceof CryptoKey) {
@@ -1769,7 +1698,7 @@ class SBCrypto {  /*************************************************************
   async #generateHash(rawBytes: ArrayBuffer): Promise<SB384Hash> {
     try {
       const MAX_REHASH_ITERATIONS = 160
-      const b62regex = /^[0-9A-Za-z]+$/;
+      // const b62regex = /^[0-9A-Za-z]+$/;
       let count = 0
       let hash = arrayBufferToBase64(rawBytes)
       while (!b62regex.test(hash)) {
@@ -1875,7 +1804,7 @@ class SBCrypto {  /*************************************************************
    *
    * Generates standard ``ECDH`` keys using ``P-384``.
    */
-  async generateKeys() {
+  async generateKeys(): Promise<CryptoKeyPair> {
     try {
       return await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-384' }, true, ['deriveKey']);
     } catch (e) {
@@ -1931,7 +1860,7 @@ class SBCrypto {  /*************************************************************
    * not extractable).
    */
   async exportKey(format: 'jwk', key: CryptoKey) {
-    return await crypto.subtle
+    return crypto.subtle
       .exportKey(format, key)
       .catch(() => {
         if (DBG) console.warn(`... exportKey() protested, this just means we treat this as undefined`)
@@ -1989,8 +1918,8 @@ class SBCrypto {  /*************************************************************
         const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data)
         if (returnType === 'encryptedContents') {
           resolve({
-            content: ensureSafe(arrayBufferToBase64(encrypted)),
-            iv: ensureSafe(arrayBufferToBase64(iv))
+            content: arrayBufferToBase64(encrypted),
+            iv: arrayBufferToBase64(iv)
           })
         } else {
           resolve(encrypted)
@@ -2054,7 +1983,7 @@ class SBCrypto {  /*************************************************************
         let sign;
         try {
           sign = await crypto.subtle.sign('HMAC', secretKey, encoded)
-          resolve(ensureSafe(arrayBufferToBase64(sign)));
+          resolve(arrayBufferToBase64(sign));
         } catch (error) {
           reject(error);
         }
@@ -2117,6 +2046,40 @@ class SBCrypto {  /*************************************************************
     return false;
   }
 
+  // converts from external (wire) format to internal (CryptoKey) formats
+  // (in sbCrypto because channel server also uses it)
+  async channelKeyStringsToCryptoKeys(keyStrings: ChannelKeyStrings): Promise<ChannelKeys> {
+    return new Promise(async (resolve, reject) => {
+      let ownerKeyParsed: JsonWebKey = jsonParseWrapper(keyStrings.ownerKey, '2593')
+      Promise.all([
+        sbCrypto.importKey('jwk', ownerKeyParsed, 'ECDH', false, []),
+        sbCrypto.importKey('jwk', jsonParseWrapper(keyStrings.encryptionKey, '2296'), 'AES', false, ['encrypt', 'decrypt']),
+        sbCrypto.importKey('jwk', jsonParseWrapper(keyStrings.signKey, '2597'), 'ECDH', true, ['deriveKey']),
+        sbCrypto.importKey('jwk', sbCrypto.extractPubKey(jsonParseWrapper(keyStrings.signKey, '2598'))!, 'ECDH', true, []),
+        // this.identity!.privateKey // we know we have id by now
+      ])
+        .then(async (v) => {
+          if (DBG) console.log("++++++++ readyPromise() processed first batch of keys")
+          const ownerKey = v[0]
+          const encryptionKey = v[1]
+          const signKey = v[2]
+          const publicSignKey = v[3]
+          resolve({
+            ownerKey: ownerKey,
+            // ownerPubKeyX: ownerKeyParsed.x!,
+            encryptionKey: encryptionKey,
+            signKey: signKey,
+            // channelSignKey: channelSignKey,
+            publicSignKey: publicSignKey
+          })
+        })
+        .catch((e) => {
+          console.error(`readyPromise(): failed to import keys: ${e}`)
+          reject(e)
+        })
+    })
+  }
+
   // /**
   //  * SBCrypto.lookupKey()
   //  *
@@ -2156,6 +2119,7 @@ function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext
 }
 
 // Decorator
+// asserts that corresponding object is 'ready'; also asserts non-null getter return value
 /** @private */
 function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
@@ -2165,10 +2129,10 @@ function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext *
       const prop = `${obj}ReadyFlag`
       if (prop in this) {
         const rf = "readyFlag" as keyof PropertyDescriptor
-        _sb_assert(this[rf], `${propertyKey} getter accessed but object ${obj} not ready (fatal)`)
+        _sb_assert(this[rf], `${propertyKey} getter accessed but object ${obj} not 'ready' (fatal)`)
       }
       const retValue = get.call(this)
-      _sb_assert(retValue != null, `${propertyKey} getter accessed in object type ${obj} but returns NULL (fatal)`)
+      _sb_assert(retValue != null, `${propertyKey} getter accessed in object type ${obj}, which reports 'ready' but return value is NULL (fatal)`)
       return retValue
     }
   }
@@ -2221,8 +2185,6 @@ function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecorat
   }
 }
 
-//#endregion - local decorators
-
 const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle', 'SBChannelHandle'] as const
 type SB_CLASS_TYPES = typeof SB_CLASS_ARRAY[number]
 type SB_CLASSES = SBMessage | SBObjectHandle | SBChannelHandle
@@ -2246,6 +2208,9 @@ function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean 
     default: return false
   }
 }
+
+
+//#endregion - local decorators
 
 /******************************************************************************************************/
 //#region - SETUP and STARTUP stuff (in progress)
@@ -2366,8 +2331,10 @@ class SB384 {
 
   // #exportable_privateKey?: JsonWebKey
   #jwk?: JsonWebKey // this replaces 'exportable_privateKey'
-  #privateKey?: CryptoKey // internal representation of private key
   #sbUserKey?: SBKey // ditto, variation
+
+  #privateKey?: CryptoKey // internal representation of private key
+  #publicKey?: CryptoKey // internal rep if we're not an owner ID
 
   #hash?: SB384Hash // generic 'identifier', primarly mapping to corresponding channel ID
 
@@ -2394,6 +2361,7 @@ class SB384 {
       try {
         if (!key) {
           // generate a fresh ID
+          if (DBG2) console.log("SB384() - generating new key pair")
           const keyPair = await sbCrypto.generateKeys()
           this.#privateKey = keyPair.privateKey
           this.#jwk = await sbCrypto.exportKey('jwk', this.#privateKey)
@@ -2401,22 +2369,23 @@ class SB384 {
           this.#sbUserKey = sbCrypto.JWKToSBKey(this.#jwk!, true)
           _sb_assert(this.#sbUserKey, `ERROR creating SB384 object: failed to convert JWK to SBKey (should not happen)`)
         } else if (key instanceof Object && 'kty' in key) {
-          // jwk provided
+          // jwk key provided
           if (!key.d) {
-            // make sure key.d is present in the key, or it's probably a public key
+            // private key must have 'd'
             const msg = 'ERROR creating SB384 object: invalid key (must be a PRIVATE key)'
             console.error(msg)
             reject(msg)
           }
-          // we're given a key, and try to use it
           this.#jwk = key
           this.#privateKey = await sbCrypto.importKey('jwk', this.#jwk, 'ECDH', true, ['deriveKey'])
         } else if (typeof key === 'string') {
+          // we're given an SBUserId (always a public key)
           this.#sbUserKey = sbCrypto.StringToSBKey(key)
-          if (!this.#sbUserKey || this.#sbUserKey.prefix !== KeyPrefix.SBPrivateKey)
-            throw new Error(`ERROR creating SB384 object: either failed to import SBUserId, or it wasn't a private key`)
+          if (!this.#sbUserKey || this.#sbUserKey.prefix !== KeyPrefix.SBPublicKey)
+            throw new Error(`ERROR creating SB384 object: either failed to import SBUserId, or it wasn't a public key`)
           this.#jwk = sbCrypto.SBKeyToJWK(this.#sbUserKey!)
-          this.#privateKey = await sbCrypto.importKey('jwk', this.#jwk, 'ECDH', true, ['deriveKey'])
+          // this.#privateKey = await sbCrypto.importKey('jwk', this.#jwk, 'ECDH', true, ['deriveKey'])
+          this.#publicKey = await sbCrypto.importKey('jwk', this.#jwk, 'ECDH', true, [])
         } else {
           throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey, SBUserId, or omitted)')
         }
@@ -2425,6 +2394,8 @@ class SB384 {
         // this.#exportable_privateKey = await sbCrypto.exportKey('jwk', this.#privateKey)
 
         this.#hash = await sbCrypto.sb384Hash(this.#jwk!)
+
+        if (DBG2) console.log("SB384() - constructor wrapping up", this)
 
         sbCrypto.addKnownKey(this)
         this.#SB384ReadyFlag = true
@@ -2439,6 +2410,9 @@ class SB384 {
 
   /** @type {boolean}       */ @Memoize get readyFlag() { return this.#SB384ReadyFlag }
   /** @type {CryptoKey}     */ @Memoize @Ready get privateKey() { return this.#privateKey! }
+  /** @type {CryptoKey}     */ @Memoize @Ready get publicKey() { return this.#publicKey! } // todo: needed?
+  /** @type {CryptoKey}     */ @Memoize @Ready get key() { return this.#privateKey ? this.#privateKey : this.#publicKey }
+
 
   // /** @type {CryptoKeyPair} */ @Memoize @Ready get keyPair() { return this.#keyPair }
 
@@ -2476,6 +2450,8 @@ class SB384 {
   @Memoize @Ready get hash(): SB384Hash { return this.#hash! }
 
   @Memoize @Ready get jwk(): JsonWebKey { return this.#jwk! }
+  @Memoize @Ready get jwkPub(): JsonWebKey { return sbCrypto.extractPubKey(this.#jwk!)! }
+
 
   /**
    * Somewhat confusing at times, the string version of the user key per se is
@@ -2489,19 +2465,6 @@ class SB384 {
   // @Memoize @Ready get _id() { return JSON.stringify(this.exportable_pubKey!) }
 
 } /* class SB384 */
-
-
-// /**
-//  * SBUser
-//  */
-// class SBUserKeys extends SB384 {
-//   userName?: string
-//   constructor(key: JsonWebKey | undefined, userName?: string) {
-//     super(key)
-//     if (userName) this.userName = userName
-//   }
-// } /* class SBUser */
-
 
 /**
  * SBChannelKeys
@@ -2520,45 +2483,60 @@ class SBChannelKeys extends SB384 {
   #channelServer?: string
   #channelId?: SBChannelId
   #channelSignKey?: CryptoKey;
+
   // #channelSignKey?: CryptoKey;
 
   /**
    * The minimum state of a Channel is the "user" keys, eg
    * how we identify when connecting to the channel.
+   * 
+   * 'handle' means we're initializing off a channel handle.
+   * that means we are not owner, and that the channel exists.
+   * (eg the provided user ID is public keys, eg SBUserId)
+   * channel keys are fetched from channel server
+   * 
+   * 'jwk' and 'new' both mean it's a "new" channel, in the
+   * former case we're given private key for user, in the
+   * latter case (convenience) we create a fresh ID. the
+   * callee needs to create or budd channel.
    */
-  constructor(key?: JsonWebKey | SBUserId, channelKeyStrings?: ChannelKeyStrings) {
-    super(key);
+  constructor(source: 'handle', handle: SBChannelHandle, channelKeyStrings?: ChannelKeyStrings)
+  constructor(source: 'jwk', keys: JsonWebKey, channelKeyStrings?: ChannelKeyStrings)
+  constructor(source: 'new')
+  constructor(source: 'handle' | 'jwk' | 'new', handleOrJWK?: SBChannelHandle | JsonWebKey, channelKeyStrings?: ChannelKeyStrings) {
+    // constructor(key?: JsonWebKey | SBUserId, channelKeyStrings?: ChannelKeyStrings) {
+    switch (source) {
+      case 'handle': {
+        const handle = handleOrJWK as SBChannelHandle
+        super(handle.userId);
+        this.#channelServer = handle.channelServer;
+        this.#channelId = handle.channelId
+      } break
+      case 'jwk': {
+        const keys = handleOrJWK as JsonWebKey
+        super(keys)
+      } break
+      case 'new': {
+        super()
+      } break
+      default: {
+        throw new Error("Illegal parameters")
+      }
+    }
     this.ready = new Promise<SBChannelKeys>(async (resolve, reject) => {
       try {
-        if (!channelKeyStrings) {
-          await this.sb384Ready // make sure top (owner) keys are ready
-
-          if (this.#channelData) throw new Error(`newKeys() called but channelData already exists (already initialized)`)
-
+        await this.sb384Ready // make sure top keys are ready
+        if (source === 'jwk' || source === 'new') {
+          // owner channel; we must await sb384Ready
+          this.#channelId = this.hash
           this.#owner = true
-
-          // first encryption key is created from random
-          const encryptionKey: CryptoKey = await crypto.subtle.generateKey({
-            name: 'AES-GCM',
-            length: 256
-          }, true, ['encrypt', 'decrypt']);
-          this.#encryptionKey = encryptionKey
-          const exportable_encryptionKey: Dictionary<any> = await crypto.subtle.exportKey('jwk', encryptionKey);
-
-          // signing key of the *channel* is created from random
-          const signKeyPair: CryptoKeyPair = await crypto.subtle.generateKey({
-            name: 'ECDH', namedCurve: 'P-384'
-          }, true, ['deriveKey']);
-          const exportable_signKey: Dictionary<any> = await crypto.subtle.exportKey('jwk', signKeyPair.privateKey);
-
-          this.#channelData = {
-            roomId: this.hash,
-            ownerKey: JSON.stringify(this.userId),
-            encryptionKey: JSON.stringify(exportable_encryptionKey),
-            signKey: JSON.stringify(exportable_signKey),
-          };
-        } else {
-          SBFetch(this.#channelServer + '/api/room/' + stripA32(this.#channelId!) + '/getChannelKeys',
+        }
+        if (channelKeyStrings) {
+          if (DBG) console.log("++++ SBChannelKeys initialized from key strings")
+          await this.#setKeys(await sbCrypto.channelKeyStringsToCryptoKeys(channelKeyStrings))
+        } else if (this.#channelServer) {
+          if (DBG) console.log("++++ SBChannelKeys initialized from channel server")
+          await SBFetch(this.#channelServer + '/api/room/' + this.#channelId! + '/getChannelKeys',
             {
               method: 'GET',
               headers: { 'Content-Type': 'application/json' },
@@ -2572,53 +2550,49 @@ class SBChannelKeys extends SB384 {
               if (data.error)
                 reject("ChannelEndpoint(): failed to get channel keys (error in response)");
               // we have the authoritative keys from the server, import them
-              // await this.#loadKeys(data)
-              await this.#setKeys(await this.#channelKeyStringsToCryptoKeys(data)) // TODO: wait we're being given this
-              // this.#ChannelReadyFlag = true
+              await this.#setKeys(await sbCrypto.channelKeyStringsToCryptoKeys(data))
+              this.#SBChannelKeysReadyFlag = true
               resolve(this)
             })
+            .catch((e) => { throw (e) });
+        } else {
+          if (DBG) console.log("++++ SBChannelKeys initialized from scratch")
+          if (this.#channelData) throw new Error(`newKeys() called but channelData already exists (already initialized)`)
+          this.#owner = true
+
+          // first encryption key is created from random
+          const encryptionKey: CryptoKey = await crypto.subtle.generateKey({
+            name: 'AES-GCM',
+            length: 256
+          }, true, ['encrypt', 'decrypt']);
+          this.#encryptionKey = encryptionKey
+          const exportable_encryptionKey: JsonWebKey = await crypto.subtle.exportKey('jwk', encryptionKey);
+
+          // signing key of the *channel* is created from random
+          const signKeyPair: CryptoKeyPair = await crypto.subtle.generateKey({
+            name: 'ECDH', namedCurve: 'P-384'
+          }, true, ['deriveKey']);
+          const exportable_signKey: JsonWebKey = await crypto.subtle.exportKey('jwk', signKeyPair.privateKey);
+
+          const exportable_publicKey: JsonWebKey = this.jwkPub;
+
+          this.#channelData = {
+            roomId: this.hash,
+            ownerKey: JSON.stringify(exportable_publicKey),
+            encryptionKey: JSON.stringify(exportable_encryptionKey),
+            signKey: JSON.stringify(exportable_signKey),
+          };
 
         }
+
         this.#SBChannelKeysReadyFlag = true
         resolve(this)
+
       } catch (e) {
         reject('ERROR creating SBChannelKeys object failed: ' + WrapError(e))
       }
     })
     this.sbChannelKeysReady = this.ready
-  }
-
-  // converts from external (wire) format to internal (CryptoKey) formats
-  async #channelKeyStringsToCryptoKeys(keyStrings: ChannelKeyStrings): Promise<ChannelKeys> {
-    return new Promise(async (resolve, reject) => {
-      let ownerKeyParsed: JsonWebKey = jsonParseWrapper(keyStrings.ownerKey, '2593')
-      Promise.all([
-        sbCrypto.importKey('jwk', ownerKeyParsed, 'ECDH', false, []),
-        sbCrypto.importKey('jwk', jsonParseWrapper(keyStrings.encryptionKey, '2296'), 'AES', false, ['encrypt', 'decrypt']),
-        sbCrypto.importKey('jwk', jsonParseWrapper(keyStrings.signKey, '2597'), 'ECDH', true, ['deriveKey']),
-        sbCrypto.importKey('jwk', sbCrypto.extractPubKey(jsonParseWrapper(keyStrings.signKey, '2598'))!, 'ECDH', true, []),
-        // this.identity!.privateKey // we know we have id by now
-      ])
-        .then(async (v) => {
-          if (DBG) console.log("++++++++ readyPromise() processed first batch of keys")
-          const ownerKey = v[0]
-          const encryptionKey = v[1]
-          const signKey = v[2]
-          const publicSignKey = v[3]
-          resolve({
-            ownerKey: ownerKey,
-            // ownerPubKeyX: ownerKeyParsed.x!,
-            encryptionKey: encryptionKey,
-            signKey: signKey,
-            // channelSignKey: channelSignKey,
-            publicSignKey: publicSignKey
-          })
-        })
-        .catch((e) => {
-          console.error(`readyPromise(): failed to import keys: ${e}`)
-          reject(e)
-        })
-    })
   }
 
   /** @private */
@@ -2638,9 +2612,17 @@ class SBChannelKeys extends SB384 {
   @Memoize @Ready get channelSignKey() { return this.#channelSignKey! }
   @Memoize @Ready get owner() { return this.#owner }
   @Memoize @Ready get channelData() { return this.#channelData! }
+  @Memoize @Ready get keys() { return this.#channelKeys! }
+  @Memoize @Ready get channelId() { return this.#channelId }
+
+  @Memoize @Ready get channelServer() { return this.#channelServer! }
+  set channelServer(channelServer: string) {
+    _sb_assert(!this.#channelServer, "ChannelServer already set on this SBChannelKeys object - can't change")
+    this.#channelServer = channelServer
+  }
+
 
 } /* class SBChannelKeys */
-
 
 /**
  * SBMessage
@@ -2735,11 +2717,8 @@ class SBMessage {
   }
 } /* class SBMessage */
 
-
-
 /**
  * Channel
- *
  */
 class Channel extends SBChannelKeys {
   ready: Promise<Channel>
@@ -2761,13 +2740,14 @@ class Channel extends SBChannelKeys {
 
   // owner: boolean = false // true if above user is owner
 
-  #channelKeys?: ChannelKeys;
-  #channelSignKey?: CryptoKey;
-  #channelId: string
+  // // these should all be in SBChannelKeys
+  // #channelKeys?: ChannelKeys;
+  // #channelSignKey?: CryptoKey;
+  // #channelId: string
+  // #channelServer: string = '';
+  // // #channelApi: string = '';
 
   #cursor: string = ''; // last (oldest) message key seen
-  #channelServer: string = '';
-  // #channelApi: string = '';
 
   // abstract send(message: SBMessage): Promise<string>
 
@@ -2807,25 +2787,33 @@ class Channel extends SBChannelKeys {
   constructor(handle: SBChannelHandle);
   constructor(sbServer: SBServer, userKey: JsonWebKey, channelId: SBChannelId);
   constructor(sbServerOrHandle: SBServer | SBChannelHandle, userKey?: JsonWebKey, channelId?: SBChannelId) {
-    if (typeof sbServerOrHandle === 'object' && 'channelId' in sbServerOrHandle && 'key' in sbServerOrHandle) {
-      // single parameter, handle
-      _sb_assert(userKey || channelId, "If you pass a handle, you cannot pass userKey or channelId")
+    if (typeof sbServerOrHandle === 'object' && 'channelId' in sbServerOrHandle && 'userId' in sbServerOrHandle) {
+      // we got SBChannelHandle
+      _sb_assert((!userKey) && (!channelId), "If you pass a handle, you cannot pass userKey or channelId")
       const handle = sbServerOrHandle as SBChannelHandle;
-      super(handle.userId);
-      if (!handle.channelServer) throw new Error("Channel(): no channel server provided")
-      this.#channelServer = handle.channelServer
+      super('handle', handle);
+      if (!handle.channelServer)
+        throw new Error("Channel(): no channel server provided")
+      // this.#channelServer = handle.channelServer
       // this.#channelApi = handle.channelServer + '/api/'
-      this.#channelId = handle.channelId;
+      // this.#channelId = handle.channelId;
     } else {
       // backwards compatibility: the case with sbServer, userKey, and channelId
       // constructor(sbServer?: SBServer, userKey?: JsonWebKey, channelId?: string) {
-      _sb_assert(!userKey || !channelId, "If first parameter is SBServer, you must pass userKey and channelId")
+      _sb_assert((!userKey) && (!channelId), "If first parameter is SBServer, you must pass userKey and channelId")
       console.warn("Deprecated channel constructor use ... ")
-      super(userKey);
+      const _userId = sbCrypto.JWKToSBUserId(userKey!)
+      _sb_assert(_userId, "Unable to import JWK (keys)")
       const sbServer = sbServerOrHandle as SBServer;
-      this.#channelId = channelId!
-      if (!sbServer.channel_server) throw new Error("Channel(): no channel server provided")
-      this.#channelServer = sbServer.channel_server
+      _sb_assert(sbServer.channel_server, "Channel(): no channel server provided")
+      const _handle: SBChannelHandle = {
+        userId: _userId!,
+        channelId: channelId!,
+        channelServer: sbServer.channel_server
+      }
+      super('handle', _handle);
+      // this.#channelId = channelId!
+      // this.#channelServer = sbServer.channel_server
       // this.#channelApi = sbServer.channel_server + '/api/'
     }
 
@@ -2841,14 +2829,14 @@ class Channel extends SBChannelKeys {
   }
 
   @Memoize @Ready get readyFlag(): boolean { return this.#ChannelReadyFlag }
-  @Memoize @Ready get keys() { return this.#channelKeys! }
   // @Memoize @Ready get sbServer() { return this.#sbServer }
   @Memoize @Ready get api() { return this } // for compatibility
-  @Memoize @Ready get channelId() { return this.#channelId }
-  @Memoize @Ready get channelSignKey() { return (this.#channelSignKey!) }
+  // @Memoize @Ready get keys() { return this.#channelKeys! }
+  // @Memoize @Ready get channelId() { return this.#channelId }
+  // @Memoize @Ready get channelSignKey() { return (this.#channelSignKey!) }
   // @Memoize @Ready get capacity() { return this.#capacity }
 
-  @Memoize get channelServer() { return this.#channelServer }
+  // @Memoize get channelServer() { return this.#channelServer }
 
   async #callApi(path: string): Promise<any>
   async #callApi(path: string, body: any): Promise<any>
@@ -2883,7 +2871,7 @@ class Channel extends SBChannelKeys {
       //   init.body = JSON.stringify(body);
       // }
       await (this.ready)
-      SBFetch(this.#channelServer + stripA32(this.channelId!) + path, init)
+      SBFetch(this.channelServer + this.channelId! + path, init)
         .then(async (response: Response) => {
           const retValue = await response.json()
           if ((!response.ok) || (retValue.error)) {
@@ -3028,14 +3016,14 @@ class Channel extends SBChannelKeys {
       if (!this.#ChannelReadyFlag) {
         if (DBG) console.log("Channel.getOldMessages: channel not ready (we will wait)")
         await (this.channelReady)
-        if (!this.#channelKeys)
-          reject("Channel.getOldMessages: no channel keys (?) despite waiting")
+        // if (!this.keys) // ... this will now be caught by @Ready-getter
+        //   reject("Channel.getOldMessages: no channel keys (?) despite waiting")
       }
       // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)
       let cursorOption = '';
       if (paginate)
         cursorOption = '&cursor=' + this.#cursor;
-      SBFetch(this.#channelServer + stripA32(this.channelId!) + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
+      SBFetch(this.channelServer + this.channelId! + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
         method: 'GET',
       }).then(async (response: Response) => {
         if (!response.ok) reject(new Error('Network response was not OK'));
@@ -3340,7 +3328,7 @@ class Channel extends SBChannelKeys {
         if (!storage) storage = Infinity;
         if (targetChannel) {
           // just a straight up transfer of budget
-          if (this.#channelId == targetChannel) throw new Error("[budd()]: You can't specify the same channel as targetChannel")
+          if (this.channelId == targetChannel) throw new Error("[budd()]: You can't specify the same channel as targetChannel")
           if (keys) throw new Error("[budd()]: You can't specify both a target channel and keys");
           resolve(this.#callApi(`/budd?targetChannel=${targetChannel}&transferBudget=${storage}`))
         } else {
@@ -3350,7 +3338,7 @@ class Channel extends SBChannelKeys {
           await theUser.ready
           const channelData: SBChannelHandle = {
             [SB_CHANNEL_HANDLE_SYMBOL]: true,
-            channelServer: this.#channelServer,
+            channelServer: this.channelServer,
             channelId: theUser.hash,
             userId: theUser.userId
           }
@@ -3376,7 +3364,6 @@ class Channel extends SBChannelKeys {
 
 } /* class Channel */
 
-
 /**
  * ChannelSocket
  */
@@ -3384,7 +3371,7 @@ class ChannelSocket extends Channel {
   ready: Promise<ChannelSocket>
   channelSocketReady: Promise<ChannelSocket>
   #ChannelSocketReadyFlag: boolean = false // must be named <class>ReadyFlag
-  
+
   #ws: WSProtocolOptions
   // #sbServer: SBServer
   #socketServer: string
@@ -3764,20 +3751,18 @@ class ChannelSocket extends Channel {
 //   constructor(sbServer: SBServer, key: JsonWebKey, channelId: string) {
 //     super(sbServer, key, channelId)
 //   }
-
 //   send(_m: SBMessage | string, _messageType?: 'string' | 'SBMessage'): Promise<string> {
 //     return new Promise<string>((_resolve, reject) => {
 //       reject('ChannelEndpoint.send(): send outside ChannelSocket not yet implemented')
 //     })
 //   }
-
 //   set onMessage(_f: CallableFunction) {
 //     _sb_assert(false, "ChannelEndpoint.onMessage: send/receive outside ChannelSocket not yet implemented")
 //   }
 // } /* class ChannelEndpoint */
 
 /**
- * SBChannelHandle
+ * SBObjecdtHandle
  */
 class SBObjectHandle implements Interfaces.SBObjectHandle_base {
   version: SBObjectHandleVersions = currentSBOHVersion;
@@ -3809,8 +3794,7 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
    * generation of shard servers will provide (iv, salt) upon
    * request if (and only if) you have id and verification.
    * 
-   * Note that id32/key32 are array32 encoded (a32). (Both 
-   * id and key are 256-bit entities).
+   * Note that id32/key32 are array32 encoded base62 encoded.
    * 
    * 'verification' is a 64-bit integer, encoded as a string
    * of up 23 characters: it is four 16-bit integers, either
@@ -3988,8 +3972,6 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
   }
 
   // the getter for id returns based on what version we are
-  // we stripA32() because this is also used by JSON.stringify()
-  // (unless we want to write a custom serializer ...)
   get id(): string {
     _sb_assert(this.#id_binary, 'object handle id is undefined');
     if (this.version === '1') {
@@ -4176,7 +4158,7 @@ class StorageApi {
         const storageToken = await budgetChannel.getStorageToken(data.byteLength)
         const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data)
         if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
-        if (resp_json.image_id != stripA32(image_id)) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
+        if (resp_json.image_id != image_id) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
         resolve(resp_json.verification_token)
       } catch (e) {
         const msg = `storeObject() failed: ${e}`
@@ -4187,7 +4169,7 @@ class StorageApi {
   }
 
   /**
-   * StorageApi.storeData()
+   * StorageApi.storeObject()
    * 
    * Low level of shard uploading - this needs to have all the details. You would
    * generally not call this directly, but rather use storeData().
@@ -4208,8 +4190,7 @@ class StorageApi {
         reject("errMsg")
       }
 
-      SBFetch(this.storageServer + '/storeData?type=' + type + '&key=' + stripA32(fileId), { // ToDo: bit of a hack in handling "a32"
-        // psm: need to clean up these types
+      SBFetch(this.storageServer + '/storeData?type=' + type + '&key=' + fileId, {
         method: 'POST',
         body: assemblePayload({
           iv: iv,
@@ -4644,7 +4625,7 @@ class Snackabra {
    * 
    */
   create(ownerKeys: SB384, budgetChannel: Channel): Promise<SBChannelHandle> // new interface
-  create(sbServer: SBServer, erverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle> // old interface
+  create(sbServer: SBServer, serverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle> // old interface
   create(sbServerOrSB384: SBServer | SB384, serverSecretOrBudgetChannel?: string | Channel, keys?: JsonWebKey): Promise<SBChannelHandle> {
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       try {
@@ -4655,7 +4636,7 @@ class Snackabra {
 
         if (sbServerOrSB384 instanceof SB384) {
           // start from user keys
-          _sbChannelKeys = new SBChannelKeys(sbServerOrSB384.jwk)
+          _sbChannelKeys = new SBChannelKeys('jwk', (sbServerOrSB384 as SB384).jwk)
         } else if (typeof sbServerOrSB384 === 'object') {
           const sbServer = sbServerOrSB384 as SBServer
           if (sbServer.channel_server !== this.channelServer) {
@@ -4664,16 +4645,19 @@ class Snackabra {
             reject(msg); return;
           }
           // const { channelData, exportable_privateKey } = await newChannelData(keys ? keys : null); // TODO use SBChannelKeys/newKeys
-          _sbChannelKeys = new SBChannelKeys(keys ? keys as JsonWebKey : undefined)
-          _budgetChannel = (serverSecretOrBudgetChannel instanceof Channel) ? serverSecretOrBudgetChannel : undefined
-          if (serverSecretOrBudgetChannel && typeof serverSecretOrBudgetChannel === 'string')
-            // channelData.SERVER_SECRET = serverSecretOrBudgetChannel
-            _serverSecret = serverSecretOrBudgetChannel
+          _sbChannelKeys = keys ? new SBChannelKeys('jwk', keys) : new SBChannelKeys('new')
         } else {
           const msg = `Wrong parameters to create channel: ${sbServerOrSB384}`
           console.error(msg)
           reject(msg); return;
         }
+
+        _budgetChannel = (serverSecretOrBudgetChannel instanceof Channel) ? serverSecretOrBudgetChannel : undefined
+        if (serverSecretOrBudgetChannel && typeof serverSecretOrBudgetChannel === 'string')
+          // channelData.SERVER_SECRET = serverSecretOrBudgetChannel
+          _serverSecret = serverSecretOrBudgetChannel
+
+        await _sbChannelKeys.ready
 
         if (_budgetChannel) {
           _storageToken = await _budgetChannel.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET)
@@ -4694,20 +4678,27 @@ class Snackabra {
         _sb_assert(
           _sbChannelKeys &&
           _sbChannelKeys.channelData &&
-          _sbChannelKeys.channelData.channelId &&
+          _sbChannelKeys.channelData.roomId &&
           _sbChannelKeys.channelData.ownerKey &&
           _sbChannelKeys.channelData.encryptionKey &&
           _sbChannelKeys.channelData.signKey &&
           (_storageToken || _serverSecret), 'Unable to determine required parameters')
 
         const channelData: ChannelData = {
-          roomId: _sbChannelKeys?.channelData.channelId!,
+          roomId: _sbChannelKeys?.channelData.roomId!,
           ownerKey: _sbChannelKeys?.channelData.ownerKey!,
           encryptionKey: _sbChannelKeys?.channelData.encryptionKey!,
           signKey: _sbChannelKeys?.channelData.signKey!,
           storageToken: _storageToken,
           SERVER_SECRET: _serverSecret,
         }
+
+        // const channelData: ChannelData = {
+        //   roomId: _sbChannelKeys.channelId,
+        //   ownerKey: _sbChannelKeys.userId,
+        //   encryptionKey: "",
+        //   signKey: ""
+        // }
 
         const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
         let resp: Dictionary<any> = await SBFetch(this.channelServer + '/api/room/' + channelData.roomId + '/uploadRoom',
@@ -4754,58 +4745,49 @@ class Snackabra {
    * @param channelId - optional channel id to use for encryption/decryption
    * @returns a channel object
    */
-  connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
-    if (DBG) {
-      console.log("++++ Snackabra.connect() ++++")
-      if (key) console.log(key)
-      if (channelId) console.log(channelId)
+  connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): ChannelSocket {
+    const newChannelHandle: SBChannelHandle = {
+      [SB_CHANNEL_HANDLE_SYMBOL]: true,
+      channelId: handle.channelId,
+      userId: handle.userId, // newUserId,
+      channelServer: this.channelServer
     }
-    return new Promise<ChannelSocket>(async (resolve) => {
-      const newUserId = sbCrypto.JWKToUserId(key)
-      if (!newUserId) throw new Error('Unable to determine userId from key (JWKToUserId return empty)')
-      const newChannelHandle: SBChannelHandle = {
-        [SB_CHANNEL_HANDLE_SYMBOL]: true,
-        channelId: this.channelServer,
-        userId: newUserId,
-        channelServer: this.channelServer
-      }
+    if (DBG) console.log("++++ Snackabra.connect() ++++", newChannelHandle)
+    return new ChannelSocket(newChannelHandle, onMessage ? onMessage :
+      (m: ChannelMessage) => { console.log("MESSAGE (not caught):", m) })
 
-      // this.#channel = new ChannelSocket(this.channelServer, onMessage, key, channelId)
-      resolve(new ChannelSocket(newChannelHandle, onMessage))
-      // resolve(new ChannelSocket(this.channelServer!, onMessage, key, channelId))
+    // // connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
+    // // if (DBG) {
+    // //   console.log("++++ Snackabra.connect() ++++")
+    // //   if (key) console.log(key)
+    // //   if (channelId) console.log(channelId)
+    // // }
+    // return new Promise<ChannelSocket>(async (resolve) => {
+    //   // const newUserId = sbCrypto.JWKToUserId(key)
+    //   // if (!newUserId) throw new Error('Unable to determine userId from key (JWKToUserId return empty)')
+    //   const newChannelHandle: SBChannelHandle = {
+    //     [SB_CHANNEL_HANDLE_SYMBOL]: true,
+    //     channelId: handle.channelId,
+    //     userId: handle.userId, // newUserId,
+    //     channelServer: this.channelServer
+    //   }
 
-      //   if (this.#preferredServer)
-      //     // if we have a preferred server then we do not have to wait for 'ready'
-      //     resolve(new ChannelSocket(this.channelServer!, onMessage, key, channelId))
-      //   else
-      //     // otherwise we have to wait for at least one of them to be 'ready', or we won't know which one to use
-      //     resolve(Promise.any(SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId)).ready)))
-      // })
-    })
+    //   // this.#channel = new ChannelSocket(this.channelServer, onMessage, key, channelId)
+    //   resolve(new ChannelSocket(newChannelHandle, onMessage ? onMessage :
+    //     (m: ChannelMessage) => { console.log("MESSAGE (not caught):", m) }))
+
+    //   // resolve(new ChannelSocket(this.channelServer!, onMessage, key, channelId))
+
+    //   //   if (this.#preferredServer)
+    //   //     // if we have a preferred server then we do not have to wait for 'ready'
+    //   //     resolve(new ChannelSocket(this.channelServer!, onMessage, key, channelId))
+    //   //   else
+    //   //     // otherwise we have to wait for at least one of them to be 'ready', or we won't know which one to use
+    //   //     resolve(Promise.any(SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId)).ready)))
+    //   // })
+    // })
+
   }
-
-  // if there's a 'preferred' (only) server then we we can return a promise right away
-  // return new Promise<ChannelSocket>((resolve, reject) => {
-
-  // else Promise.any(SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId))))
-  //   .then((c) => { console.log("Got channel:"); console.log(c); resolve(c.ready); })
-  //   .catch((e) => { console.log("No known servers responding to channel"); reject(e); })
-
-  // Promise.any(this.#preferredServer
-  //   ? [new ChannelSocket(this.#preferredServer!, onMessage, key, channelId)]
-  //   : SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId))))
-  //   .then((c) => { console.log("Got channel:"); console.log(c); resolve(c); })
-  //   .catch((e) => { console.log("No known servers responding to channel"); reject(e); })
-  /// })
-  // }
-
-
-  // /**
-  //  * Connects to a channel.
-  //  */
-  // get channel(): Channel {
-  //   return this.#channel;
-  // }
 
   /**
    * Returns the storage API.
@@ -4828,7 +4810,6 @@ class Snackabra {
 
 
 } /* class Snackabra */
-
 
 /******************************************************************************************************/
 //#region - exporting stuff
