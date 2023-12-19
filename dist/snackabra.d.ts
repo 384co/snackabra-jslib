@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 14)";
+declare const version = "2.0.0-alpha.5 (build 16)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -252,7 +252,7 @@ declare class SB384 {
     #private;
     ready: Promise<SB384>;
     sb384Ready: Promise<SB384>;
-    constructor(key?: JsonWebKey | SBUserKeyString);
+    constructor(key?: JsonWebKey | SBUserKeyString, forcePrivate?: boolean);
     get readyFlag(): boolean;
     get private(): boolean;
     get hash(): SB384Hash;

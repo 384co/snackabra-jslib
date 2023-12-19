@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0-alpha.5 (build 14)';
+const version = '2.0.0-alpha.5 (build 16)';
 const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = true;
 var DBG2 = false;
@@ -829,7 +829,7 @@ class SBCrypto {
         let y = key.y;
         if (!(x && y)) {
             try {
-                const tryParse = JSON.parse(key);
+                const tryParse = jsonParseWrapper(key, "L1787");
                 if (tryParse.x)
                     x = tryParse.x;
                 if (tryParse.y)
@@ -1132,7 +1132,7 @@ class SB384 {
     #userKey;
     #jwk;
     #hash;
-    constructor(key) {
+    constructor(key, forcePrivate = false) {
         this.ready = new Promise(async (resolve, reject) => {
             try {
                 if (!key) {
@@ -1145,8 +1145,14 @@ class SB384 {
                     _sb_assert(this.#jwk, `ERROR creating SB384 object: failed to export key to jwk format`);
                 }
                 else if (key instanceof Object && 'kty' in key) {
-                    if (!key.d)
-                        throw new Error(`ERROR creating SB384 object: invalid key (must be a PRIVATE key)`);
+                    if (key.d) {
+                        this.#private = true;
+                    }
+                    else {
+                        this.#private = false;
+                        if (forcePrivate)
+                            throw new Error(`ERROR creating SB384 object: key provided is not the requested private`);
+                    }
                     this.#jwk = key;
                     this.#userKey = await sbCrypto
                         .importKey('jwk', this.#jwk, 'ECDH', true, ['deriveKey'])
@@ -1156,10 +1162,14 @@ class SB384 {
                     const _sbUserKey = sbCrypto.StringToSBKey(key);
                     if (!_sbUserKey)
                         throw new Error(`ERROR creating SB384 object: failed to import SBUserId`);
-                    if (_sbUserKey.prefix === KeyPrefix.SBPublicKey)
+                    if (_sbUserKey.prefix === KeyPrefix.SBPublicKey) {
                         this.#private = false;
-                    else if (_sbUserKey.prefix === KeyPrefix.SBPrivateKey)
+                        if (forcePrivate)
+                            throw new Error(`ERROR creating SB384 object: key provided is not the requested private`);
+                    }
+                    else if (_sbUserKey.prefix === KeyPrefix.SBPrivateKey) {
                         this.#private = true;
+                    }
                     else
                         throw new Error(`ERROR creating SB384 object: invalid key (neither public nor private)`);
                     this.#jwk = sbCrypto.SBKeyToJWK(_sbUserKey);
@@ -1253,7 +1263,7 @@ class SBChannelKeys extends SB384 {
             case 'handle':
                 {
                     const handle = handleOrJWK;
-                    super(handle.userKeyString);
+                    super(handle.userKeyString, true);
                     this.#channelServer = handle.channelServer;
                     if (this.#channelServer && this.#channelServer[this.#channelServer.length - 1] === '/')
                         this.#channelServer = this.#channelServer.slice(0, -1);
@@ -1263,7 +1273,7 @@ class SBChannelKeys extends SB384 {
             case 'jwk':
                 {
                     const keys = handleOrJWK;
-                    super(keys);
+                    super(keys, true);
                 }
                 break;
             case 'new':
@@ -1460,6 +1470,17 @@ class SBMessage {
 __decorate([
     Ready
 ], SBMessage.prototype, "encryptionKey", null);
+function oldChannelConstructorInterface(sbServer, userKey, channelId) {
+    const _sbKey = sbCrypto.JWKToSBKey(userKey);
+    _sb_assert(_sbKey && _sbKey.prefix === KeyPrefix.SBPrivateKey, "Unable to import JWK (keys)");
+    const _userKeyString = sbCrypto.SBKeyToString(_sbKey);
+    _sb_assert(_userKeyString, "Unable to import JWK (keys)");
+    return {
+        channelId: channelId,
+        userKeyString: _userKeyString,
+        channelServer: sbServer.channel_server
+    };
+}
 class Channel extends SBChannelKeys {
     ready;
     channelReady;
@@ -1470,33 +1491,22 @@ class Channel extends SBChannelKeys {
     verifiedGuest = false;
     #cursor = '';
     constructor(sbServerOrHandle, userKey, channelId) {
-        if (typeof sbServerOrHandle === 'object' && 'channelId' in sbServerOrHandle && 'userId' in sbServerOrHandle) {
-            _sb_assert((!userKey) && (!channelId), "If you pass a handle, you cannot pass userKey or channelId");
-            const handle = sbServerOrHandle;
-            super('handle', handle);
-            if (!handle.channelServer)
-                throw new Error("Channel(): no channel server provided");
+        let _handle;
+        if (typeof sbServerOrHandle === 'object' && 'channelId' in sbServerOrHandle && 'userKeyString' in sbServerOrHandle) {
+            _sb_assert((!userKey) && (!channelId), "If you pass a handle, you cannot pass other parameters");
+            _handle = sbServerOrHandle;
         }
         else {
+            console.warn("Deprecated channel constructor used, please update your code");
             _sb_assert(userKey && channelId, "If first parameter is SBServer, you must also pass both userKey and channelId");
-            console.warn("Deprecated channel constructor use ... ");
-            const _sbKey = sbCrypto.JWKToSBKey(userKey);
-            _sb_assert(_sbKey && _sbKey.prefix === KeyPrefix.SBPrivateKey, "Unable to import JWK (keys)");
-            const _userKeyString = sbCrypto.SBKeyToString(_sbKey);
-            _sb_assert(_userKeyString, "Unable to import JWK (keys)");
-            const sbServer = sbServerOrHandle;
-            _sb_assert(sbServer.channel_server, "Channel(): no channel server provided");
-            const _handle = {
-                userKeyString: _userKeyString,
-                channelId: channelId,
-                channelServer: sbServer.channel_server
-            };
-            super('handle', _handle);
+            _handle = oldChannelConstructorInterface(sbServerOrHandle, userKey, channelId);
         }
+        if (!_handle.channelServer)
+            throw new Error("Channel(): no channel server provided");
+        super('handle', _handle);
         this.ready =
             this.sbChannelKeysReady
                 .then(() => {
-                _sb_assert(this.private, "Channel(): must be private key");
                 this.#ChannelReadyFlag = true;
                 return this;
             })
@@ -1513,7 +1523,7 @@ class Channel extends SBChannelKeys {
                 console.log("ChannelApi.#callApi: channel not ready (we will wait)");
             await (this.channelReady);
         }
-        const method = body ? 'POST' : 'GET';
+        const method = 'POST';
         return new Promise(async (resolve, reject) => {
             if (!this.channelId)
                 reject("ChannelApi.#callApi: no channel ID (?)");
@@ -1525,17 +1535,17 @@ class Channel extends SBChannelKeys {
                 method: method,
                 headers: {
                     'Content-Type': 'application/json',
-                    'authorization': authString
+                    'authorization': authString,
                 }
             };
             let fullBody = {
-                userId: this.hash,
+                userId: this.userId,
                 channelID: this.channelId,
                 ...body
             };
             init.body = fullBody;
             await (this.ready);
-            SBFetch(this.channelServer + '/' + this.channelId + path, init)
+            SBFetch(this.channelServer + '/api/room/' + this.channelId + path, init)
                 .then(async (response) => {
                 const retValue = await response.json();
                 if ((!response.ok) || (retValue.error)) {
