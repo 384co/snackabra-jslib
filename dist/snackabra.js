@@ -679,22 +679,11 @@ class SBCrypto {
             return undefined;
         }
     }
-    UserIdToJWK(userId) {
+    StringToJWK(userId) {
         const key = this.StringToSBKey(userId);
-        if (!key || key.prefix !== KeyPrefix.SBPublicKey) {
-            if (DBG)
-                console.warn("UserIdToSBKey() - starting point is not a public key: ", userId);
-            return undefined;
-        }
-        return this.SBKeyToJWK(key);
-    }
-    JWKToUserId(key) {
         if (!key)
             return undefined;
-        const sbKey = this.JWKToSBKey(key, true);
-        if (!sbKey)
-            return undefined;
-        return this.SBKeyToString(sbKey);
+        return this.SBKeyToJWK(key);
     }
     async addKnownKey(key) {
         if (!key)
@@ -1030,8 +1019,8 @@ class SBCrypto {
         return new Promise(async (resolve, reject) => {
             let ownerKeyParsed = jsonParseWrapper(keyStrings.ownerKey, '2593');
             Promise.all([
-                sbCrypto.importKey('jwk', ownerKeyParsed, 'ECDH', false, []),
-                sbCrypto.importKey('jwk', jsonParseWrapper(keyStrings.encryptionKey, '2296'), 'AES', false, ['encrypt', 'decrypt']),
+                sbCrypto.importKey('jwk', ownerKeyParsed, 'ECDH', true, []),
+                sbCrypto.importKey('jwk', jsonParseWrapper(keyStrings.encryptionKey, '2296'), 'AES', true, ['encrypt', 'decrypt']),
                 sbCrypto.importKey('jwk', jsonParseWrapper(keyStrings.signKey, '2597'), 'ECDH', true, ['deriveKey']),
                 sbCrypto.importKey('jwk', sbCrypto.extractPubKey(jsonParseWrapper(keyStrings.signKey, '2598')), 'ECDH', true, []),
             ])
@@ -1139,10 +1128,9 @@ class SB384 {
     ready;
     sb384Ready;
     #SB384ReadyFlag = false;
+    #private;
+    #userKey;
     #jwk;
-    #sbUserKey;
-    #privateKey;
-    #publicKey;
     #hash;
     constructor(key) {
         this.ready = new Promise(async (resolve, reject) => {
@@ -1151,27 +1139,34 @@ class SB384 {
                     if (DBG2)
                         console.log("SB384() - generating new key pair");
                     const keyPair = await sbCrypto.generateKeys();
-                    this.#privateKey = keyPair.privateKey;
-                    this.#jwk = await sbCrypto.exportKey('jwk', this.#privateKey);
-                    _sb_assert(this.#jwk, `ERROR creating SB384 object: failed to export key`);
-                    this.#sbUserKey = sbCrypto.JWKToSBKey(this.#jwk, true);
-                    _sb_assert(this.#sbUserKey, `ERROR creating SB384 object: failed to convert JWK to SBKey (should not happen)`);
+                    this.#private = true;
+                    this.#userKey = keyPair.privateKey;
+                    this.#jwk = await sbCrypto.exportKey('jwk', this.#userKey);
+                    _sb_assert(this.#jwk, `ERROR creating SB384 object: failed to export key to jwk format`);
                 }
                 else if (key instanceof Object && 'kty' in key) {
-                    if (!key.d) {
-                        const msg = 'ERROR creating SB384 object: invalid key (must be a PRIVATE key)';
-                        console.error(msg);
-                        reject(msg);
-                    }
+                    if (!key.d)
+                        throw new Error(`ERROR creating SB384 object: invalid key (must be a PRIVATE key)`);
                     this.#jwk = key;
-                    this.#privateKey = await sbCrypto.importKey('jwk', this.#jwk, 'ECDH', true, ['deriveKey']);
+                    this.#userKey = await sbCrypto
+                        .importKey('jwk', this.#jwk, 'ECDH', true, ['deriveKey'])
+                        .catch((e) => { throw e; });
                 }
                 else if (typeof key === 'string') {
-                    this.#sbUserKey = sbCrypto.StringToSBKey(key);
-                    if (!this.#sbUserKey || this.#sbUserKey.prefix !== KeyPrefix.SBPublicKey)
-                        throw new Error(`ERROR creating SB384 object: either failed to import SBUserId, or it wasn't a public key`);
-                    this.#jwk = sbCrypto.SBKeyToJWK(this.#sbUserKey);
-                    this.#publicKey = await sbCrypto.importKey('jwk', this.#jwk, 'ECDH', true, []);
+                    const _sbUserKey = sbCrypto.StringToSBKey(key);
+                    if (!_sbUserKey)
+                        throw new Error(`ERROR creating SB384 object: failed to import SBUserId`);
+                    if (_sbUserKey.prefix === KeyPrefix.SBPublicKey)
+                        this.#private = false;
+                    else if (_sbUserKey.prefix === KeyPrefix.SBPrivateKey)
+                        this.#private = true;
+                    else
+                        throw new Error(`ERROR creating SB384 object: invalid key (neither public nor private)`);
+                    this.#jwk = sbCrypto.SBKeyToJWK(_sbUserKey);
+                    if (this.#private)
+                        this.#userKey = await sbCrypto.importKey('jwk', this.#jwk, 'ECDH', true, ['deriveKey']);
+                    else
+                        this.#userKey = await sbCrypto.importKey('jwk', this.#jwk, 'ECDH', true, []);
                 }
                 else {
                     throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey, SBUserId, or omitted)');
@@ -1190,16 +1185,22 @@ class SB384 {
         this.sb384Ready = this.ready;
     }
     get readyFlag() { return this.#SB384ReadyFlag; }
-    get privateKey() { return this.#privateKey; }
-    get publicKey() { return this.#publicKey; }
-    get key() { return this.#privateKey ? this.#privateKey : this.#publicKey; }
-    get ownerChannelId() { return this.hash; }
+    get private() { return this.#private; }
     get hash() { return this.#hash; }
+    get ownerChannelId() {
+        if (!this.private)
+            throw new Error(`ownerChannelId() - not a private key, cannot be an owner key`);
+        return this.hash;
+    }
     get jwk() { return this.#jwk; }
-    get jwkPub() { return sbCrypto.extractPubKey(this.#jwk); }
+    get key() { return this.#userKey; }
+    get exportable_pubKey() { return sbCrypto.extractPubKey(this.#jwk); }
+    get userKeyString() {
+        if (!this.private)
+            throw new Error(`userKeyString() - not a private key, there is no userKeyString`);
+        return sbCrypto.SBKeyToString(sbCrypto.JWKToSBKey(this.#jwk));
+    }
     get userId() { return sbCrypto.SBKeyToString(sbCrypto.JWKToSBKey(this.jwk, true)); }
-    get toString() { return this.userId; }
-    get toJSON() { return this.userId; }
 }
 __decorate([
     Memoize
@@ -1207,19 +1208,7 @@ __decorate([
 __decorate([
     Memoize,
     Ready
-], SB384.prototype, "privateKey", null);
-__decorate([
-    Memoize,
-    Ready
-], SB384.prototype, "publicKey", null);
-__decorate([
-    Memoize,
-    Ready
-], SB384.prototype, "key", null);
-__decorate([
-    Memoize,
-    Ready
-], SB384.prototype, "ownerChannelId", null);
+], SB384.prototype, "private", null);
 __decorate([
     Memoize,
     Ready
@@ -1227,23 +1216,27 @@ __decorate([
 __decorate([
     Memoize,
     Ready
+], SB384.prototype, "ownerChannelId", null);
+__decorate([
+    Memoize,
+    Ready
 ], SB384.prototype, "jwk", null);
 __decorate([
     Memoize,
     Ready
-], SB384.prototype, "jwkPub", null);
+], SB384.prototype, "key", null);
+__decorate([
+    Memoize,
+    Ready
+], SB384.prototype, "exportable_pubKey", null);
+__decorate([
+    Memoize,
+    Ready
+], SB384.prototype, "userKeyString", null);
 __decorate([
     Memoize,
     Ready
 ], SB384.prototype, "userId", null);
-__decorate([
-    Memoize,
-    Ready
-], SB384.prototype, "toString", null);
-__decorate([
-    Memoize,
-    Ready
-], SB384.prototype, "toJSON", null);
 class SBChannelKeys extends SB384 {
     ready;
     sbChannelKeysReady;
@@ -1260,8 +1253,10 @@ class SBChannelKeys extends SB384 {
             case 'handle':
                 {
                     const handle = handleOrJWK;
-                    super(handle.userId);
+                    super(handle.userKeyString);
                     this.#channelServer = handle.channelServer;
+                    if (this.#channelServer && this.#channelServer[this.#channelServer.length - 1] === '/')
+                        this.#channelServer = this.#channelServer.slice(0, -1);
                     this.#channelId = handle.channelId;
                 }
                 break;
@@ -1329,10 +1324,9 @@ class SBChannelKeys extends SB384 {
                         name: 'ECDH', namedCurve: 'P-384'
                     }, true, ['deriveKey']);
                     const exportable_signKey = await crypto.subtle.exportKey('jwk', signKeyPair.privateKey);
-                    const exportable_publicKey = this.jwkPub;
                     this.#channelData = {
                         roomId: this.hash,
-                        ownerKey: JSON.stringify(exportable_publicKey),
+                        ownerKey: JSON.stringify(this.exportable_pubKey),
                         encryptionKey: JSON.stringify(exportable_encryptionKey),
                         signKey: JSON.stringify(exportable_signKey),
                     };
@@ -1350,10 +1344,10 @@ class SBChannelKeys extends SB384 {
         if (DBG2)
             console.log("[channel.#setKeys] set channelkeys to 'k':", k);
         this.#channelKeys = k;
-        _sb_assert(this.#channelKeys, "Channel.importKeys: no channel keys (?)");
+        _sb_assert(k, "Channel.importKeys: no channel keys (?)");
         _sb_assert(this.#channelKeys.publicSignKey, "Channel.importKeys: no public sign key (?)");
-        _sb_assert(this.privateKey, "Channel.importKeys: no private key (?)");
-        this.#channelSignKey = await sbCrypto.deriveKey(this.privateKey, this.#channelKeys.publicSignKey, 'HMAC', false, ['sign', 'verify']);
+        _sb_assert(this.private && this.key, "setKeys(): no private key (?)");
+        this.#channelSignKey = await sbCrypto.deriveKey(this.key, this.#channelKeys.publicSignKey, 'HMAC', false, ['sign', 'verify']);
     }
     get readyFlag() { return this.#SBChannelKeysReadyFlag; }
     get encryptionKey() { return this.#encryptionKey; }
@@ -1429,7 +1423,7 @@ class SBMessage {
                 const image_sign = sbCrypto.sign(signKey, this.contents.image);
                 const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData));
                 if (this.#sendToPubKey) {
-                    this.#encryptionKey = await sbCrypto.deriveKey(this.channel.privateKey, await sbCrypto.importKey("jwk", this.#sendToPubKey, "ECDH", true, []), "AES", false, ["encrypt", "decrypt"]);
+                    this.#encryptionKey = await sbCrypto.deriveKey(this.channel.key, await sbCrypto.importKey("jwk", this.#sendToPubKey, "ECDH", true, []), "AES", false, ["encrypt", "decrypt"]);
                 }
                 else {
                     const lockedKey = this.channel.keys.lockedKey;
@@ -1484,14 +1478,16 @@ class Channel extends SBChannelKeys {
                 throw new Error("Channel(): no channel server provided");
         }
         else {
-            _sb_assert((!userKey) && (!channelId), "If first parameter is SBServer, you must pass userKey and channelId");
+            _sb_assert(userKey && channelId, "If first parameter is SBServer, you must also pass both userKey and channelId");
             console.warn("Deprecated channel constructor use ... ");
-            const _userId = sbCrypto.JWKToSBUserId(userKey);
-            _sb_assert(_userId, "Unable to import JWK (keys)");
+            const _sbKey = sbCrypto.JWKToSBKey(userKey);
+            _sb_assert(_sbKey && _sbKey.prefix === KeyPrefix.SBPrivateKey, "Unable to import JWK (keys)");
+            const _userKeyString = sbCrypto.SBKeyToString(_sbKey);
+            _sb_assert(_userKeyString, "Unable to import JWK (keys)");
             const sbServer = sbServerOrHandle;
             _sb_assert(sbServer.channel_server, "Channel(): no channel server provided");
             const _handle = {
-                userId: _userId,
+                userKeyString: _userKeyString,
                 channelId: channelId,
                 channelServer: sbServer.channel_server
             };
@@ -1500,6 +1496,7 @@ class Channel extends SBChannelKeys {
         this.ready =
             this.sbChannelKeysReady
                 .then(() => {
+                _sb_assert(this.private, "Channel(): must be private key");
                 this.#ChannelReadyFlag = true;
                 return this;
             })
@@ -1538,7 +1535,7 @@ class Channel extends SBChannelKeys {
             };
             init.body = fullBody;
             await (this.ready);
-            SBFetch(this.channelServer + this.channelId + path, init)
+            SBFetch(this.channelServer + '/' + this.channelId + path, init)
                 .then(async (response) => {
                 const retValue = await response.json();
                 if ((!response.ok) || (retValue.error)) {
@@ -1648,7 +1645,7 @@ class Channel extends SBChannelKeys {
             let cursorOption = '';
             if (paginate)
                 cursorOption = '&cursor=' + this.#cursor;
-            SBFetch(this.channelServer + this.channelId + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
+            SBFetch(this.channelServer + '/' + this.channelId + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
                 method: 'GET',
             }).then(async (response) => {
                 if (!response.ok)
@@ -1788,12 +1785,10 @@ class Channel extends SBChannelKeys {
     acceptVisitor(userId) {
         console.warn("WARNING: acceptVisitor() on channel api has not been tested/debugged fully ..");
         return new Promise(async (resolve, reject) => {
-            if (!this.privateKey)
-                reject(new Error("acceptVisitor(): no private key"));
-            const pubKey = sbCrypto.UserIdToJWK(userId);
+            const pubKey = sbCrypto.StringToJWK(userId);
             if (!pubKey)
-                reject(new Error("acceptVisitor(): no public key"));
-            const shared_key = await sbCrypto.deriveKey(this.privateKey, await sbCrypto.importKey('jwk', pubKey, 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']);
+                reject(new Error("acceptVisitor(): could not determine public key from SBUserId (should be able to)"));
+            const shared_key = await sbCrypto.deriveKey(this.key, await sbCrypto.importKey('jwk', pubKey, 'ECDH', false, []), 'AES', false, ['encrypt', 'decrypt']);
             const _encrypted_locked_key = await sbCrypto.encrypt(sbCrypto.str2ab(JSON.stringify(this.keys.lockedKey)), shared_key);
             resolve(this.#callApi('/acceptVisitor', {
                 userId: userId, encryptedLockedKey: JSON.stringify(_encrypted_locked_key)
@@ -1834,9 +1829,9 @@ class Channel extends SBChannelKeys {
                     await theUser.ready;
                     const channelData = {
                         [SB_CHANNEL_HANDLE_SYMBOL]: true,
+                        userKeyString: theUser.userKeyString,
                         channelServer: this.channelServer,
                         channelId: theUser.hash,
-                        userId: theUser.userId
                     };
                     let resp = await this.#callApi(`/budd?targetChannel=${channelData.channelId}&transferBudget=${storage}`, channelData);
                     if (resp.success) {
@@ -2836,7 +2831,7 @@ class Snackabra {
                 resolve({
                     [SB_CHANNEL_HANDLE_SYMBOL]: true,
                     channelId: channelData.roomId,
-                    userId: _sbChannelKeys.userId,
+                    userKeyString: _sbChannelKeys.userKeyString,
                     channelServer: this.channelServer
                 });
             }
@@ -2851,7 +2846,7 @@ class Snackabra {
         const newChannelHandle = {
             [SB_CHANNEL_HANDLE_SYMBOL]: true,
             channelId: handle.channelId,
-            userId: handle.userId,
+            userKeyString: handle.userKeyString,
             channelServer: this.channelServer
         };
         if (DBG)

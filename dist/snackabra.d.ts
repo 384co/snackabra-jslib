@@ -8,7 +8,7 @@ export interface SBServer {
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
     channelId: SBChannelId;
-    userId: SBUserId;
+    userKeyString: SBUserKeyString;
     channelServer?: string;
 }
 interface Dictionary<T> {
@@ -16,7 +16,6 @@ interface Dictionary<T> {
 }
 export type SB384Hash = string;
 export type SBChannelId = SB384Hash;
-export type SBUserId = string;
 interface ChannelData {
     roomId?: SBChannelId;
     channelId?: SBChannelId;
@@ -207,16 +206,17 @@ interface SBPublicKey {
 export declare function isSBKey(key: any): key is SBKey;
 export type SBKey = SBAES256Key | SBPrivateKey | SBPublicKey;
 export type SBUserKey = SBPrivateKey | SBPublicKey;
+export type SBUserId = string;
+export type SBUserKeyString = string;
 type Key = JsonWebKey | SB384 | CryptoKey | SBKey;
 declare class SBCrypto {
     #private;
     SBKeyToJWK(key: SBKey | JsonWebKey): JsonWebKey;
     JWKToSBKey(key: JsonWebKey, forcePublic?: boolean): SBKey | undefined;
-    SBKeyToString(key: SBKey): string;
-    JWKToSBUserId(key: JsonWebKey): string | undefined;
+    SBKeyToString(key: SBKey): SBUserId | SBUserKeyString | string;
+    JWKToSBUserId(key: JsonWebKey): SBUserId | undefined;
     StringToSBKey(input: string): SBKey | undefined;
-    UserIdToJWK(userId: string): JsonWebKey | undefined;
-    JWKToUserId(key?: JsonWebKey): string | undefined;
+    StringToJWK(userId: SBUserId | SBUserKeyString | string): JsonWebKey | undefined;
     addKnownKey(key: Key): Promise<void>;
     lookupKeyGlobal(hash: SB384Hash): knownKeysInfo | undefined;
     generateIdKey(buf: ArrayBuffer): Promise<{
@@ -252,18 +252,16 @@ declare class SB384 {
     #private;
     ready: Promise<SB384>;
     sb384Ready: Promise<SB384>;
-    constructor(key?: JsonWebKey | SBUserId);
+    constructor(key?: JsonWebKey | SBUserKeyString);
     get readyFlag(): boolean;
-    get privateKey(): CryptoKey;
-    get publicKey(): CryptoKey;
-    get key(): CryptoKey | undefined;
-    get ownerChannelId(): string;
+    get private(): boolean;
     get hash(): SB384Hash;
+    get ownerChannelId(): string;
     get jwk(): JsonWebKey;
-    get jwkPub(): JsonWebKey;
+    get key(): CryptoKey;
+    get exportable_pubKey(): JsonWebKey;
+    get userKeyString(): string;
     get userId(): SBUserId;
-    get toString(): string;
-    get toJSON(): string;
 }
 declare class SBChannelKeys extends SB384 {
     #private;

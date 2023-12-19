@@ -74,6 +74,10 @@ Follow format from [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 - Removing the "a32." prefix thing everywhere ... was a bad idea
 
+- 'key' or 'keys' in many places are now defined as either SBUserID
+  (a format for encoding a PUBLIC jwk key) or SBUserKeyString (ditto
+  but for PRIVATE key).
+
 ## [1.1.0] - 2023-03-01
 
 ### Added
