@@ -1588,55 +1588,60 @@ class SBCrypto {  /*************************************************************
    * but only as a public key, then it will be 'upgraded'.
    */
   async addKnownKey(key: Key) {
-    if (!key)
-      // various valid cases are no ops
-      return
-    // check on types first
-    if (isSBKey(key))
-      key = this.SBKeyToJWK(key)
-    if (typeof key === 'string') {
-      // JsonWebKey can be private or public
-      const hash = await sbCrypto.sb384Hash(key)
-      if (!hash)
+    try {
+      if (!key)
+        // various valid cases are no ops
         return
-      if (this.#knownKeys.has(hash)) {
-        // ToDo: check if it's a private key that would upgrade what's there
-        if (DBG) console.log(`addKnownKey() - key already known: ${hash}, skipping upgrade check`)
+      // check on types first
+      if (isSBKey(key))
+        key = this.SBKeyToJWK(key)
+      if (typeof key === 'string') {
+        // JsonWebKey can be private or public
+        const hash = await sbCrypto.sb384Hash(key)
+        if (!hash)
+          return
+        if (this.#knownKeys.has(hash)) {
+          // ToDo: check if it's a private key that would upgrade what's there
+          if (DBG) console.log(`addKnownKey() - key already known: ${hash}, skipping upgrade check`)
+        } else {
+          const newInfo: knownKeysInfo = {
+            hash: hash, // also the map hash
+            jwk: key,
+            key: await sbCrypto.importKey('jwk', key, 'ECDH', true, ['deriveKey'])
+          }
+          this.#knownKeys.set(hash, newInfo)
+        }
+      } else if (key instanceof SB384) {
+        // SB384 is always private ... update: no, obviously it's not ...
+        await key.ready // just in case
+        const hash = key.hash
+        // todo: perhaps check if it's there, but for now just overwrite
+        const newInfo: knownKeysInfo = {
+          hash: hash, // also the map hash
+          jwk: key.jwk,
+          // key: key.privateKey, // exists iff it's a private key
+          key: key.key // priv or pub
+        }
+        this.#knownKeys.set(hash, newInfo)
+      } else if (key instanceof CryptoKey) {
+        // CryptoKey can be private or public
+        const hash = await this.sb384Hash(key)
+        if (!hash)
+          return
+        if (!this.#knownKeys.has(hash)) {
+          const newInfo: knownKeysInfo = {
+            hash: hash, // also the map hash
+            jwk: await sbCrypto.exportKey('jwk', key),
+            key: key, // todo: could be public
+          }
+          this.#knownKeys.set(hash, newInfo)
+        }
       } else {
-        const newInfo: knownKeysInfo = {
-          hash: hash, // also the map hash
-          jwk: key,
-          key: await sbCrypto.importKey('jwk', key, 'ECDH', true, ['deriveKey'])
-        }
-        this.#knownKeys.set(hash, newInfo)
+        throw new Error("addKnownKey() - invalid key type (must be string or SB384-derived)")
       }
-    } else if (key instanceof SB384) {
-      // SB384 is always private ... update: no, obviously it's not ...
-      await key.ready // just in case
-      const hash = key.hash
-      // todo: perhaps check if it's there, but for now just overwrite
-      const newInfo: knownKeysInfo = {
-        hash: hash, // also the map hash
-        jwk: key.jwk,
-        // key: key.privateKey, // exists iff it's a private key
-        key: key.key // priv or pub
-      }
-      this.#knownKeys.set(hash, newInfo)
-    } else if (key instanceof CryptoKey) {
-      // CryptoKey can be private or public
-      const hash = await this.sb384Hash(key)
-      if (!hash)
-        return
-      if (!this.#knownKeys.has(hash)) {
-        const newInfo: knownKeysInfo = {
-          hash: hash, // also the map hash
-          jwk: await sbCrypto.exportKey('jwk', key),
-          key: key, // todo: could be public
-        }
-        this.#knownKeys.set(hash, newInfo)
-      }
-    } else {
-      throw new Error("addKnownKey() - invalid key type (must be string or SB384-derived)")
+    } catch (e) {
+      console.error("**** addKnownKey() - key / exception:", key, e)
+      throw e // pass it on
     }
   }
 
@@ -1755,7 +1760,9 @@ class SBCrypto {  /*************************************************************
       const channelBytes = _appendBuffer(xBytes, yBytes)
       return await this.#generateHash(channelBytes)
     } else {
-      if (DBG) console.warn(`sb384Hash() - invalid JsonWebKey (missing x and/or y)`)
+      if (DBG) {
+        console.error(`[sb384Hash] invalid JsonWebKey (missing x and/or y)`, key)
+      }
       return undefined
       // throw new Error('sb384Hash() - invalid JsonWebKey (missing x and/or y)')
     }
@@ -1838,10 +1845,12 @@ class SBCrypto {  /*************************************************************
         if (jsonKey.alg === 'ECDH')
           jsonKey.alg = undefined; // todo: this seems to be a Deno mismatch w crypto standards?
         importedKey = await crypto.subtle.importKey('jwk', jsonKey, keyAlgorithms[type], extractable, keyUsages)
+        if (jsonKey.kty === 'EC')
+          // public/private keys are cached
+          this.addKnownKey(importedKey)
       } else {
         importedKey = await crypto.subtle.importKey(format, key as BufferSource, keyAlgorithms[type], extractable, keyUsages)
       }
-      this.addKnownKey(importedKey)
       return (importedKey)
     } catch (e) {
       const msg = `... importKey() error: ${e}:`

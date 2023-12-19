@@ -686,52 +686,58 @@ class SBCrypto {
         return this.SBKeyToJWK(key);
     }
     async addKnownKey(key) {
-        if (!key)
-            return;
-        if (isSBKey(key))
-            key = this.SBKeyToJWK(key);
-        if (typeof key === 'string') {
-            const hash = await sbCrypto.sb384Hash(key);
-            if (!hash)
+        try {
+            if (!key)
                 return;
-            if (this.#knownKeys.has(hash)) {
-                if (DBG)
-                    console.log(`addKnownKey() - key already known: ${hash}, skipping upgrade check`);
+            if (isSBKey(key))
+                key = this.SBKeyToJWK(key);
+            if (typeof key === 'string') {
+                const hash = await sbCrypto.sb384Hash(key);
+                if (!hash)
+                    return;
+                if (this.#knownKeys.has(hash)) {
+                    if (DBG)
+                        console.log(`addKnownKey() - key already known: ${hash}, skipping upgrade check`);
+                }
+                else {
+                    const newInfo = {
+                        hash: hash,
+                        jwk: key,
+                        key: await sbCrypto.importKey('jwk', key, 'ECDH', true, ['deriveKey'])
+                    };
+                    this.#knownKeys.set(hash, newInfo);
+                }
+            }
+            else if (key instanceof SB384) {
+                await key.ready;
+                const hash = key.hash;
+                const newInfo = {
+                    hash: hash,
+                    jwk: key.jwk,
+                    key: key.key
+                };
+                this.#knownKeys.set(hash, newInfo);
+            }
+            else if (key instanceof CryptoKey) {
+                const hash = await this.sb384Hash(key);
+                if (!hash)
+                    return;
+                if (!this.#knownKeys.has(hash)) {
+                    const newInfo = {
+                        hash: hash,
+                        jwk: await sbCrypto.exportKey('jwk', key),
+                        key: key,
+                    };
+                    this.#knownKeys.set(hash, newInfo);
+                }
             }
             else {
-                const newInfo = {
-                    hash: hash,
-                    jwk: key,
-                    key: await sbCrypto.importKey('jwk', key, 'ECDH', true, ['deriveKey'])
-                };
-                this.#knownKeys.set(hash, newInfo);
+                throw new Error("addKnownKey() - invalid key type (must be string or SB384-derived)");
             }
         }
-        else if (key instanceof SB384) {
-            await key.ready;
-            const hash = key.hash;
-            const newInfo = {
-                hash: hash,
-                jwk: key.jwk,
-                key: key.key
-            };
-            this.#knownKeys.set(hash, newInfo);
-        }
-        else if (key instanceof CryptoKey) {
-            const hash = await this.sb384Hash(key);
-            if (!hash)
-                return;
-            if (!this.#knownKeys.has(hash)) {
-                const newInfo = {
-                    hash: hash,
-                    jwk: await sbCrypto.exportKey('jwk', key),
-                    key: key,
-                };
-                this.#knownKeys.set(hash, newInfo);
-            }
-        }
-        else {
-            throw new Error("addKnownKey() - invalid key type (must be string or SB384-derived)");
+        catch (e) {
+            console.error("**** addKnownKey() - key / exception:", key, e);
+            throw e;
         }
     }
     lookupKeyGlobal(hash) {
@@ -817,8 +823,9 @@ class SBCrypto {
             return await this.#generateHash(channelBytes);
         }
         else {
-            if (DBG)
-                console.warn(`sb384Hash() - invalid JsonWebKey (missing x and/or y)`);
+            if (DBG) {
+                console.error(`[sb384Hash] invalid JsonWebKey (missing x and/or y)`, key);
+            }
             return undefined;
         }
     }
@@ -870,11 +877,12 @@ class SBCrypto {
                 if (jsonKey.alg === 'ECDH')
                     jsonKey.alg = undefined;
                 importedKey = await crypto.subtle.importKey('jwk', jsonKey, keyAlgorithms[type], extractable, keyUsages);
+                if (jsonKey.kty === 'EC')
+                    this.addKnownKey(importedKey);
             }
             else {
                 importedKey = await crypto.subtle.importKey(format, key, keyAlgorithms[type], extractable, keyUsages);
             }
-            this.addKnownKey(importedKey);
             return (importedKey);
         }
         catch (e) {
