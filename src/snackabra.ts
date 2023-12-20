@@ -21,7 +21,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 16)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 18)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -348,7 +348,7 @@ interface SBMessageContents {
   imageMetaData?: ImageMetaData,
   image_sign?: string,
   imageMetadata_sign?: string,
-  // sender_pubKey?: JsonWebKey, // replaced by senderUserId:
+  sender_pubKey?: JsonWebKey, // ... being replaced by senderUserId
   senderUserId?: SBUserId,
   sender_username?: string,
   encrypted: boolean,
@@ -2707,6 +2707,7 @@ class SBMessage {
       // console.log(channel)
       channel.channelReady.then(async () => {
         this.contents.senderUserId = this.channel.userId
+        this.contents.sender_pubKey = this.channel.exportable_pubKey! // duplicate info, slowly moving to just senderUserId
         // if (channel.userName) this.contents.sender_username = channel.userName
         const signKey = this.channel.channelSignKey
         const sign = sbCrypto.sign(signKey, body.contents)
@@ -3477,13 +3478,13 @@ class ChannelSocket extends Channel {
       throw new Error("ChannelSocket(): first argument must be SBServer or SBChannelHandle")
     _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
     // distinguish based on what properties the two interfaces have
-    if (sbServerOrHandle.hasOwnProperty('channelId') && sbServerOrHandle.hasOwnProperty('userId')) {
+    if (sbServerOrHandle.hasOwnProperty('channelId') && sbServerOrHandle.hasOwnProperty('userKeyString')) {
       // first, SBChannelHandle must have properties 'channelId' and 'userId'
       const handle = sbServerOrHandle as SBChannelHandle
       if (!handle.channelServer) throw new Error("ChannelSocket(): no channel server provided (required)")
       super(handle) // initialize 'channel' parent
       this.#socketServer = handle.channelServer.replace(/^http/, 'ws')
-    } else if (sbServerOrHandle.hasOwnProperty('channel_server') && sbServerOrHandle.hasOwnProperty('channel_ws') && sbServerOrHandle.hasOwnProperty('storage_server')) {
+    } else if (sbServerOrHandle.hasOwnProperty('channel_server') && sbServerOrHandle.hasOwnProperty('storage_server')) {
       // next, sbServer must have 'channel_server' and 'channel_ws' and 'storage_server'
       const sbServer = sbServerOrHandle as SBServer
       _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
@@ -3497,7 +3498,7 @@ class ChannelSocket extends Channel {
     }
     this.#onMessage = onMessage
     // url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
-    const url = this.#socketServer + '/api/room/' + channelId + '/websocket'
+    const url = this.#socketServer + '/api/room/' + this.channelId + '/websocket'
     this.#ws = {
       url: url,
       // websocket: new WebSocket(url),
@@ -3666,7 +3667,8 @@ class ChannelSocket extends Channel {
     // there may be other information in the message (eg motd, roomLocked)
     const message = jsonParseWrapper(e.data, 'L2239') as ChannelKeysMessage
     if (DBG) console.log("++++++++ readyPromise() received ChannelKeysMessage:", message);
-    _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)')
+    // todo: we should check for 'error' messages
+    _sb_assert(message.ready, `got roomKeys but channel reports it is not ready [${message}]`)
     this.motd = message.motd
 
     // const exportable_owner_pubKey = jsonParseWrapper(message.keys.ownerKey, 'L2246')

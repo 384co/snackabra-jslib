@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 16)";
+declare const version = "2.0.0-alpha.5 (build 18)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -109,6 +109,7 @@ interface SBMessageContents {
     imageMetaData?: ImageMetaData;
     image_sign?: string;
     imageMetadata_sign?: string;
+    sender_pubKey?: JsonWebKey;
     senderUserId?: SBUserId;
     sender_username?: string;
     encrypted: boolean;

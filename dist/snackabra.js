@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0-alpha.5 (build 16)';
+const version = '2.0.0-alpha.5 (build 18)';
 const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = true;
 var DBG2 = false;
@@ -1436,6 +1436,7 @@ class SBMessage {
         this.ready = new Promise((resolve) => {
             channel.channelReady.then(async () => {
                 this.contents.senderUserId = this.channel.userId;
+                this.contents.sender_pubKey = this.channel.exportable_pubKey;
                 const signKey = this.channel.channelSignKey;
                 const sign = sbCrypto.sign(signKey, body.contents);
                 const image_sign = sbCrypto.sign(signKey, this.contents.image);
@@ -1940,14 +1941,14 @@ class ChannelSocket extends Channel {
         if (typeof sbServerOrHandle !== 'object')
             throw new Error("ChannelSocket(): first argument must be SBServer or SBChannelHandle");
         _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided');
-        if (sbServerOrHandle.hasOwnProperty('channelId') && sbServerOrHandle.hasOwnProperty('userId')) {
+        if (sbServerOrHandle.hasOwnProperty('channelId') && sbServerOrHandle.hasOwnProperty('userKeyString')) {
             const handle = sbServerOrHandle;
             if (!handle.channelServer)
                 throw new Error("ChannelSocket(): no channel server provided (required)");
             super(handle);
             this.#socketServer = handle.channelServer.replace(/^http/, 'ws');
         }
-        else if (sbServerOrHandle.hasOwnProperty('channel_server') && sbServerOrHandle.hasOwnProperty('channel_ws') && sbServerOrHandle.hasOwnProperty('storage_server')) {
+        else if (sbServerOrHandle.hasOwnProperty('channel_server') && sbServerOrHandle.hasOwnProperty('storage_server')) {
             const sbServer = sbServerOrHandle;
             _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided');
             if (!key)
@@ -1961,7 +1962,7 @@ class ChannelSocket extends Channel {
             throw new Error("ChannelSocket(): first argument must be SBServer or SBChannelHandle");
         }
         this.#onMessage = onMessage;
-        const url = this.#socketServer + '/api/room/' + channelId + '/websocket';
+        const url = this.#socketServer + '/api/room/' + this.channelId + '/websocket';
         this.#ws = {
             url: url,
             ready: false,
@@ -2115,7 +2116,7 @@ class ChannelSocket extends Channel {
         const message = jsonParseWrapper(e.data, 'L2239');
         if (DBG)
             console.log("++++++++ readyPromise() received ChannelKeysMessage:", message);
-        _sb_assert(message.ready, 'got roomKeys but channel reports it is not ready (?)');
+        _sb_assert(message.ready, `got roomKeys but channel reports it is not ready [${message}]`);
         this.motd = message.motd;
         _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)');
         this.locked = message.roomLocked;
