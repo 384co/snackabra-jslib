@@ -21,7 +21,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 18)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 22)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -2374,7 +2374,7 @@ class SB384 {
    * If SB384 is used to mint, then it's always private.
    *
    */
-  constructor(key?: JsonWebKey | SBUserKeyString, forcePrivate: boolean = false) {
+  constructor(key?: JsonWebKey | SBUserKeyString, forcePrivate?: boolean) {
     this.ready = new Promise<SB384>(async (resolve, reject) => {
       try {
         if (!key) {
@@ -2393,7 +2393,8 @@ class SB384 {
             this.#private = true
           } else {
             this.#private = false
-            if (forcePrivate) throw new Error(`ERROR creating SB384 object: key provided is not the requested private`)
+            if (forcePrivate)
+              throw new Error(`ERROR creating SB384 object: key provided is not the requested private`)
           }
           this.#jwk = key
           this.#userKey = await sbCrypto
@@ -2403,10 +2404,12 @@ class SB384 {
           // we're given a string encoding
           // this.#sbUserKey = sbCrypto.StringToSBKey(key)
           const _sbUserKey = sbCrypto.StringToSBKey(key)
-          if (!_sbUserKey) throw new Error(`ERROR creating SB384 object: failed to import SBUserId`)
+          if (!_sbUserKey)
+            throw new Error(`ERROR creating SB384 object: failed to import SBUserId`)
           if (_sbUserKey.prefix === KeyPrefix.SBPublicKey) {
             this.#private = false
-            if (forcePrivate) throw new Error(`ERROR creating SB384 object: key provided is not the requested private`)
+            if (forcePrivate)
+              throw new Error(`ERROR creating SB384 object: key provided is not the requested private`)
           } else if (_sbUserKey.prefix === KeyPrefix.SBPrivateKey) {
             this.#private = true
           } else throw new Error(`ERROR creating SB384 object: invalid key (neither public nor private)`)
@@ -2543,15 +2546,15 @@ class SBChannelKeys extends SB384 {
    * latter case (convenience) we create a fresh ID. the
    * callee needs to create or budd channel.
    */
-  constructor(source: 'handle', handle: SBChannelHandle, channelKeyStrings?: ChannelKeyStrings)
-  constructor(source: 'jwk', keys: JsonWebKey, channelKeyStrings?: ChannelKeyStrings)
+  constructor(source: 'handle', handleOrJWK: SBChannelHandle, channelKeyStrings?: ChannelKeyStrings)
+  constructor(source: 'jwk', handleOrJWK: JsonWebKey, channelKeyStrings?: ChannelKeyStrings)
   constructor(source: 'new')
   constructor(source: 'handle' | 'jwk' | 'new', handleOrJWK?: SBChannelHandle | JsonWebKey, channelKeyStrings?: ChannelKeyStrings) {
     // constructor(key?: JsonWebKey | SBUserId, channelKeyStrings?: ChannelKeyStrings) {
     switch (source) {
       case 'handle': {
         const handle = handleOrJWK as SBChannelHandle
-        super(handle.userKeyString, true);
+        super(handle.userKeyString as SBUserKeyString, true);
         this.#channelServer = handle.channelServer;
         // make sure there are no trailing '/' in channelServer
         if (this.#channelServer && this.#channelServer[this.#channelServer.length - 1] === '/')
@@ -3470,8 +3473,8 @@ class ChannelSocket extends Channel {
    * @param key 
    * @param channelId 
    */
-  constructor(handle: SBChannelHandle, onMessage: (m: ChannelMessage) => void) // new interface
-  constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string) // old interface
+  constructor(sbServerOrHandle: SBChannelHandle, onMessage: (m: ChannelMessage) => void) // new interface
+  constructor(sbServerOrHandle: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string) // old interface
   constructor(sbServerOrHandle: SBServer | SBChannelHandle, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string) {
     // constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string) {
     if (typeof sbServerOrHandle !== 'object')
@@ -4611,11 +4614,11 @@ class Snackabra {
   * @param DEBUG2 - optional boolean to enable verbose debug logging
   * 
   */
-  constructor(sbServerOrChannelServer: SBServer | string, setDBG: boolean = false, setDBG2?: boolean) {
+  constructor(sbServerOrChannelServer: SBServer | string, setDBG?: boolean, setDBG2?: boolean) {
     console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`)
 
-    if (setDBG === true) DBG = true;
-    if (setDBG2 && (setDBG2 === true)) (DBG2 = true) && (DBG);
+    if (setDBG && setDBG === true) DBG = true;
+    if (DBG && setDBG2 && setDBG2 === true) DBG2 = true;
     if (DBG) console.warn("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
     if (DBG2) console.warn("++++ Snackabra constructor ++++ ALSO setting DBG2 to TRUE ++++");
 

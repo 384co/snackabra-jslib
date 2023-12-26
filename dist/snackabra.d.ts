@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 18)";
+declare const version = "2.0.0-alpha.5 (build 22)";
 export interface SBServer {
     channel_server: string;
     channel_ws: string;
@@ -268,8 +268,8 @@ declare class SBChannelKeys extends SB384 {
     #private;
     ready: Promise<SBChannelKeys>;
     sbChannelKeysReady: Promise<SBChannelKeys>;
-    constructor(source: 'handle', handle: SBChannelHandle, channelKeyStrings?: ChannelKeyStrings);
-    constructor(source: 'jwk', keys: JsonWebKey, channelKeyStrings?: ChannelKeyStrings);
+    constructor(source: 'handle', handleOrJWK: SBChannelHandle, channelKeyStrings?: ChannelKeyStrings);
+    constructor(source: 'jwk', handleOrJWK: JsonWebKey, channelKeyStrings?: ChannelKeyStrings);
     constructor(source: 'new');
     get readyFlag(): boolean;
     get encryptionKey(): CryptoKey;
@@ -342,8 +342,8 @@ declare class ChannelSocket extends Channel {
     #private;
     ready: Promise<ChannelSocket>;
     channelSocketReady: Promise<ChannelSocket>;
-    constructor(handle: SBChannelHandle, onMessage: (m: ChannelMessage) => void);
-    constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string);
+    constructor(sbServerOrHandle: SBChannelHandle, onMessage: (m: ChannelMessage) => void);
+    constructor(sbServerOrHandle: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string);
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set onMessage(f: (m: ChannelMessage) => void);
     get onMessage(): (m: ChannelMessage) => void;

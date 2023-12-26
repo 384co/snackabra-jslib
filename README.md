@@ -30,6 +30,8 @@ yarn install
 yarn start
 ```
 
+Note: requires Typescript 5.2.2 or later.
+
 Note the main jslib file is in ''jslib/src/snackabra.ts''.
 It gets built into ''jslib/build'' and copied into ''./dist''.
 

@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0-alpha.5 (build 18)';
+const version = '2.0.0-alpha.5 (build 22)';
 const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = true;
 var DBG2 = false;
@@ -1140,7 +1140,7 @@ class SB384 {
     #userKey;
     #jwk;
     #hash;
-    constructor(key, forcePrivate = false) {
+    constructor(key, forcePrivate) {
         this.ready = new Promise(async (resolve, reject) => {
             try {
                 if (!key) {
@@ -2744,12 +2744,12 @@ class Snackabra {
     storageServer;
     #storage;
     #version = version;
-    constructor(sbServerOrChannelServer, setDBG = false, setDBG2) {
+    constructor(sbServerOrChannelServer, setDBG, setDBG2) {
         console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`);
-        if (setDBG === true)
+        if (setDBG && setDBG === true)
             DBG = true;
-        if (setDBG2 && (setDBG2 === true))
-            (DBG2 = true) && (DBG);
+        if (DBG && setDBG2 && setDBG2 === true)
+            DBG2 = true;
         if (DBG)
             console.warn("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
         if (DBG2)
