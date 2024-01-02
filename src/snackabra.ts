@@ -215,8 +215,8 @@ export interface ChannelMessage {
   // encrypted?: boolean,
   // encrypted_contents?: EncryptedContents,
   encryptedContents?: EncryptedContents,
-  contents?: string, // if present means unencrypted
-  sign?: string,
+  contents?: ArrayBuffer, // if present means unencrypted
+  sign?: ArrayBuffer,
   // roomLocked?: boolean,
   // sender_pubKey?: JsonWebKey,
   senderUserId?: SBUserId
@@ -256,7 +256,7 @@ export interface ChannelAdminData {
  */
 export interface EncryptParams {
   name?: string;
-  iv?: BufferSource;
+  iv?: ArrayBuffer;
   additionalData?: BufferSource;
   tagLength?: number;
 }
@@ -270,22 +270,22 @@ export interface EncryptParams {
     depending on if it's internal or over wire.
  */
 export interface EncryptedContents {
-  content: string | ArrayBuffer,
-  iv: string | Uint8Array,
+  content: ArrayBuffer,
+  iv: ArrayBuffer,
   timestamp?: number, // timestamp at point of encryption, verified along with encrypt/decrypt
   sender?: SBUserId, // public (hash) of sender, matches publicKey of sender, verified by channel server
-  sign?: string, // signature of content (not including timestamp)
+  sign?: ArrayBuffer, // signature of content (not including timestamp)
   // salt: string | Uint8Array,
 }
 
-/**
- * Same as EncryptedContents interface, but binary view enforced
- */
-export interface EncryptedContentsBin {
-  content: ArrayBuffer,
-  iv: Uint8Array,
-  timestamp?: number,
-}
+// /**
+//  * Same as EncryptedContents interface, but binary view enforced
+//  */
+// export interface EncryptedContentsBin {
+//   content: ArrayBuffer,
+//   iv: Uint8Array,
+//   timestamp?: number,
+// }
 
 // these are toggled (globally) by ''new Snackabra(...)''
 // they will stick to 'true' if any Snackabra object is
@@ -307,9 +307,9 @@ interface ChannelEncryptedMessage {
   // fourty-two (42) 0s and 1s as string, e.g.:
   // '011000001110001011010110101010000100000110'
   timestampPrefix?: string,
-  encrypted_contents?: EncryptedContentsBin, // enforcing binary view internally
+  encrypted_contents?: EncryptedContents,
 
-  contents?: string,
+  contents?: ArrayBuffer,
 
   _id: string, // channelId + '.' + timestampPrefix
 
@@ -369,9 +369,9 @@ export const msgTtlToString = ['Ephemeral', 'One minute', 'Five minutes', 'Twent
 
 
 export interface SBMessageContents {
-  contents?: string,
+  contents?: ArrayBuffer,
   senderUserId?: SBUserId,
-  sign?: string,
+  sign?: ArrayBuffer,
   ttl?: number, // Value 0-15, see above; if it's missing it's 15/0xF (infinite)
 
   // sender_pubKey?: JsonWebKey, // ... being replaced by senderUserId
@@ -421,8 +421,8 @@ export namespace Interfaces {
     // you'll need these in case you want to track an object
     // across future (storage) servers, but as long as you
     // are within the same SB servers you can request them.
-    iv?: Uint8Array | string,
-    salt?: Uint8Array | string,
+    iv?: ArrayBuffer | string, // if external it's base64
+    salt?: ArrayBuffer | string, // if external it's base64
     // the following are optional and not tracked by
     // shard servers etc, but facilitates app usage
     fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
@@ -589,57 +589,6 @@ function _sb_assert(val: unknown, msg: string) {
 /******************************************************************************************************/
 //#region - SBCryptoUtils - crypto and translation stuff used by SBCrypto etc
 
-/**
- * Force EncryptedContents object to binary (interface
- * supports either string or arrays). String contents
- * implies base64 encoding.
- */
-export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedContentsBin {
-  try {
-    let t: ArrayBuffer
-    let iv: Uint8Array
-    if (DBG2) {
-      console.log("=+=+=+=+ processing content")
-      console.log(o.content.constructor.name)
-    }
-    if (typeof o.content === 'string') {
-      try {
-        t = base64ToArrayBuffer(decodeURIComponent(o.content))
-      } catch (e) {
-        throw new Error("EncryptedContents is string format but not base64 (?)")
-      }
-    } else {
-      // console.log(structuredClone(o))
-      const ocn = o.content.constructor.name
-      _sb_assert((ocn === 'ArrayBuffer') || (ocn === 'Uint8Array'), 'undetermined content type in EncryptedContents object')
-      t = o.content
-    }
-    if (DBG2) console.log("=+=+=+=+ processing nonce")
-    if (typeof o.iv === 'string') {
-      if (DBG2) { console.log("got iv as string:"); console.log(structuredClone(o.iv)); }
-      iv = base64ToArrayBuffer(decodeURIComponent(o.iv))
-      if (DBG2) { console.log("this was turned into array:"); console.log(structuredClone(iv)) }
-    } else if ((o.iv.constructor.name === 'Uint8Array') || (o.iv.constructor.name === 'ArrayBuffer')) {
-      if (DBG2) { console.log("it's an array already") }
-      iv = new Uint8Array(o.iv)
-    } else {
-      if (DBG2) console.log("probably a dictionary");
-      try {
-        iv = new Uint8Array(Object.values(o.iv))
-      } catch (e: any) {
-        if (DBG) { console.error("ERROR: cannot figure out format of iv (nonce), here's the input object:"); console.error(o.iv); }
-        _sb_assert(false, "undetermined iv (nonce) type, see console")
-      }
-    }
-    if (DBG2) { console.log("decided on nonce as:"); console.log(iv!) }
-    _sb_assert(iv!.length == 12, `encryptedContentsMakeBinary(): nonce should be 12 bytes but is not (${iv!.length})`)
-    return { content: t, iv: iv!, timestamp: o.timestamp }
-  } catch (e: any) {
-    const msg = `encryptedContentsMakeBinary() failed: ${e}`
-    if (DBG) console.error(msg)
-    throw new Error(msg)
-  }
-}
 
 /**
  * Fills buffer with random data
@@ -1148,20 +1097,25 @@ function is32BitSignedInteger(number: number) {
 /**
  * Our internal type letters:
  * 
- * a - array
- * b - boolean
- * d - date
- * i - integer (32 bit signed)
- * m - map
- * n - number
- * o - object
- * s - string
- * t - set
- * v - dataview
- * x - arraybuffer
+ * a - Array
+ * 8 - Uint8Array
+ * b - Boolean
+ * d - Date
+ * i - Integer (32 bit signed)
+ * m - Map
+ * 0 - Null
+ * n - Number (JS internal)
+ * o - Object
+ * s - String
+ * t - Set
+ * u - Undefined
+ * v - Dataview
+ * x - ArrayBuffer
  * 
  */
 function getType(value: any) {
+  if (value === null) return '0';
+  if (value === undefined) return 'u';
   if (Array.isArray(value)) return 'a';
   if (value instanceof ArrayBuffer) return 'x';
   if (typeof value === 'boolean') return 'b';
@@ -1175,8 +1129,14 @@ function getType(value: any) {
   if (value !== null && typeof value === 'object' && value.constructor === Object) return 'o';
   if (value instanceof Set) return 't';
   if (typeof value === 'string') return 's';
-  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return 'T'; // includes all typed arrays except DataView
-  return 'Unknown';
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    // it's a typed array; currently we're only supporting Uint8Array
+    if (value.constructor.name === 'Uint8Array') return '8';
+    console.error("[getType] Unsupported typed array:", value.constructor.name)
+    return '<unsupported>';
+  }
+  console.error('[getType] Unsupported for object:', value)
+  return '<unsupported>';
 }
 
 function _assemblePayload(data: any): ArrayBuffer | null {
@@ -1191,39 +1151,42 @@ function _assemblePayload(data: any): ArrayBuffer | null {
         const type = getType(value);
         // if (DBG2) console.log(`[assemblePayload] key: ${key}, type: ${type}`)
         switch (type) {
-          case 'o':
+          case 'o': // Object (eg structure)
             const payload = _assemblePayload(value);
             if (!payload) throw new Error(`Failed to assemble payload for ${key}`);
             BufferList.push(payload);
             break;
-          case 'n':
+          case 'n': // Number
             const numberValue = new Uint8Array(8);
             new DataView(numberValue.buffer).setFloat64(0, value);
             BufferList.push(numberValue.buffer);
             break;
-          case 'i':
+          case 'i': // Integer (32 bit signed)
             const intValue = new Uint8Array(4);
             new DataView(intValue.buffer).setInt32(0, value);
             BufferList.push(intValue.buffer);
             break;
-          case 'd':
+          case 'd': // Date
             const dateValue = new Uint8Array(8);
             new DataView(dateValue.buffer).setFloat64(0, value.getTime());
             BufferList.push(dateValue.buffer);
             break;
-          case 'b':
+          case 'b': // Boolean
             const boolValue = new Uint8Array(1);
             boolValue[0] = value ? 1 : 0;
             BufferList.push(boolValue.buffer);
             break;
-          case 's':
+          case 's': // String
             const stringValue = new TextEncoder().encode(value);
             BufferList.push(stringValue);
             break;
-          case 'x':
+          case 'x': // ArrayBuffer
             BufferList.push(value);
             break;
-          case 'm':
+          case '8': // Uint8Array
+            BufferList.push(value.buffer);
+            break;
+          case 'm': // Map
             const mapValue = new Array();
             value.forEach((v: any, k: any) => {
               mapValue.push([k, v]);
@@ -1232,7 +1195,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
             if (!mapPayload) throw new Error(`Failed to assemble payload for ${key}`);
             BufferList.push(mapPayload);
             break;
-          case 'a':
+          case 'a': // Array
             const arrayValue = new Array();
             value.forEach((v: any) => {
               arrayValue.push(v);
@@ -1241,8 +1204,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
             if (!arrayPayload) throw new Error(`Failed to assemble payload for ${key}`);
             BufferList.push(arrayPayload);
             break;
-          case 't':
-            // handle Set
+          case 't': // Set
             const setValue = new Array();
             value.forEach((v: any) => {
               setValue.push(v);
@@ -1251,10 +1213,16 @@ function _assemblePayload(data: any): ArrayBuffer | null {
             if (!setPayload) throw new Error(`Failed to assemble payload for ${key}`);
             BufferList.push(setPayload);
             break;
-          case 'v':
-          case 'T':
-            // 'v' and 'T' can probably easily be handled but we'll skip for now
+          case '0': // Null
+            BufferList.push(new ArrayBuffer(0));
+            break;
+          case 'u': // Undefined
+            BufferList.push(new ArrayBuffer(0));
+            break;
+          case 'v': // Dataview, not supporting for now
+          case '<unsupported>':
           default:
+            console.error(`[assemblePayload] Unsupported type: ${type}`);
             throw new Error(`Unsupported type: ${type}`);
         }
         const size = BufferList[BufferList.length - 1].byteLength;
@@ -1284,39 +1252,11 @@ function _assemblePayload(data: any): ArrayBuffer | null {
  * of an arbitrary set of (named) binary objects.
  */
 export function assemblePayload(data: any): ArrayBuffer | null {
-  return _assemblePayload({ version: '003', payload: data })
+  return _assemblePayload({ ver003: true, payload: data })
 }
 
 
-// function inspectBinaryData(data: ArrayBuffer | ArrayBufferView) {
-//   let byteArray;
-//   if (data instanceof ArrayBuffer) {
-//     byteArray = new Uint8Array(data);
-//   } else if (ArrayBuffer.isView(data)) {
-//     byteArray = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-//   } else {
-//     throw new Error('Unsupported data type');
-//   }
-//   const hexLine: Array<string> = [];
-//   const asciiLine: Array<string> = [];
-//   const lines: Array<string> = [];
-//   const lineLength = 16; // You can adjust this as needed
-//   byteArray.forEach((byte, i) => {
-//     hexLine.push(byte.toString(16).padStart(2, '0'));
-//     asciiLine.push(byte >= 32 && byte <= 127 ? String.fromCharCode(byte) : '.');
-//     if ((i + 1) % lineLength === 0 || i === byteArray.length - 1) {
-//       // Pad the hex line if it's the last line and not full
-//       while (hexLine.length < lineLength) {
-//         hexLine.push('  ');
-//         asciiLine.push(' ');
-//       }
-//       lines.push(hexLine.join(' ') + ' | ' + asciiLine.join(''));
-//       hexLine.length = 0;
-//       asciiLine.length = 0;
-//     }
-//   });
-//   return lines.join('\n');
-// }
+
 
 export function extractPayload2(payload: ArrayBuffer): SBPayload {
   try {
@@ -1398,8 +1338,14 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
       return set;
     case 'x':
       return buffer;
+    case '8':
+      return new Uint8Array(buffer);
+    case '0':
+      return null;
+    case 'u':
+      return undefined;
     case 'v':
-    case 'T':
+    case '<unsupported>':
     default:
       throw new Error(`Unsupported type: ${type}`);
   }
@@ -2201,8 +2147,8 @@ export class SBCrypto {  /******************************************************
         const encrypted = await crypto.subtle.encrypt(params as AesGcmParams, key, data)
         if (returnType === 'encryptedContents') {
           resolve({
-            content: arrayBufferToBase64(encrypted),
-            iv: arrayBufferToBase64(params.iv)
+            content: encrypted,
+            iv: params.iv
           })
         } else {
           resolve(encrypted)
@@ -2213,20 +2159,12 @@ export class SBCrypto {  /******************************************************
     });
   }
 
-  wrap(k: CryptoKey, b: string, bodyType: 'string'): Promise<EncryptedContents>
-  wrap(k: CryptoKey, b: ArrayBuffer, bodyType: 'arrayBuffer'): Promise<EncryptedContents>
-  wrap(k: CryptoKey, b: string | ArrayBuffer, bodyType: 'string' | 'arrayBuffer'): Promise<EncryptedContents> {
+  wrap(k: CryptoKey, b: ArrayBuffer): Promise<EncryptedContents> {
     return new Promise<EncryptedContents>((resolve) => {
-      let a
-      if (bodyType === 'string') {
-        a = sbCrypto.str2ab(b as string)
-      } else {
-        a = b as ArrayBuffer
-      }
       const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
       const view = new DataView(new ArrayBuffer(8));
       view.setFloat64(0, timestamp);
-      sbCrypto.encrypt(a, k, { additionalData: view }).then((c) => { resolve( { ...c, ...{ timestamp: timestamp } }) })
+      sbCrypto.encrypt(b, k, { additionalData: view }).then((c) => { resolve( { ...c, ...{ timestamp: timestamp } }) })
     })
   }
 
@@ -2236,20 +2174,15 @@ export class SBCrypto {  /******************************************************
    * Decrypts a wrapped object, returns (promise to) decrypted contents
    * per se (either as a string or arrayBuffer). Used by messages.
    */
-  unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'string'): Promise<string>
-  unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'arrayBuffer'): Promise<ArrayBuffer>
-  unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'string' | 'arrayBuffer') {
+  unwrap(k: CryptoKey, o: EncryptedContents): Promise<ArrayBuffer> {
     return new Promise(async (resolve, reject) => {
       try {
         if (!o.timestamp) throw new Error(`unwrap() - no timestamp in encrypted contents`)
-        const { content: t, iv: iv } = encryptedContentsMakeBinary(o)
+        const { content: t, iv: iv } = o // encryptedContentsMakeBinary(o)
         const view = new DataView(new ArrayBuffer(8));
         view.setFloat64(0, o.timestamp);
         const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t)
-        if (returnType === 'string')
-          resolve(new TextDecoder().decode(d))
-        else if (returnType === 'arrayBuffer')
-          resolve(d)
+        resolve(d)
       } catch (e) {
         // not an error per se, for example could just be wrong key
         if (DBG) console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`)
@@ -2261,37 +2194,16 @@ export class SBCrypto {  /******************************************************
 
   /**
    * SBCrypto.sign()
-   *
-   * Sign
    */
-  async sign(secretKey: CryptoKey, contents: string): Promise<string> {
-    return new Promise(async (resolve, reject) => {
-      try {
-        const encoded = (new TextEncoder()).encode(contents);
-        const sign = await crypto.subtle.sign('HMAC', secretKey, encoded)
-        resolve(arrayBufferToBase64(sign));
-      } catch (error) {
-        reject(error);
-      }
-    });
+  async sign(secretKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer> {
+    return await crypto.subtle.sign('HMAC', secretKey, contents);
   }
 
   /**
    * SBCrypto.verify()
-   *
-   * Verify signature.
    */
-  verify(verifyKey: CryptoKey, sign: string, contents: string) {
-    return new Promise<boolean>((resolve, reject) => {
-      try {
-        crypto.subtle
-          .verify('HMAC',
-            verifyKey,
-            base64ToArrayBuffer(sign),
-            sbCrypto.str2ab(contents))
-          .then((verified) => { resolve(verified) })
-      } catch (e) { reject(WrapError(e)) }
-    })
+  async verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer) {
+    return await crypto.subtle.verify('HMAC', verifyKey, sign, contents)
   }
 
   /**
@@ -3201,7 +3113,7 @@ class SBMessage {
   [SB_MESSAGE_SYMBOL] = true
   ready
   // channel: Channel
-  contents: SBMessageContents
+  contents?: SBMessageContents
   #encryptionKey?: CryptoKey
   // #sendToPubKey?: JsonWebKey
 
@@ -3214,64 +3126,66 @@ class SBMessage {
    *
    */
   // constructor(public channel: Channel, contents: string | ArrayBuffer /*, sendToJsonWebKey?: JsonWebKey */)
-  constructor(public channel: Channel, bodyParameter: SBMessageContents | string = '' /*, sendToJsonWebKey?: JsonWebKey */) {
-    if (typeof bodyParameter === 'string') {
-      this.contents = { /* encrypted: false, isVerfied: false, */ contents: bodyParameter, sign: '' /*, image: '', imageMetaData: {} */ }
-    } else {
-      this.contents = { /* encrypted: false, isVerfied: false, */ contents: '', sign: '' /*, image: bodyParameter.image, imageMetaData: bodyParameter.imageMetaData */ }
-    }
-    let body = this.contents
-    let bodyJson = JSON.stringify(body)
+  constructor(public channel: Channel, contents: any, ttl?: number) {
+    // if (typeof bodyParameter === 'string') {
+    //   this.contents = { /* encrypted: false, isVerfied: false, */ contents: bodyParameter, sign: '' /*, image: '', imageMetaData: {} */ }
+    // } else {
+    //   this.contents = { /* encrypted: false, isVerfied: false, */ contents: '', sign: '' /*, image: bodyParameter.image, imageMetaData: bodyParameter.imageMetaData */ }
+    // }
+    // let body = this.contents
+    // let bodyJson = JSON.stringify(body)
     // if (sendToJsonWebKey) this.#sendToPubKey = sbCrypto.extractPubKey(sendToJsonWebKey)!
 
-    _sb_assert(bodyJson.length < this.MAX_SB_BODY_SIZE,
-      `SBMessage(): body must be smaller than ${this.MAX_SB_BODY_SIZE / 1024} KiB (we got ${bodyJson.length / 1024})})`)
-    // this.channel = channel
-    this.ready = new Promise<SBMessage>((resolve) => {
-      // console.log(channel)
-      channel.channelReady.then(async () => {
+    const payload = assemblePayload(contents);
+    _sb_assert(payload, "SBMessage(): failed to assemble payload")
+    _sb_assert(payload!.byteLength < this.MAX_SB_BODY_SIZE,
+      `SBMessage(): body must be smaller than ${this.MAX_SB_BODY_SIZE / 1024} KiB (we got ${payload!.byteLength / 1024} KiB)})`)
 
-        this.#encryptionKey = this.channel.encryptionKey
-        this.contents.senderUserId = this.channel.userId
-        const sign = sbCrypto.sign(this.channel.privateKey, body.contents!)
-        sign.then((value) => { this.contents.sign = value; resolve(this); })
+    this.ready = new Promise<SBMessage>(async (resolve) => {
+      await channel.channelReady
+      this.#encryptionKey = this.channel.encryptionKey
+      this.contents = {
+        contents: payload!,
+        senderUserId: this.channel.userId,
+        sign: await sbCrypto.sign(this.channel.privateKey, payload!),
+        ttl: ttl ? ttl : 0xF // default is inifinte
+      }
+      resolve(this)
 
+      // this.contents.sender_pubKey = this.channel.exportable_pubKey! // duplicate info, slowly moving to just senderUserId
+      // if (channel.userName) this.contents.sender_username = channel.userName
+      // const signKey = this.channel.channelSignKey
+      // const sign = sbCrypto.sign(signKey, body.contents)
 
-        // this.contents.sender_pubKey = this.channel.exportable_pubKey! // duplicate info, slowly moving to just senderUserId
-        // if (channel.userName) this.contents.sender_username = channel.userName
-        // const signKey = this.channel.channelSignKey
-        // const sign = sbCrypto.sign(signKey, body.contents)
+      // const image_sign = sbCrypto.sign(signKey!, this.contents.image)
+      // const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData))
 
-        // const image_sign = sbCrypto.sign(signKey!, this.contents.image)
-        // const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData))
+      // // if present, this is 1:1 message (such as a whisper) 
+      // if (this.#sendToPubKey) {
+      //   this.#encryptionKey = await sbCrypto.deriveKey(
+      //     this.channel.key,
+      //     await sbCrypto.importKey("jwk", this.#sendToPubKey, "ECDH", true, []),
+      //     "AES", false, ["encrypt", "decrypt"]
+      //   )
+      // } else {
 
-        // // if present, this is 1:1 message (such as a whisper) 
-        // if (this.#sendToPubKey) {
-        //   this.#encryptionKey = await sbCrypto.deriveKey(
-        //     this.channel.key,
-        //     await sbCrypto.importKey("jwk", this.#sendToPubKey, "ECDH", true, []),
-        //     "AES", false, ["encrypt", "decrypt"]
-        //   )
-        // } else {
+      // const lockedKey = this.channel.keys.lockedKey
+      // console.log('==== SBMessage() picking what key to use for channel (and this is channel.keys.lockedKey):', this.channel, lockedKey)
+      // this.#encryptionKey = lockedKey ? lockedKey : this.channel.keys.encryptionKey
 
-        // const lockedKey = this.channel.keys.lockedKey
-        // console.log('==== SBMessage() picking what key to use for channel (and this is channel.keys.lockedKey):', this.channel, lockedKey)
-        // this.#encryptionKey = lockedKey ? lockedKey : this.channel.keys.encryptionKey
+      // Promise.all([sign, image_sign, imageMetadata_sign]).then((values) => {
+      //   this.contents.sign = values[0]
+      //   this.contents.image_sign = values[1]
+      //   this.contents.imageMetadata_sign = values[2]
+      //   this.contents.imgObjVersion = '2' // default for anything new
+      //   // NOTE: mtg:adding this breaks messages... but I dont understand why
+      //   // const isVerfied = await this.channel.api.postPubKey(this.channel.exportable_pubKey!)
+      //   // console.log('here',isVerfied)
+      //   // this.contents.isVerfied = isVerfied?.success ? true : false
+      //   // console.log(this)
+      //   resolve(this)
+      // })
 
-        // Promise.all([sign, image_sign, imageMetadata_sign]).then((values) => {
-        //   this.contents.sign = values[0]
-        //   this.contents.image_sign = values[1]
-        //   this.contents.imageMetadata_sign = values[2]
-        //   this.contents.imgObjVersion = '2' // default for anything new
-        //   // NOTE: mtg:adding this breaks messages... but I dont understand why
-        //   // const isVerfied = await this.channel.api.postPubKey(this.channel.exportable_pubKey!)
-        //   // console.log('here',isVerfied)
-        //   // this.contents.isVerfied = isVerfied?.success ? true : false
-        //   // console.log(this)
-        //   resolve(this)
-        // })
-
-      })
     })
   }
 
@@ -3438,11 +3352,10 @@ class Channel extends SBChannelKeys {
         reject("ChannelApi.#callApi: no channel ID (?)")
       await (this.ready)
       let authString = '';
-      const token_data: string = new Date().getTime().toString()
-      // ToDo: we should be consistently signing with our user key, not channel sign key, any more
-      // ... in fact i'm not sure channel sign key has a role to play post-SSO? ... 
+      const token_data = (new TextEncoder).encode(new Date().getTime().toString())
+      // ToDo: this is outdated (and weak) auth; should sign with user key any api call
       // authString = token_data + '.' + await sbCrypto.sign(this.channelSignKey, token_data)
-      authString = token_data + '.' + await sbCrypto.sign(this.privateKey, token_data)
+      authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.privateKey, token_data))
       let init: RequestInit = {
         method: method,
         headers: {
@@ -3491,11 +3404,11 @@ class Channel extends SBChannelKeys {
         channelID: z[1],
         timestampPrefix: z[2],
         _id: z[1] + z[2],
-        encrypted_contents: encryptedContentsMakeBinary(m01)
+        encrypted_contents: m01 // encryptedContentsMakeBinary(m01)
       }
-      let unwrapped: string
+      let unwrapped: ArrayBuffer
       try {
-        unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents!, 'string')
+        unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents!)
       } catch (e) {
 
         const msg = `ERROR: cannot decrypt message with either locked or unlocked key`
@@ -3520,8 +3433,10 @@ class Channel extends SBChannelKeys {
 
       }
 
+      // let m2: ChannelMessage = { ...m, ...jsonParseWrapper(unwrapped, 'L1977') };
 
-      let m2: ChannelMessage = { ...m, ...jsonParseWrapper(unwrapped, 'L1977') };
+      let m2: ChannelMessage = { ...m, ...extractPayload(unwrapped).payload };
+
       // if (m2.contents) {
       //   m2.text = m2.contents
       //   // if(!m2?.contents?.hasOwnProperty('isVerfied')){
@@ -4276,8 +4191,8 @@ class ChannelSocket extends Channel {
     * or an error message if it fails.
     */
   @VerifyParameters
-  send(msg: SBMessage | string): Promise<string> {
-    let message: SBMessage = typeof msg === 'string' ? new SBMessage(this, msg) : msg
+  send(msg: SBMessage | any): Promise<string> {
+    const message: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
     _sb_assert(this.#ws.websocket, "ChannelSocket.send() called before ready")
     if (this.#ws.closed) {
       if (this.#traceSocket) console.info("send() triggered reset of #readyPromise() (normal)")
@@ -4292,17 +4207,19 @@ class ChannelSocket extends Channel {
             case 1: // OPEN
               if (this.#traceSocket)
                 console.log("++++++++ ChannelSocket.send(): Wrapping message contents:", Object.assign({}, message.contents))
-              sbCrypto.wrap(message.encryptionKey!, JSON.stringify(message.contents), 'string')
+              const messagePayload = assemblePayload(message.contents)
+              _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message")
+              sbCrypto.wrap(message.encryptionKey!, messagePayload!)
                 .then((wrappedMessage) => {
                   const m = JSON.stringify({
                     encrypted_contents: wrappedMessage,
                     // recipient: message.sendToPubKey ? message.sendToPubKey : undefined
                   })
-                  if (this.#traceSocket) {
-                    console.log("++++++++ ChannelSocket.send(): sending message:")
-                    console.log((wrappedMessage.content as string).slice(0, 100) + "  ...  " + (wrappedMessage.content as string).slice(-100))
-                  }
-                  crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content as string))
+                  // if (this.#traceSocket) {
+                  //   console.log("++++++++ ChannelSocket.send(): sending message:")
+                  //   console.log((wrappedMessage.content as string).slice(0, 100) + "  ...  " + (wrappedMessage.content as string).slice(-100))
+                  // }
+                  crypto.subtle.digest('SHA-256', wrappedMessage.content /*new TextEncoder().encode(wrappedMessage.content as string)*/)
                     .then((hash) => {
                       const messageHash = arrayBufferToBase64(hash)
                       if (this.#traceSocket) {
@@ -4383,8 +4300,8 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
 
   #verification?: Promise<string> | string;
   shardServer?: string;
-  iv?: Uint8Array | string;
-  salt?: Uint8Array | string;
+  iv?: ArrayBuffer | string;
+  salt?: ArrayBuffer | string;
 
   // the rest are conveniences, should probably migrate to SBFileHandle
   fileName?: string;
@@ -4736,13 +4653,13 @@ export class StorageApi {
   /** @private
    * get "permission" to store in the form of a token
    */
-  #_allocateObject(image_id: ArrayBuffer, type: SBObjectType): Promise<{ salt: Uint8Array, iv: Uint8Array }> {
+  #_allocateObject(image_id: ArrayBuffer, type: SBObjectType): Promise<{ salt: Uint8Array, iv: ArrayBuffer }> {
     return new Promise((resolve, reject) => {
       SBFetch(this.storageServer + '/api/v1' + "/storeRequest?name=" + arrayBufferToBase62(image_id) + "&type=" + type)
         .then((r) => { /* console.log('got storage reply:'); console.log(r); */ return r.arrayBuffer(); })
         .then((b) => {
           const par = extractPayload(b)
-          resolve({ salt: new Uint8Array(par.salt), iv: new Uint8Array(par.iv) })
+          resolve({ salt: par.salt, iv: par.iv })
         })
         .catch((e) => {
           console.warn(`**** ERROR: ${e}`)
@@ -4759,8 +4676,8 @@ export class StorageApi {
     type: SBObjectType,
     // roomId: SBChannelId,
     budgetChannel: Channel, // ChannelEndpoint,
-    iv: Uint8Array,
-    salt: Uint8Array
+    iv: ArrayBuffer,
+    salt: ArrayBuffer
   ): Promise<string> {
     return new Promise(async (resolve, reject) => {
       try {
@@ -4788,8 +4705,8 @@ export class StorageApi {
   storeObject(
     type: string,
     fileId: Base62Encoded,
-    iv: Uint8Array,
-    salt: Uint8Array,
+    iv: ArrayBuffer,
+    salt: ArrayBuffer,
     storageToken: string,
     data: ArrayBuffer): Promise<Dictionary<any>> {
     // async function uploadImage(storageToken, encrypt_data, type, image_id, data)
@@ -4906,11 +4823,11 @@ export class StorageApi {
           console.log(data)
         }
         // payload includes nonce and salt
-        const iv = new Uint8Array(data.iv)
-        const salt = new Uint8Array(data.salt)
+        const iv = new ArrayBuffer(data.iv)
+        const salt = new ArrayBuffer(data.salt)
         // we accept b64 versions
-        const handleIV: Uint8Array | undefined = (!h.iv) ? undefined : (typeof h.iv === 'string') ? base64ToArrayBuffer(h.iv) : h.iv
-        const handleSalt: Uint8Array | undefined = (!h.salt) ? undefined : (typeof h.salt === 'string') ? base64ToArrayBuffer(h.salt) : h.salt
+        const handleIV: ArrayBuffer | undefined = (!h.iv) ? undefined : (typeof h.iv === 'string') ? base64ToArrayBuffer(h.iv) : h.iv
+        const handleSalt: ArrayBuffer | undefined = (!h.salt) ? undefined : (typeof h.salt === 'string') ? base64ToArrayBuffer(h.salt) : h.salt
 
         if ((handleIV) && (!compareBuffers(iv, handleIV))) {
           console.error("WARNING: nonce from server differs from local copy")
@@ -4961,7 +4878,7 @@ export class StorageApi {
             console.log("encrypted_image: "); console.log(encrypted_image)
           }
           // const padded_img: ArrayBuffer = await sbCrypto.unwrap(image_key, { content: encrypted_image, iv: iv }, 'arrayBuffer')
-          sbCrypto.unwrap(image_key, { content: encrypted_image, iv: iv }, 'arrayBuffer').then((padded_img: ArrayBuffer) => {
+          sbCrypto.unwrap(image_key, { content: encrypted_image, iv: iv }).then((padded_img: ArrayBuffer) => {
             const img: ArrayBuffer = this.#unpadData(padded_img)
             // psm: issues should throw i think
             // if (img.error) {

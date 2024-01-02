@@ -79,74 +79,6 @@ function _sb_assert(val, msg) {
         throw new Error(m);
     }
 }
-export function encryptedContentsMakeBinary(o) {
-    try {
-        let t;
-        let iv;
-        if (DBG2) {
-            console.log("=+=+=+=+ processing content");
-            console.log(o.content.constructor.name);
-        }
-        if (typeof o.content === 'string') {
-            try {
-                t = base64ToArrayBuffer(decodeURIComponent(o.content));
-            }
-            catch (e) {
-                throw new Error("EncryptedContents is string format but not base64 (?)");
-            }
-        }
-        else {
-            const ocn = o.content.constructor.name;
-            _sb_assert((ocn === 'ArrayBuffer') || (ocn === 'Uint8Array'), 'undetermined content type in EncryptedContents object');
-            t = o.content;
-        }
-        if (DBG2)
-            console.log("=+=+=+=+ processing nonce");
-        if (typeof o.iv === 'string') {
-            if (DBG2) {
-                console.log("got iv as string:");
-                console.log(structuredClone(o.iv));
-            }
-            iv = base64ToArrayBuffer(decodeURIComponent(o.iv));
-            if (DBG2) {
-                console.log("this was turned into array:");
-                console.log(structuredClone(iv));
-            }
-        }
-        else if ((o.iv.constructor.name === 'Uint8Array') || (o.iv.constructor.name === 'ArrayBuffer')) {
-            if (DBG2) {
-                console.log("it's an array already");
-            }
-            iv = new Uint8Array(o.iv);
-        }
-        else {
-            if (DBG2)
-                console.log("probably a dictionary");
-            try {
-                iv = new Uint8Array(Object.values(o.iv));
-            }
-            catch (e) {
-                if (DBG) {
-                    console.error("ERROR: cannot figure out format of iv (nonce), here's the input object:");
-                    console.error(o.iv);
-                }
-                _sb_assert(false, "undetermined iv (nonce) type, see console");
-            }
-        }
-        if (DBG2) {
-            console.log("decided on nonce as:");
-            console.log(iv);
-        }
-        _sb_assert(iv.length == 12, `encryptedContentsMakeBinary(): nonce should be 12 bytes but is not (${iv.length})`);
-        return { content: t, iv: iv, timestamp: o.timestamp };
-    }
-    catch (e) {
-        const msg = `encryptedContentsMakeBinary() failed: ${e}`;
-        if (DBG)
-            console.error(msg);
-        throw new Error(msg);
-    }
-}
 export function getRandomValues(buffer) {
     if (buffer.byteLength < (4096)) {
         return crypto.getRandomValues(buffer);
@@ -465,6 +397,10 @@ function is32BitSignedInteger(number) {
         number % 1 === 0);
 }
 function getType(value) {
+    if (value === null)
+        return '0';
+    if (value === undefined)
+        return 'u';
     if (Array.isArray(value))
         return 'a';
     if (value instanceof ArrayBuffer)
@@ -489,9 +425,14 @@ function getType(value) {
         return 't';
     if (typeof value === 'string')
         return 's';
-    if (ArrayBuffer.isView(value) && !(value instanceof DataView))
-        return 'T';
-    return 'Unknown';
+    if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+        if (value.constructor.name === 'Uint8Array')
+            return '8';
+        console.error("[getType] Unsupported typed array:", value.constructor.name);
+        return '<unsupported>';
+    }
+    console.error('[getType] Unsupported for object:', value);
+    return '<unsupported>';
 }
 function _assemblePayload(data) {
     try {
@@ -537,6 +478,9 @@ function _assemblePayload(data) {
                     case 'x':
                         BufferList.push(value);
                         break;
+                    case '8':
+                        BufferList.push(value.buffer);
+                        break;
                     case 'm':
                         const mapValue = new Array();
                         value.forEach((v, k) => {
@@ -567,9 +511,16 @@ function _assemblePayload(data) {
                             throw new Error(`Failed to assemble payload for ${key}`);
                         BufferList.push(setPayload);
                         break;
+                    case '0':
+                        BufferList.push(new ArrayBuffer(0));
+                        break;
+                    case 'u':
+                        BufferList.push(new ArrayBuffer(0));
+                        break;
                     case 'v':
-                    case 'T':
+                    case '<unsupported>':
                     default:
+                        console.error(`[assemblePayload] Unsupported type: ${type}`);
                         throw new Error(`Unsupported type: ${type}`);
                 }
                 const size = BufferList[BufferList.length - 1].byteLength;
@@ -592,7 +543,7 @@ function _assemblePayload(data) {
     }
 }
 export function assemblePayload(data) {
-    return _assemblePayload({ version: '003', payload: data });
+    return _assemblePayload({ ver003: true, payload: data });
 }
 export function extractPayload2(payload) {
     try {
@@ -672,8 +623,14 @@ function deserializeValue(buffer, type) {
             return set;
         case 'x':
             return buffer;
+        case '8':
+            return new Uint8Array(buffer);
+        case '0':
+            return null;
+        case 'u':
+            return undefined;
         case 'v':
-        case 'T':
+        case '<unsupported>':
         default:
             throw new Error(`Unsupported type: ${type}`);
     }
@@ -909,8 +866,8 @@ export class SBCrypto {
                 const encrypted = await crypto.subtle.encrypt(params, key, data);
                 if (returnType === 'encryptedContents') {
                     resolve({
-                        content: arrayBufferToBase64(encrypted),
-                        iv: arrayBufferToBase64(params.iv)
+                        content: encrypted,
+                        iv: params.iv
                     });
                 }
                 else {
@@ -922,34 +879,24 @@ export class SBCrypto {
             }
         });
     }
-    wrap(k, b, bodyType) {
+    wrap(k, b) {
         return new Promise((resolve) => {
-            let a;
-            if (bodyType === 'string') {
-                a = sbCrypto.str2ab(b);
-            }
-            else {
-                a = b;
-            }
             const timestamp = Math.round(Date.now() / 25) * 25;
             const view = new DataView(new ArrayBuffer(8));
             view.setFloat64(0, timestamp);
-            sbCrypto.encrypt(a, k, { additionalData: view }).then((c) => { resolve({ ...c, ...{ timestamp: timestamp } }); });
+            sbCrypto.encrypt(b, k, { additionalData: view }).then((c) => { resolve({ ...c, ...{ timestamp: timestamp } }); });
         });
     }
-    unwrap(k, o, returnType) {
+    unwrap(k, o) {
         return new Promise(async (resolve, reject) => {
             try {
                 if (!o.timestamp)
                     throw new Error(`unwrap() - no timestamp in encrypted contents`);
-                const { content: t, iv: iv } = encryptedContentsMakeBinary(o);
+                const { content: t, iv: iv } = o;
                 const view = new DataView(new ArrayBuffer(8));
                 view.setFloat64(0, o.timestamp);
                 const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t);
-                if (returnType === 'string')
-                    resolve(new TextDecoder().decode(d));
-                else if (returnType === 'arrayBuffer')
-                    resolve(d);
+                resolve(d);
             }
             catch (e) {
                 if (DBG)
@@ -959,28 +906,10 @@ export class SBCrypto {
         });
     }
     async sign(secretKey, contents) {
-        return new Promise(async (resolve, reject) => {
-            try {
-                const encoded = (new TextEncoder()).encode(contents);
-                const sign = await crypto.subtle.sign('HMAC', secretKey, encoded);
-                resolve(arrayBufferToBase64(sign));
-            }
-            catch (error) {
-                reject(error);
-            }
-        });
+        return await crypto.subtle.sign('HMAC', secretKey, contents);
     }
-    verify(verifyKey, sign, contents) {
-        return new Promise((resolve, reject) => {
-            try {
-                crypto.subtle
-                    .verify('HMAC', verifyKey, base64ToArrayBuffer(sign), sbCrypto.str2ab(contents))
-                    .then((verified) => { resolve(verified); });
-            }
-            catch (e) {
-                reject(WrapError(e));
-            }
-        });
+    async verify(verifyKey, sign, contents) {
+        return await crypto.subtle.verify('HMAC', verifyKey, sign, contents);
     }
     str2ab(string) {
         return new TextEncoder().encode(string);
@@ -1422,24 +1351,21 @@ class SBMessage {
     contents;
     #encryptionKey;
     MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
-    constructor(channel, bodyParameter = '') {
+    constructor(channel, contents, ttl) {
         this.channel = channel;
-        if (typeof bodyParameter === 'string') {
-            this.contents = { contents: bodyParameter, sign: '' };
-        }
-        else {
-            this.contents = { contents: '', sign: '' };
-        }
-        let body = this.contents;
-        let bodyJson = JSON.stringify(body);
-        _sb_assert(bodyJson.length < this.MAX_SB_BODY_SIZE, `SBMessage(): body must be smaller than ${this.MAX_SB_BODY_SIZE / 1024} KiB (we got ${bodyJson.length / 1024})})`);
-        this.ready = new Promise((resolve) => {
-            channel.channelReady.then(async () => {
-                this.#encryptionKey = this.channel.encryptionKey;
-                this.contents.senderUserId = this.channel.userId;
-                const sign = sbCrypto.sign(this.channel.privateKey, body.contents);
-                sign.then((value) => { this.contents.sign = value; resolve(this); });
-            });
+        const payload = assemblePayload(contents);
+        _sb_assert(payload, "SBMessage(): failed to assemble payload");
+        _sb_assert(payload.byteLength < this.MAX_SB_BODY_SIZE, `SBMessage(): body must be smaller than ${this.MAX_SB_BODY_SIZE / 1024} KiB (we got ${payload.byteLength / 1024} KiB)})`);
+        this.ready = new Promise(async (resolve) => {
+            await channel.channelReady;
+            this.#encryptionKey = this.channel.encryptionKey;
+            this.contents = {
+                contents: payload,
+                senderUserId: this.channel.userId,
+                sign: await sbCrypto.sign(this.channel.privateKey, payload),
+                ttl: ttl ? ttl : 0xF
+            };
+            resolve(this);
         });
     }
     get encryptionKey() { return this.#encryptionKey; }
@@ -1498,8 +1424,8 @@ class Channel extends SBChannelKeys {
                 reject("ChannelApi.#callApi: no channel ID (?)");
             await (this.ready);
             let authString = '';
-            const token_data = new Date().getTime().toString();
-            authString = token_data + '.' + await sbCrypto.sign(this.privateKey, token_data);
+            const token_data = (new TextEncoder).encode(new Date().getTime().toString());
+            authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.privateKey, token_data));
             let init = {
                 method: method,
                 headers: {
@@ -1541,11 +1467,11 @@ class Channel extends SBChannelKeys {
                 channelID: z[1],
                 timestampPrefix: z[2],
                 _id: z[1] + z[2],
-                encrypted_contents: encryptedContentsMakeBinary(m01)
+                encrypted_contents: m01
             };
             let unwrapped;
             try {
-                unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents, 'string');
+                unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents);
             }
             catch (e) {
                 const msg = `ERROR: cannot decrypt message with either locked or unlocked key`;
@@ -1553,7 +1479,7 @@ class Channel extends SBChannelKeys {
                     console.error(msg);
                 return (undefined);
             }
-            let m2 = { ...m, ...jsonParseWrapper(unwrapped, 'L1977') };
+            let m2 = { ...m, ...extractPayload(unwrapped).payload };
             if ((m2.verificationToken) && (!m2.senderUserId)) {
                 if (DBG)
                     console.error('ERROR: message with verification token is lacking sender identity (cannot be verified).');
@@ -1972,7 +1898,7 @@ class ChannelSocket extends Channel {
             console.log("==== jslib ChannelSocket: Tracing enabled ====");
     }
     send(msg) {
-        let message = typeof msg === 'string' ? new SBMessage(this, msg) : msg;
+        const message = msg instanceof SBMessage ? msg : new SBMessage(this, msg);
         _sb_assert(this.#ws.websocket, "ChannelSocket.send() called before ready");
         if (this.#ws.closed) {
             if (this.#traceSocket)
@@ -1989,16 +1915,14 @@ class ChannelSocket extends Channel {
                         case 1:
                             if (this.#traceSocket)
                                 console.log("++++++++ ChannelSocket.send(): Wrapping message contents:", Object.assign({}, message.contents));
-                            sbCrypto.wrap(message.encryptionKey, JSON.stringify(message.contents), 'string')
+                            const messagePayload = assemblePayload(message.contents);
+                            _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message");
+                            sbCrypto.wrap(message.encryptionKey, messagePayload)
                                 .then((wrappedMessage) => {
                                 const m = JSON.stringify({
                                     encrypted_contents: wrappedMessage,
                                 });
-                                if (this.#traceSocket) {
-                                    console.log("++++++++ ChannelSocket.send(): sending message:");
-                                    console.log(wrappedMessage.content.slice(0, 100) + "  ...  " + wrappedMessage.content.slice(-100));
-                                }
-                                crypto.subtle.digest('SHA-256', new TextEncoder().encode(wrappedMessage.content))
+                                crypto.subtle.digest('SHA-256', wrappedMessage.content)
                                     .then((hash) => {
                                     const messageHash = arrayBufferToBase64(hash);
                                     if (this.#traceSocket) {
@@ -2292,7 +2216,7 @@ export class StorageApi {
                 .then((r) => { return r.arrayBuffer(); })
                 .then((b) => {
                 const par = extractPayload(b);
-                resolve({ salt: new Uint8Array(par.salt), iv: new Uint8Array(par.iv) });
+                resolve({ salt: par.salt, iv: par.iv });
             })
                 .catch((e) => {
                 console.warn(`**** ERROR: ${e}`);
@@ -2408,8 +2332,8 @@ export class StorageApi {
                     console.log("Payload (#processData) is:");
                     console.log(data);
                 }
-                const iv = new Uint8Array(data.iv);
-                const salt = new Uint8Array(data.salt);
+                const iv = new ArrayBuffer(data.iv);
+                const salt = new ArrayBuffer(data.salt);
                 const handleIV = (!h.iv) ? undefined : (typeof h.iv === 'string') ? base64ToArrayBuffer(h.iv) : h.iv;
                 const handleSalt = (!h.salt) ? undefined : (typeof h.salt === 'string') ? base64ToArrayBuffer(h.salt) : h.salt;
                 if ((handleIV) && (!compareBuffers(iv, handleIV))) {
@@ -2462,7 +2386,7 @@ export class StorageApi {
                         console.log("encrypted_image: ");
                         console.log(encrypted_image);
                     }
-                    sbCrypto.unwrap(image_key, { content: encrypted_image, iv: iv }, 'arrayBuffer').then((padded_img) => {
+                    sbCrypto.unwrap(image_key, { content: encrypted_image, iv: iv }).then((padded_img) => {
                         const img = this.#unpadData(padded_img);
                         if (DBG) {
                             console.log("#processData(), unwrapped img: ");

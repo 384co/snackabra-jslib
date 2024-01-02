@@ -22,8 +22,8 @@ export interface ChannelMessage {
     timestampPrefix?: string;
     channelID?: SBChannelId;
     encryptedContents?: EncryptedContents;
-    contents?: string;
-    sign?: string;
+    contents?: ArrayBuffer;
+    sign?: ArrayBuffer;
     senderUserId?: SBUserId;
     verificationToken?: string;
 }
@@ -34,28 +34,23 @@ export interface ChannelAdminData {
 }
 export interface EncryptParams {
     name?: string;
-    iv?: BufferSource;
+    iv?: ArrayBuffer;
     additionalData?: BufferSource;
     tagLength?: number;
 }
 export interface EncryptedContents {
-    content: string | ArrayBuffer;
-    iv: string | Uint8Array;
+    content: ArrayBuffer;
+    iv: ArrayBuffer;
     timestamp?: number;
     sender?: SBUserId;
-    sign?: string;
-}
-export interface EncryptedContentsBin {
-    content: ArrayBuffer;
-    iv: Uint8Array;
-    timestamp?: number;
+    sign?: ArrayBuffer;
 }
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
 export interface SBMessageContents {
-    contents?: string;
+    contents?: ArrayBuffer;
     senderUserId?: SBUserId;
-    sign?: string;
+    sign?: ArrayBuffer;
     ttl?: number;
 }
 export type SBObjectType = 'f' | 'p' | 'b' | 't';
@@ -66,8 +61,8 @@ export declare namespace Interfaces {
         version?: SBObjectHandleVersions;
         type?: SBObjectType;
         verification?: Promise<string> | string;
-        iv?: Uint8Array | string;
-        salt?: Uint8Array | string;
+        iv?: ArrayBuffer | string;
+        salt?: ArrayBuffer | string;
         fileName?: string;
         dateAndTime?: string;
         fileType?: string;
@@ -97,7 +92,6 @@ export declare class MessageBus {
     publish(event: string, ...args: unknown[]): void;
 }
 declare function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-export declare function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedContentsBin;
 export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
 export declare function base64ToArrayBuffer(str: string): Uint8Array;
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
@@ -142,12 +136,10 @@ export declare class SBCrypto {
     deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType?: 'encryptedContents'): Promise<EncryptedContents>;
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
-    wrap(k: CryptoKey, b: string, bodyType: 'string'): Promise<EncryptedContents>;
-    wrap(k: CryptoKey, b: ArrayBuffer, bodyType: 'arrayBuffer'): Promise<EncryptedContents>;
-    unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'string'): Promise<string>;
-    unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'arrayBuffer'): Promise<ArrayBuffer>;
-    sign(secretKey: CryptoKey, contents: string): Promise<string>;
-    verify(verifyKey: CryptoKey, sign: string, contents: string): Promise<boolean>;
+    wrap(k: CryptoKey, b: ArrayBuffer): Promise<EncryptedContents>;
+    unwrap(k: CryptoKey, o: EncryptedContents): Promise<ArrayBuffer>;
+    sign(secretKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
+    verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
     str2ab(string: string): Uint8Array;
     ab2str(buffer: Uint8Array): string;
     compareKeys(key1: Dictionary<any>, key2: Dictionary<any>): boolean;
@@ -201,9 +193,9 @@ declare class SBMessage {
     channel: Channel;
     [SB_MESSAGE_SYMBOL]: boolean;
     ready: Promise<SBMessage>;
-    contents: SBMessageContents;
+    contents?: SBMessageContents;
     MAX_SB_BODY_SIZE: number;
-    constructor(channel: Channel, bodyParameter?: SBMessageContents | string);
+    constructor(channel: Channel, contents: any, ttl?: number);
     get encryptionKey(): CryptoKey | undefined;
     send(): Promise<string>;
 }
@@ -251,14 +243,14 @@ declare class ChannelSocket extends Channel {
     set onMessage(f: (m: ChannelMessage) => void);
     get onMessage(): (m: ChannelMessage) => void;
     set enableTrace(b: boolean);
-    send(msg: SBMessage | string): Promise<string>;
+    send(msg: SBMessage | any): Promise<string>;
 }
 declare class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     #private;
     version: SBObjectHandleVersions;
     shardServer?: string;
-    iv?: Uint8Array | string;
-    salt?: Uint8Array | string;
+    iv?: ArrayBuffer | string;
+    salt?: ArrayBuffer | string;
     fileName?: string;
     dateAndTime?: string;
     fileType?: string;
@@ -284,7 +276,7 @@ export declare class StorageApi {
     #private;
     storageServer: string;
     constructor(sbServerOrStorageServer: string);
-    storeObject(type: string, fileId: Base62Encoded, iv: Uint8Array, salt: Uint8Array, storageToken: string, data: ArrayBuffer): Promise<Dictionary<any>>;
+    storeObject(type: string, fileId: Base62Encoded, iv: ArrayBuffer, salt: ArrayBuffer, storageToken: string, data: ArrayBuffer): Promise<Dictionary<any>>;
     storeData(buf: BodyInit | Uint8Array, type: SBObjectType, channelOrHandle: SBChannelHandle | Channel): Promise<Interfaces.SBObjectHandle>;
     fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>;
     fetchData(handle: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
