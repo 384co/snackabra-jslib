@@ -138,7 +138,7 @@ export function encryptedContentsMakeBinary(o) {
             console.log(iv);
         }
         _sb_assert(iv.length == 12, `encryptedContentsMakeBinary(): nonce should be 12 bytes but is not (${iv.length})`);
-        return { content: t, iv: iv };
+        return { content: t, iv: iv, timestamp: o.timestamp };
     }
     catch (e) {
         const msg = `encryptedContentsMakeBinary() failed: ${e}`;
@@ -421,10 +421,10 @@ function _appendBuffer(buffer1, buffer2) {
 export function partition(str, n) {
     throw (`partition() not tested on TS yet - (${str}, ${n})`);
 }
-export function jsonParseWrapper(str, loc) {
+export function jsonParseWrapper(str, loc, reviver) {
     while (str && typeof str === 'string') {
         try {
-            str = JSON.parse(str);
+            str = JSON.parse(str, reviver);
         }
         catch (e) {
             throw new Error(`JSON.parse() error${loc ? ` at ${loc}` : ''}: ${e}\nString (possibly nested) was: ${str}`);
@@ -432,27 +432,7 @@ export function jsonParseWrapper(str, loc) {
     }
     return str;
 }
-export function extractPayloadV1(payload) {
-    try {
-        const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
-        const decoder = new TextDecoder();
-        const metadata = jsonParseWrapper(decoder.decode(payload.slice(4, 4 + metadataSize)), 'L476');
-        let startIndex = 4 + metadataSize;
-        const data = {};
-        for (const key in metadata) {
-            if (data.key) {
-                data[key] = payload.slice(startIndex, startIndex + metadata[key]);
-                startIndex += metadata[key];
-            }
-        }
-        return data;
-    }
-    catch (e) {
-        console.error(e);
-        return {};
-    }
-}
-export function assemblePayload(data) {
+export function assemblePayload2(data) {
     try {
         const metadata = {};
         metadata['version'] = '002';
@@ -476,7 +456,145 @@ export function assemblePayload(data) {
         return null;
     }
 }
-export function extractPayload(payload) {
+function is32BitSignedInteger(number) {
+    const MIN_32_INT = -2147483648;
+    const MAX_32_INT = 2147483647;
+    return (typeof number === 'number' &&
+        number >= MIN_32_INT &&
+        number <= MAX_32_INT &&
+        number % 1 === 0);
+}
+function getType(value) {
+    if (Array.isArray(value))
+        return 'a';
+    if (value instanceof ArrayBuffer)
+        return 'x';
+    if (typeof value === 'boolean')
+        return 'b';
+    if (value instanceof DataView)
+        return 'v';
+    if (value instanceof Date)
+        return 'd';
+    if (value instanceof Map)
+        return 'm';
+    if (typeof value === 'number') {
+        if (is32BitSignedInteger(value))
+            return 'i';
+        else
+            return 'n';
+    }
+    if (value !== null && typeof value === 'object' && value.constructor === Object)
+        return 'o';
+    if (value instanceof Set)
+        return 't';
+    if (typeof value === 'string')
+        return 's';
+    if (ArrayBuffer.isView(value) && !(value instanceof DataView))
+        return 'T';
+    return 'Unknown';
+}
+export function _assemblePayload(data) {
+    try {
+        const metadata = {};
+        let keyCount = 0;
+        let startIndex = 0;
+        let BufferList = [];
+        for (const key in data) {
+            if (data.hasOwnProperty(key)) {
+                const value = data[key];
+                const type = getType(value);
+                switch (type) {
+                    case 'o':
+                        const payload = _assemblePayload(value);
+                        if (!payload)
+                            throw new Error(`Failed to assemble payload for ${key}`);
+                        BufferList.push(payload);
+                        break;
+                    case 'n':
+                        const numberValue = new Uint8Array(8);
+                        new DataView(numberValue.buffer).setFloat64(0, value);
+                        BufferList.push(numberValue.buffer);
+                        break;
+                    case 'i':
+                        const intValue = new Uint8Array(4);
+                        new DataView(intValue.buffer).setInt32(0, value);
+                        BufferList.push(intValue.buffer);
+                        break;
+                    case 'd':
+                        const dateValue = new Uint8Array(8);
+                        new DataView(dateValue.buffer).setFloat64(0, value.getTime());
+                        BufferList.push(dateValue.buffer);
+                        break;
+                    case 'b':
+                        const boolValue = new Uint8Array(1);
+                        boolValue[0] = value ? 1 : 0;
+                        BufferList.push(boolValue.buffer);
+                        break;
+                    case 's':
+                        const stringValue = new TextEncoder().encode(value);
+                        BufferList.push(stringValue);
+                        break;
+                    case 'x':
+                        BufferList.push(value);
+                        break;
+                    case 'm':
+                        const mapValue = new Array();
+                        value.forEach((v, k) => {
+                            mapValue.push([k, v]);
+                        });
+                        const mapPayload = _assemblePayload(mapValue);
+                        if (!mapPayload)
+                            throw new Error(`Failed to assemble payload for ${key}`);
+                        BufferList.push(mapPayload);
+                        break;
+                    case 'a':
+                        const arrayValue = new Array();
+                        value.forEach((v) => {
+                            arrayValue.push(v);
+                        });
+                        const arrayPayload = _assemblePayload(arrayValue);
+                        if (!arrayPayload)
+                            throw new Error(`Failed to assemble payload for ${key}`);
+                        BufferList.push(arrayPayload);
+                        break;
+                    case 't':
+                        const setValue = new Array();
+                        value.forEach((v) => {
+                            setValue.push(v);
+                        });
+                        const setPayload = _assemblePayload(setValue);
+                        if (!setPayload)
+                            throw new Error(`Failed to assemble payload for ${key}`);
+                        BufferList.push(setPayload);
+                        break;
+                    case 'v':
+                    case 'T':
+                    default:
+                        throw new Error(`Unsupported type: ${type}`);
+                }
+                const size = BufferList[BufferList.length - 1].byteLength;
+                keyCount++;
+                metadata[keyCount.toString()] = { n: key, s: startIndex, z: size, t: type };
+                startIndex += size;
+            }
+        }
+        const metadataBuffer = new TextEncoder().encode(JSON.stringify(metadata));
+        const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
+        let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
+        for (let i = 0; i < BufferList.length; i++) {
+            payload = _appendBuffer(new Uint8Array(payload), BufferList[i]);
+        }
+        return payload;
+    }
+    catch (e) {
+        console.error(e);
+        return null;
+    }
+}
+export function assemblePayload(data) {
+    return _assemblePayload({ version: '003', payload: data });
+}
+export function extractPayload2(payload) {
     try {
         const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
         const decoder = new TextDecoder();
@@ -486,7 +604,7 @@ export function extractPayload(payload) {
             _metadata['version'] = '001';
         switch (_metadata['version']) {
             case '001': {
-                return extractPayloadV1(payload);
+                throw new Error('extractPayload() exception: version 001 is no longer supported');
             }
             case '002': {
                 const data = [];
@@ -512,6 +630,84 @@ export function extractPayload(payload) {
     catch (e) {
         throw new Error('extractPayload() exception (' + e + ')');
     }
+}
+function deserializeValue(buffer, type) {
+    switch (type) {
+        case 'o':
+            return _extractPayload(buffer);
+        case 'n':
+            return new DataView(buffer).getFloat64(0);
+        case 'i':
+            return new DataView(buffer).getInt32(0);
+        case 'd':
+            return new Date(new DataView(buffer).getFloat64(0));
+        case 'b':
+            return new Uint8Array(buffer)[0] === 1;
+        case 's':
+            return new TextDecoder().decode(buffer);
+        case 'b':
+            return buffer;
+        case 'a':
+            const arrayPayload = _extractPayload(buffer);
+            if (!arrayPayload)
+                throw new Error(`Failed to assemble payload for ${type}`);
+            return Object.values(arrayPayload);
+        case 'm':
+            const mapPayload = _extractPayload(buffer);
+            if (!mapPayload)
+                throw new Error(`Failed to assemble payload for ${type}`);
+            const map = new Map();
+            for (const key in mapPayload) {
+                map.set(mapPayload[key][0], mapPayload[key][1]);
+            }
+            return map;
+        case 't':
+            const setPayload = _extractPayload(buffer);
+            if (!setPayload)
+                throw new Error(`Failed to assemble payload for ${type}`);
+            const set = new Set();
+            for (const key in setPayload) {
+                set.add(setPayload[key]);
+            }
+            return set;
+        case 'x':
+            return buffer;
+        case 'v':
+        case 'T':
+        default:
+            throw new Error(`Unsupported type: ${type}`);
+    }
+}
+function _extractPayload(payload) {
+    try {
+        const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
+        const decoder = new TextDecoder();
+        const json = decoder.decode(payload.slice(4, 4 + metadataSize));
+        const metadata = jsonParseWrapper(json, "L1308");
+        const startIndex = 4 + metadataSize;
+        const data = {};
+        for (let i = 1; i <= Object.keys(metadata).length; i++) {
+            const index = i.toString();
+            if (metadata[index]) {
+                const entry = metadata[index];
+                const propertyStartIndex = entry['s'];
+                const size = entry['z'];
+                const type = entry['t'];
+                const buffer = payload.slice(startIndex + propertyStartIndex, startIndex + propertyStartIndex + size);
+                data[entry['n']] = deserializeValue(buffer, type);
+            }
+            else {
+                console.log(`found nothing for index ${i}`);
+            }
+        }
+        return data;
+    }
+    catch (e) {
+        throw new Error('extractPayload() exception (' + e + ')');
+    }
+}
+export function extractPayload(value) {
+    return _extractPayload(value);
 }
 export function encodeB64Url(input) {
     return input.replaceAll('+', '-').replaceAll('/', '_');
@@ -695,19 +891,26 @@ export class SBCrypto {
             }
         });
     }
-    encrypt(data, key, _iv, returnType = 'encryptedContents') {
+    encrypt(data, key, params, returnType = 'encryptedContents') {
         return new Promise(async (resolve, reject) => {
             try {
                 if (data === null)
                     reject(new Error('no contents'));
-                const iv = ((!_iv) || (_iv === null)) ? crypto.getRandomValues(new Uint8Array(12)) : _iv;
+                if (!params.iv) {
+                    _sb_assert(returnType !== 'arrayBuffer', "Must provide nonce if you just want the arraybuffer back (L1959)");
+                    params.iv = crypto.getRandomValues(new Uint8Array(12));
+                }
+                if (!params.name)
+                    params.name = 'AES-GCM';
+                else
+                    _sb_assert(params.name === 'AES-GCM', "Must be AES-GCM (L1951)");
                 if (typeof data === 'string')
                     data = (new TextEncoder()).encode(data);
-                const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data);
+                const encrypted = await crypto.subtle.encrypt(params, key, data);
                 if (returnType === 'encryptedContents') {
                     resolve({
                         content: arrayBufferToBase64(encrypted),
-                        iv: arrayBufferToBase64(iv)
+                        iv: arrayBufferToBase64(params.iv)
                     });
                 }
                 else {
@@ -728,14 +931,21 @@ export class SBCrypto {
             else {
                 a = b;
             }
-            sbCrypto.encrypt(a, k).then((c) => { resolve(c); });
+            const timestamp = Math.round(Date.now() / 25) * 25;
+            const view = new DataView(new ArrayBuffer(8));
+            view.setFloat64(0, timestamp);
+            sbCrypto.encrypt(a, k, { additionalData: view }).then((c) => { resolve({ ...c, ...{ timestamp: timestamp } }); });
         });
     }
     unwrap(k, o, returnType) {
         return new Promise(async (resolve, reject) => {
             try {
+                if (!o.timestamp)
+                    throw new Error(`unwrap() - no timestamp in encrypted contents`);
                 const { content: t, iv: iv } = encryptedContentsMakeBinary(o);
-                const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t);
+                const view = new DataView(new ArrayBuffer(8));
+                view.setFloat64(0, o.timestamp);
+                const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t);
                 if (returnType === 'string')
                     resolve(new TextDecoder().decode(d));
                 else if (returnType === 'arrayBuffer')
@@ -984,14 +1194,14 @@ class SB384 {
                 else {
                     throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey, SBUserId, or omitted)');
                 }
-                if (DBG)
+                if (DBG2)
                     console.log("SB384() constructor; x/y/d:\n", this.#x, "\n", this.#y, "\n", this.#d);
                 if (this.#private)
                     this.#privateUserKey = await sbCrypto.importKey('jwk', this.jwkPrivate, 'ECDH', true, ['deriveKey']);
                 this.#publicUserKey = await sbCrypto.importKey('jwk', this.jwkPublic, 'ECDH', true, []);
                 const channelBytes = _appendBuffer(base64ToArrayBuffer(this.#x), base64ToArrayBuffer(this.#y));
                 this.#hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', channelBytes));
-                if (DBG)
+                if (DBG2)
                     console.log("SB384() constructor; hash:\n", this.#hash);
                 this.SB384ReadyFlag = true;
                 resolve(this);
@@ -1003,7 +1213,8 @@ class SB384 {
         this.sb384Ready
             .then(() => {
             this.SB384ReadyFlag = true;
-            console.log("SB384() - constructor wrapping up, ready:", this.SB384ReadyFlag);
+            if (DBG2)
+                console.log("SB384() - constructor wrapping up, ready:", this.SB384ReadyFlag);
         })
             .catch((e) => { throw e; });
     }
@@ -1105,6 +1316,7 @@ export class SBChannelKeys extends SB384 {
     SBChannelKeysReadyFlag = false;
     #channelData;
     #encryptionKey;
+    #signKey;
     channelServer;
     #channelPublicKey;
     #channelPrivateKey;
@@ -1151,6 +1363,7 @@ export class SBChannelKeys extends SB384 {
                 const channelKeys = new SB384(this.#channelPrivateKey, true);
                 await channelKeys.ready;
                 this.#encryptionKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'AES-GCM', true, ['encrypt', 'decrypt']);
+                this.#signKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'HMAC', true, ['sign', 'verify']);
                 this.#channelData = {
                     channelId: this.#channelId,
                     ownerPublicKey: this.userPublicKey,
@@ -1169,9 +1382,10 @@ export class SBChannelKeys extends SB384 {
     get channelData() { return this.#channelData; }
     get owner() { return this.private && this.ownerChannelId === this.channelId; }
     get channelId() { return this.#channelId; }
-    get encryptionKey() { _sb_assert(this.#encryptionKey, "INTERNAL (L2866)"); return this.#encryptionKey; }
-    get channelPrivateKey() { _sb_assert(this.#channelPrivateKey, "INTERNAL (L2867)"); return this.#channelPrivateKey; }
-    get channelPublicKey() { _sb_assert(this.#channelPublicKey, "INTERNAL (L2867)"); return this.#channelPublicKey; }
+    get encryptionKey() { return this.#encryptionKey; }
+    get signKey() { return this.#signKey; }
+    get channelPrivateKey() { return this.#channelPrivateKey; }
+    get channelPublicKey() { return this.#channelPublicKey; }
 }
 __decorate([
     Memoize,
@@ -1189,6 +1403,10 @@ __decorate([
     Memoize,
     Ready
 ], SBChannelKeys.prototype, "encryptionKey", null);
+__decorate([
+    Memoize,
+    Ready
+], SBChannelKeys.prototype, "signKey", null);
 __decorate([
     Memoize,
     Ready
@@ -2086,7 +2304,7 @@ export class StorageApi {
         return new Promise(async (resolve, reject) => {
             try {
                 const key = await this.#getObjectKey(keyData, salt);
-                const data = await sbCrypto.encrypt(image, key, iv, 'arrayBuffer');
+                const data = await sbCrypto.encrypt(image, key, { iv: iv }, 'arrayBuffer');
                 const storageToken = await budgetChannel.getStorageToken(data.byteLength);
                 const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data);
                 if (resp_json.error)

@@ -32,13 +32,23 @@ export interface ChannelAdminData {
     join_requests: Array<SBUserId>;
     capacity: number;
 }
+export interface EncryptParams {
+    name?: string;
+    iv?: BufferSource;
+    additionalData?: BufferSource;
+    tagLength?: number;
+}
 export interface EncryptedContents {
     content: string | ArrayBuffer;
     iv: string | Uint8Array;
+    timestamp?: number;
+    sender?: SBUserId;
+    sign?: string;
 }
 export interface EncryptedContentsBin {
     content: ArrayBuffer;
     iv: Uint8Array;
+    timestamp?: number;
 }
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
@@ -91,7 +101,7 @@ export declare function encryptedContentsMakeBinary(o: EncryptedContents): Encry
 export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
 export declare function base64ToArrayBuffer(str: string): Uint8Array;
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
-declare function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array | null, variant?: 'b64' | 'url'): string;
+declare function arrayBufferToBase64(buffer: BufferSource | ArrayBuffer | Uint8Array | null, variant?: 'b64' | 'url'): string;
 export declare function arrayBufferToBase62(buffer: ArrayBuffer): string;
 export declare function base62ToArrayBuffer(s: string): ArrayBuffer;
 export type Base62Encoded = string & {
@@ -103,13 +113,15 @@ export declare function base62ToBase64(s: Base62Encoded): string;
 export declare function base64ToBase62(s: string): Base62Encoded;
 export declare function isBase62Encoded(value: string | Base62Encoded): value is Base62Encoded;
 export declare function partition(str: string, n: number): void;
-export declare function jsonParseWrapper(str: string | null, loc?: string): any;
+export declare function jsonParseWrapper(str: string | null, loc?: string, reviver?: (this: any, key: string, value: any) => any): any;
 export interface SBPayload {
     [index: string]: ArrayBuffer;
 }
-export declare function extractPayloadV1(payload: ArrayBuffer): SBPayload;
-export declare function assemblePayload(data: SBPayload): ArrayBuffer | null;
-export declare function extractPayload(payload: ArrayBuffer): SBPayload;
+export declare function assemblePayload2(data: SBPayload): ArrayBuffer | null;
+export declare function _assemblePayload(data: any): ArrayBuffer | null;
+export declare function assemblePayload(data: any): ArrayBuffer | null;
+export declare function extractPayload2(payload: ArrayBuffer): SBPayload;
+export declare function extractPayload(value: ArrayBuffer): any;
 export declare function encodeB64Url(input: string): string;
 export declare function decodeB64Url(input: string): string;
 export declare enum KeyPrefix {
@@ -129,8 +141,8 @@ export declare class SBCrypto {
     importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey | undefined>;
     deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
-    encrypt(data: BufferSource, key: CryptoKey, _iv?: Uint8Array | null, returnType?: 'encryptedContents'): Promise<EncryptedContents>;
-    encrypt(data: BufferSource, key: CryptoKey, _iv?: Uint8Array | null, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
+    encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType?: 'encryptedContents'): Promise<EncryptedContents>;
+    encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
     wrap(k: CryptoKey, b: string, bodyType: 'string'): Promise<EncryptedContents>;
     wrap(k: CryptoKey, b: ArrayBuffer, bodyType: 'arrayBuffer'): Promise<EncryptedContents>;
     unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'string'): Promise<string>;
@@ -181,6 +193,7 @@ export declare class SBChannelKeys extends SB384 {
     get owner(): boolean;
     get channelId(): string | undefined;
     get encryptionKey(): CryptoKey;
+    get signKey(): CryptoKey;
     get channelPrivateKey(): CryptoKey;
     get channelPublicKey(): CryptoKey;
 }

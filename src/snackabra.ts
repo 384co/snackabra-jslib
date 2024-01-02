@@ -249,6 +249,18 @@ export interface ChannelAdminData {
   capacity: number,
 }
 
+/**
+ * This is eseentially web standard type AesGcmParams, but
+ * with properties being optional - they'll be filled in
+ * at the "bottom layer" if missing (and if needed).
+ */
+export interface EncryptParams {
+  name?: string;
+  iv?: BufferSource;
+  additionalData?: BufferSource;
+  tagLength?: number;
+}
+  
 /** Encryptedcontents
 
     SB standard wrapping encrypted messages.
@@ -259,7 +271,10 @@ export interface ChannelAdminData {
  */
 export interface EncryptedContents {
   content: string | ArrayBuffer,
-  iv: string | Uint8Array
+  iv: string | Uint8Array,
+  timestamp?: number, // timestamp at point of encryption, verified along with encrypt/decrypt
+  sender?: SBUserId, // public (hash) of sender, matches publicKey of sender, verified by channel server
+  sign?: string, // signature of content (not including timestamp)
   // salt: string | Uint8Array,
 }
 
@@ -269,6 +284,7 @@ export interface EncryptedContents {
 export interface EncryptedContentsBin {
   content: ArrayBuffer,
   iv: Uint8Array,
+  timestamp?: number,
 }
 
 // these are toggled (globally) by ''new Snackabra(...)''
@@ -617,7 +633,7 @@ export function encryptedContentsMakeBinary(o: EncryptedContents): EncryptedCont
     }
     if (DBG2) { console.log("decided on nonce as:"); console.log(iv!) }
     _sb_assert(iv!.length == 12, `encryptedContentsMakeBinary(): nonce should be 12 bytes but is not (${iv!.length})`)
-    return { content: t, iv: iv! }
+    return { content: t, iv: iv!, timestamp: o.timestamp }
   } catch (e: any) {
     const msg = `encryptedContentsMakeBinary() failed: ${e}`
     if (DBG) console.error(msg)
@@ -840,7 +856,7 @@ export function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array
  * @param variant - 'b64' or 'url'
  * @return - returns Base64 encoded string
  */
-function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array | null, variant: 'b64' | 'url' = 'url'): string {
+function arrayBufferToBase64(buffer: BufferSource | ArrayBuffer | Uint8Array | null, variant: 'b64' | 'url' = 'url'): string {
   if (buffer == null) {
     _sb_exception('L893', 'arrayBufferToBase64() -> null paramater')
     return ''
@@ -1077,10 +1093,10 @@ export function partition(str: string, n: number) {
  * The 'loc' parameter should be a (unique) string that allows you to find the usage
  * in the code; one approach is the line number in the file.
  */
-export function jsonParseWrapper(str: string | null, loc?: string) {
+export function jsonParseWrapper(str: string | null, loc?: string, reviver? : (this: any, key: string, value: any) => any) {
   while (str && typeof str === 'string') {
     try {
-      str = JSON.parse(str) // handle nesting
+      str = JSON.parse(str, reviver) // handle nesting
     } catch (e) {
       throw new Error(`JSON.parse() error${loc ? ` at ${loc}` : ''}: ${e}\nString (possibly nested) was: ${str}`)
     }
@@ -1095,34 +1111,10 @@ export interface SBPayload {
 }
 
 /**
- * Deprecated (older version of payloads, for older channels)
- */
-/** @private */
-export function extractPayloadV1(payload: ArrayBuffer): SBPayload {
-  try {
-    const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
-    const decoder = new TextDecoder();
-    const metadata: Dictionary<any> = jsonParseWrapper(decoder.decode(payload.slice(4, 4 + metadataSize)), 'L476');
-    let startIndex = 4 + metadataSize;
-    const data: SBPayload = {};
-    for (const key in metadata) {
-      if (data.key) {
-        data[key] = payload.slice(startIndex, startIndex + metadata[key]);
-        startIndex += metadata[key];
-      }
-    }
-    return data;
-  } catch (e) {
-    console.error(e);
-    return {};
-  }
-}
-
-/**
  * Assemble payload. This creates a single binary (wire) format
  * of an arbitrary set of (named) binary objects.
  */
-export function assemblePayload(data: SBPayload): ArrayBuffer | null {
+export function assemblePayload2(data: SBPayload): ArrayBuffer | null {
   try {
     const metadata: Dictionary<any> = {};
     metadata['version'] = '002';
@@ -1146,12 +1138,193 @@ export function assemblePayload(data: SBPayload): ArrayBuffer | null {
   }
 }
 
+function is32BitSignedInteger(number: number) {
+  const MIN_32_INT = -2147483648;
+  const MAX_32_INT = 2147483647;
+  return (
+      typeof number === 'number' && 
+      number >= MIN_32_INT && 
+      number <= MAX_32_INT && 
+      number % 1 === 0
+  );
+}
+
+/**
+ * Our internal type letters:
+ * 
+ * a - array
+ * b - boolean
+ * d - date
+ * i - integer (32 bit signed)
+ * m - map
+ * n - number
+ * o - object
+ * s - string
+ * t - set
+ * v - dataview
+ * x - arraybuffer
+ * 
+ */
+function getType(value: any) {
+  if (Array.isArray(value)) return 'a';
+  if (value instanceof ArrayBuffer) return 'x';
+  if (typeof value === 'boolean') return 'b';
+  if (value instanceof DataView) return 'v';
+  if (value instanceof Date) return 'd';
+  if (value instanceof Map) return 'm';
+  if (typeof value === 'number') {
+    if (is32BitSignedInteger(value)) return 'i';
+    else return 'n';
+  }
+  if (value !== null && typeof value === 'object' && value.constructor === Object) return 'o';
+  if (value instanceof Set) return 't';
+  if (typeof value === 'string') return 's';
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return 'T'; // includes all typed arrays except DataView
+  return 'Unknown'; // Fallback type
+}
+
+
+export function _assemblePayload(data: any): ArrayBuffer | null {
+  try {
+    const metadata: any = {};
+    let keyCount = 0;
+    let startIndex = 0;
+    let BufferList: Array<ArrayBuffer> = [];
+    for (const key in data) {
+      if (data.hasOwnProperty(key)) {
+        const value = data[key];
+        const type = getType(value);
+        // if (DBG2) console.log(`[assemblePayload] key: ${key}, type: ${type}`)
+        switch (type) {
+          case 'o':
+            const payload = _assemblePayload(value);
+            if (!payload) throw new Error(`Failed to assemble payload for ${key}`);
+            BufferList.push(payload);
+            break;
+          case 'n':
+            const numberValue = new Uint8Array(8);
+            new DataView(numberValue.buffer).setFloat64(0, value);
+            BufferList.push(numberValue.buffer);
+            break;
+          case 'i':
+            const intValue = new Uint8Array(4);
+            new DataView(intValue.buffer).setInt32(0, value);
+            BufferList.push(intValue.buffer);
+            break;
+          case 'd':
+            const dateValue = new Uint8Array(8);
+            new DataView(dateValue.buffer).setFloat64(0, value.getTime());
+            BufferList.push(dateValue.buffer);
+            break;
+          case 'b':
+            const boolValue = new Uint8Array(1);
+            boolValue[0] = value ? 1 : 0;
+            BufferList.push(boolValue.buffer);
+            break;
+          case 's':
+            const stringValue = new TextEncoder().encode(value);
+            BufferList.push(stringValue);
+            break;
+          case 'x':
+            BufferList.push(value);
+            break;
+          case 'm':
+            const mapValue = new Array();
+            value.forEach((v: any, k: any) => {
+              mapValue.push([k, v]);
+            });
+            const mapPayload = _assemblePayload(mapValue);
+            if (!mapPayload) throw new Error(`Failed to assemble payload for ${key}`);
+            BufferList.push(mapPayload);
+            break;
+          case 'a':
+            const arrayValue = new Array();
+            value.forEach((v: any) => {
+              arrayValue.push(v);
+            });
+            const arrayPayload = _assemblePayload(arrayValue);
+            if (!arrayPayload) throw new Error(`Failed to assemble payload for ${key}`);
+            BufferList.push(arrayPayload);
+            break;
+          case 't':
+            // handle Set
+            const setValue = new Array();
+            value.forEach((v: any) => {
+              setValue.push(v);
+            });
+            const setPayload = _assemblePayload(setValue);
+            if (!setPayload) throw new Error(`Failed to assemble payload for ${key}`);
+            BufferList.push(setPayload);
+            break;
+          case 'v':
+          case 'T':
+            // 'v' and 'T' can probably easily be handled but we'll skip for now
+          default:
+            throw new Error(`Unsupported type: ${type}`);
+        }
+        const size = BufferList[BufferList.length - 1].byteLength;
+        keyCount++;
+        metadata[keyCount.toString()] = { n: key, s: startIndex, z: size, t: type };
+        startIndex += size;
+      }
+    }
+
+    const metadataBuffer = new TextEncoder().encode(JSON.stringify(metadata));
+    const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
+    
+    let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
+    for (let i = 0; i < BufferList.length; i++) {
+      payload = _appendBuffer(new Uint8Array(payload), BufferList[i]);
+    }
+
+    return payload;
+  } catch (e) {
+    console.error(e);
+    return null;
+  }
+}
+
+export function assemblePayload(data: any): ArrayBuffer | null {
+  return _assemblePayload({ version: '003', payload: data })
+}
+
+
+// function inspectBinaryData(data: ArrayBuffer | ArrayBufferView) {
+//   let byteArray;
+//   if (data instanceof ArrayBuffer) {
+//     byteArray = new Uint8Array(data);
+//   } else if (ArrayBuffer.isView(data)) {
+//     byteArray = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+//   } else {
+//     throw new Error('Unsupported data type');
+//   }
+//   const hexLine: Array<string> = [];
+//   const asciiLine: Array<string> = [];
+//   const lines: Array<string> = [];
+//   const lineLength = 16; // You can adjust this as needed
+//   byteArray.forEach((byte, i) => {
+//     hexLine.push(byte.toString(16).padStart(2, '0'));
+//     asciiLine.push(byte >= 32 && byte <= 127 ? String.fromCharCode(byte) : '.');
+//     if ((i + 1) % lineLength === 0 || i === byteArray.length - 1) {
+//       // Pad the hex line if it's the last line and not full
+//       while (hexLine.length < lineLength) {
+//         hexLine.push('  ');
+//         asciiLine.push(' ');
+//       }
+//       lines.push(hexLine.join(' ') + ' | ' + asciiLine.join(''));
+//       hexLine.length = 0;
+//       asciiLine.length = 0;
+//     }
+//   });
+//   return lines.join('\n');
+// }
+
 /**
  * Extract payload - this decodes from our binary (wire) format
  * to a JS object. This provides a binary encoding of any JSON,
  * and it allows some elements of the JSON to be raw (binary).
  */
-export function extractPayload(payload: ArrayBuffer): SBPayload {
+export function extractPayload2(payload: ArrayBuffer): SBPayload {
   try {
     // number of bytes of meta data (encoded as a 32-bit Uint)
     const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
@@ -1163,8 +1336,7 @@ export function extractPayload(payload: ArrayBuffer): SBPayload {
     if (!_metadata.version) _metadata['version'] = '001' // backwards compat
     switch (_metadata['version']) {
       case '001': {
-        // deprecated, older format
-        return extractPayloadV1(payload);
+        throw new Error('extractPayload() exception: version 001 is no longer supported');
       }
       case '002': {
         const data: Dictionary<any> = [];
@@ -1192,6 +1364,111 @@ export function extractPayload(payload: ArrayBuffer): SBPayload {
     throw new Error('extractPayload() exception (' + e + ')');
   }
 }
+
+
+function deserializeValue(buffer: ArrayBuffer, type: string): any {
+  switch(type) {
+    case 'o':
+      return _extractPayload(buffer);
+    case 'n':
+      return new DataView(buffer).getFloat64(0);
+    case 'i':
+      return new DataView(buffer).getInt32(0);
+    case 'd':
+      return new Date(new DataView(buffer).getFloat64(0));
+    case 'b':
+      return new Uint8Array(buffer)[0] === 1;
+    case 's':
+      return new TextDecoder().decode(buffer);
+    case 'b':
+      return buffer;
+    case 'a':
+      // if (DBG2) console.log("Handling Array:", buffer)
+      const arrayPayload = _extractPayload(buffer);
+      if (!arrayPayload) throw new Error(`Failed to assemble payload for ${type}`);
+      return Object.values(arrayPayload);
+    case 'm':
+      // maps
+      const mapPayload = _extractPayload(buffer);
+      if (!mapPayload) throw new Error(`Failed to assemble payload for ${type}`);
+      const map = new Map();
+      // for (const key in mapPayload) {
+      //   map.set(key, mapPayload[key]);
+      // }
+      for (const key in mapPayload) {
+        map.set(mapPayload[key][0], mapPayload[key][1]);
+      }
+      return map;
+    case 't':
+      // sets
+      const setPayload = _extractPayload(buffer);
+      if (!setPayload) throw new Error(`Failed to assemble payload for ${type}`);
+      const set = new Set();
+      for (const key in setPayload) {
+        set.add(setPayload[key]);
+      }
+      return set;
+    case 'x':
+      return buffer;
+    case 'v':
+    case 'T':
+    default:
+      throw new Error(`Unsupported type: ${type}`);
+  }
+}
+
+function _extractPayload(payload: ArrayBuffer): any {
+  try {
+    const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
+    const decoder = new TextDecoder();
+    const json = decoder.decode(payload.slice(4, 4 + metadataSize));
+    // console.log("json is", json)
+    const metadata = jsonParseWrapper(json, "L1308");
+    const startIndex = 4 + metadataSize;
+
+    const data: any = {};
+    for (let i = 1; i <= Object.keys(metadata).length; i++) { 
+      const index = i.toString();
+      if (metadata[index]) {
+        const entry = metadata[index];
+        const propertyStartIndex = entry['s'];
+        const size = entry['z'];
+        const type = entry['t'];
+        const buffer = payload.slice(startIndex + propertyStartIndex, startIndex + propertyStartIndex + size);
+        data[entry['n']] = deserializeValue(buffer, type);
+      } else {
+        console.log(`found nothing for index ${i}`);
+      }
+    }
+    return data;
+
+    // const data: any = {};
+    // for (let i = 1; i <= Object.keys(metadata).length - 1; i++) { // Exclude 'version' from keys
+    //   const index = i.toString();
+    //   if (metadata[index]) {
+    //     const entry = metadata[index];
+    //     const propertyStartIndex = entry['s'];
+    //     const size = entry['z'];
+    //     const type = entry['t'];
+    //     const buffer = payload.slice(startIndex + propertyStartIndex, startIndex + propertyStartIndex + size);
+    //     data[entry['n']] = deserializeValue(buffer, type);
+    //   } else {
+    //     console.log(`found nothing for index ${i}`);
+    //   }
+    // }
+    // return data;
+
+  } catch (e) {
+    throw new Error('extractPayload() exception (' + e + ')');
+  }
+}
+
+export function extractPayload(value: ArrayBuffer): any {
+  // todo: add hack check for version (must be 003)
+  return _extractPayload(value);
+}
+
+
 
 /**
  * Make sure base64 encoding is URL version
@@ -1878,7 +2155,8 @@ export class SBCrypto {  /******************************************************
   /**
    * SBCrypto.deriveKey()
    *
-   * Derive key. Takes a private and public key, and returns a Promise to a cryptoKey for 1:1 communication.
+   * Derive key. Takes a private and public key, and returns a Promise to a cryptoKey
+   * for 1:1 communication and/or sign/verify
    */
   deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey> {
     return new Promise(async (resolve, reject) => {
@@ -1922,28 +2200,35 @@ export class SBCrypto {  /******************************************************
     });
   }
 
+
+
   /**
    * SBCrypto.encrypt()
    *
-   * Encrypt. if no nonce (iv) is given, will create it. Returns a Promise
+   * Encrypt. If nonce (iv) is not given, will create it. Returns a Promise
    * that resolves either to raw array buffer or a packaged EncryptedContents.
    * Note that for the former, nonce must be given.
    */
-  encrypt(data: BufferSource, key: CryptoKey, _iv?: Uint8Array | null, returnType?: 'encryptedContents'): Promise<EncryptedContents>
-  encrypt(data: BufferSource, key: CryptoKey, _iv?: Uint8Array | null, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>
-  encrypt(data: BufferSource, key: CryptoKey, _iv?: Uint8Array, returnType: 'encryptedContents' | 'arrayBuffer' = 'encryptedContents'): Promise<EncryptedContents | ArrayBuffer> {
+  encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType?: 'encryptedContents'): Promise<EncryptedContents>
+  encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>
+  encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType: 'encryptedContents' | 'arrayBuffer' = 'encryptedContents'): Promise<EncryptedContents | ArrayBuffer> {
     return new Promise(async (resolve, reject) => {
       try {
         if (data === null)
           reject(new Error('no contents'))
-        const iv: Uint8Array = ((!_iv) || (_iv === null)) ? crypto.getRandomValues(new Uint8Array(12)) : _iv
+        // const iv: Uint8Array = ((!_iv) || (_iv === null)) ? crypto.getRandomValues(new Uint8Array(12)) : _iv
+        if (!params.iv) {
+          _sb_assert(returnType !== 'arrayBuffer', "Must provide nonce if you just want the arraybuffer back (L1959)")
+          params.iv = crypto.getRandomValues(new Uint8Array(12))
+        }
+        if (!params.name) params.name = 'AES-GCM'; else _sb_assert(params.name === 'AES-GCM', "Must be AES-GCM (L1951)")
         if (typeof data === 'string')
           data = (new TextEncoder()).encode(data)
-        const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, data)
+        const encrypted = await crypto.subtle.encrypt(params as AesGcmParams, key, data)
         if (returnType === 'encryptedContents') {
           resolve({
             content: arrayBufferToBase64(encrypted),
-            iv: arrayBufferToBase64(iv)
+            iv: arrayBufferToBase64(params.iv)
           })
         } else {
           resolve(encrypted)
@@ -1964,7 +2249,10 @@ export class SBCrypto {  /******************************************************
       } else {
         a = b as ArrayBuffer
       }
-      sbCrypto.encrypt(a, k).then((c) => { resolve(c) })
+      const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
+      const view = new DataView(new ArrayBuffer(8));
+      view.setFloat64(0, timestamp);
+      sbCrypto.encrypt(a, k, { additionalData: view }).then((c) => { resolve( { ...c, ...{ timestamp: timestamp } }) })
     })
   }
 
@@ -1972,15 +2260,18 @@ export class SBCrypto {  /******************************************************
    * SBCrypto.unwrap
    *
    * Decrypts a wrapped object, returns (promise to) decrypted contents
-   * per se (either as a string or arrayBuffer)
+   * per se (either as a string or arrayBuffer). Used by messages.
    */
   unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'string'): Promise<string>
   unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'arrayBuffer'): Promise<ArrayBuffer>
   unwrap(k: CryptoKey, o: EncryptedContents, returnType: 'string' | 'arrayBuffer') {
     return new Promise(async (resolve, reject) => {
       try {
+        if (!o.timestamp) throw new Error(`unwrap() - no timestamp in encrypted contents`)
         const { content: t, iv: iv } = encryptedContentsMakeBinary(o)
-        const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t)
+        const view = new DataView(new ArrayBuffer(8));
+        view.setFloat64(0, o.timestamp);
+        const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t)
         if (returnType === 'string')
           resolve(new TextDecoder().decode(d))
         else if (returnType === 'arrayBuffer')
@@ -2549,7 +2840,7 @@ class SB384 {
           throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey, SBUserId, or omitted)')
         }
 
-        if (DBG) console.log("SB384() constructor; x/y/d:\n", this.#x, "\n", this.#y, "\n", this.#d)
+        if (DBG2) console.log("SB384() constructor; x/y/d:\n", this.#x, "\n", this.#y, "\n", this.#d)
 
         if (this.#private)
           this.#privateUserKey = await sbCrypto.importKey('jwk', this.jwkPrivate, 'ECDH', true, ['deriveKey'])
@@ -2559,7 +2850,7 @@ class SB384 {
         // can't put in getter since it's async
         const channelBytes = _appendBuffer(base64ToArrayBuffer(this.#x!), base64ToArrayBuffer(this.#y!))
         this.#hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', channelBytes))
-        if (DBG) console.log("SB384() constructor; hash:\n", this.#hash)
+        if (DBG2) console.log("SB384() constructor; hash:\n", this.#hash)
 
         // this.#exportable_privateKey = await sbCrypto.exportKey('jwk', keyPair.privateKey)
         // this.#exportable_privateKey = await sbCrypto.exportKey('jwk', this.#privateKey)
@@ -2577,7 +2868,7 @@ class SB384 {
     this.sb384Ready
       .then(() => {
         this.SB384ReadyFlag = true;
-        console.log("SB384() - constructor wrapping up, ready:", this.SB384ReadyFlag)
+        if (DBG2) console.log("SB384() - constructor wrapping up, ready:", this.SB384ReadyFlag)
       })
       .catch((e) => { throw e })
 
@@ -2748,7 +3039,8 @@ export class SBChannelKeys extends SB384 {
 
   // #channelKeys?: ChannelKeys
   #channelData?: ChannelData
-  #encryptionKey?: CryptoKey
+  #encryptionKey?: CryptoKey // for encrypting messages
+  #signKey?: CryptoKey // matching key for signing messages
 
   channelServer?: string // can be read/written freely
 
@@ -2814,6 +3106,7 @@ export class SBChannelKeys extends SB384 {
         await channelKeys.ready
 
         this.#encryptionKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'AES-GCM', true, ['encrypt', 'decrypt'])
+        this.#signKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'HMAC', true, ['sign', 'verify'])
 
         this.#channelData = {
           channelId: this.#channelId!,
@@ -2823,8 +3116,6 @@ export class SBChannelKeys extends SB384 {
 
         this.SBChannelKeysReadyFlag = true
         resolve(this)
-
-
 
         // if (channelKeyStrings) {
         //   if (DBG) console.log("++++ SBChannelKeys initialized from key strings")
@@ -2916,9 +3207,10 @@ export class SBChannelKeys extends SB384 {
   // @Memoize @Ready get keys() { return this.#channelKeys! }
   @Memoize @Ready get channelId() { return this.#channelId }
 
-  @Memoize @Ready get encryptionKey() { _sb_assert(this.#encryptionKey, "INTERNAL (L2866)"); return this.#encryptionKey! }
-  @Memoize @Ready get channelPrivateKey() { _sb_assert(this.#channelPrivateKey, "INTERNAL (L2867)"); return this.#channelPrivateKey! }
-  @Memoize @Ready get channelPublicKey() { _sb_assert(this.#channelPublicKey, "INTERNAL (L2867)"); return this.#channelPublicKey! }
+  @Memoize @Ready get encryptionKey() { return this.#encryptionKey! }
+  @Memoize @Ready get signKey() { return this.#signKey! } // convenience
+  @Memoize @Ready get channelPrivateKey() { return this.#channelPrivateKey! }
+  @Memoize @Ready get channelPublicKey() { return this.#channelPublicKey! }
 
   // set channelServer(channelServer: string) {
   //   _sb_assert(!this.#channelServer, "ChannelServer already set on this SBChannelKeys object - can't change")
@@ -3227,7 +3519,6 @@ class Channel extends SBChannelKeys {
         _id: z[1] + z[2],
         encrypted_contents: encryptedContentsMakeBinary(m01)
       }
-      // if there's a lock key, we will use that, otherwise fall back to encryptionKey
       let unwrapped: string
       try {
         unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents!, 'string')
@@ -4500,7 +4791,7 @@ export class StorageApi {
     return new Promise(async (resolve, reject) => {
       try {
         const key = await this.#getObjectKey(keyData, salt)
-        const data = await sbCrypto.encrypt(image, key, iv, 'arrayBuffer')
+        const data = await sbCrypto.encrypt(image, key, { iv: iv }, 'arrayBuffer')
         const storageToken = await budgetChannel.getStorageToken(data.byteLength)
         const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data)
         if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
