@@ -118,7 +118,6 @@ export interface SBPayload {
     [index: string]: ArrayBuffer;
 }
 export declare function assemblePayload2(data: SBPayload): ArrayBuffer | null;
-export declare function _assemblePayload(data: any): ArrayBuffer | null;
 export declare function assemblePayload(data: any): ArrayBuffer | null;
 export declare function extractPayload2(payload: ArrayBuffer): SBPayload;
 export declare function extractPayload(value: ArrayBuffer): any;

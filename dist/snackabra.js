@@ -493,7 +493,7 @@ function getType(value) {
         return 'T';
     return 'Unknown';
 }
-export function _assemblePayload(data) {
+function _assemblePayload(data) {
     try {
         const metadata = {};
         let keyCount = 0;

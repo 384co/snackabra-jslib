@@ -1110,10 +1110,6 @@ export interface SBPayload {
   [index: string]: ArrayBuffer;
 }
 
-/**
- * Assemble payload. This creates a single binary (wire) format
- * of an arbitrary set of (named) binary objects.
- */
 export function assemblePayload2(data: SBPayload): ArrayBuffer | null {
   try {
     const metadata: Dictionary<any> = {};
@@ -1173,18 +1169,17 @@ function getType(value: any) {
   if (value instanceof Date) return 'd';
   if (value instanceof Map) return 'm';
   if (typeof value === 'number') {
-    if (is32BitSignedInteger(value)) return 'i';
+    if (is32BitSignedInteger(value)) return 'i'; // tiny optimization
     else return 'n';
   }
   if (value !== null && typeof value === 'object' && value.constructor === Object) return 'o';
   if (value instanceof Set) return 't';
   if (typeof value === 'string') return 's';
   if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return 'T'; // includes all typed arrays except DataView
-  return 'Unknown'; // Fallback type
+  return 'Unknown';
 }
 
-
-export function _assemblePayload(data: any): ArrayBuffer | null {
+function _assemblePayload(data: any): ArrayBuffer | null {
   try {
     const metadata: any = {};
     let keyCount = 0;
@@ -1284,6 +1279,10 @@ export function _assemblePayload(data: any): ArrayBuffer | null {
   }
 }
 
+/**
+ * Assemble payload. This creates a single binary (wire) format
+ * of an arbitrary set of (named) binary objects.
+ */
 export function assemblePayload(data: any): ArrayBuffer | null {
   return _assemblePayload({ version: '003', payload: data })
 }
@@ -1319,11 +1318,6 @@ export function assemblePayload(data: any): ArrayBuffer | null {
 //   return lines.join('\n');
 // }
 
-/**
- * Extract payload - this decodes from our binary (wire) format
- * to a JS object. This provides a binary encoding of any JSON,
- * and it allows some elements of the JSON to be raw (binary).
- */
 export function extractPayload2(payload: ArrayBuffer): SBPayload {
   try {
     // number of bytes of meta data (encoded as a 32-bit Uint)
@@ -1383,24 +1377,18 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
     case 'b':
       return buffer;
     case 'a':
-      // if (DBG2) console.log("Handling Array:", buffer)
       const arrayPayload = _extractPayload(buffer);
       if (!arrayPayload) throw new Error(`Failed to assemble payload for ${type}`);
       return Object.values(arrayPayload);
     case 'm':
-      // maps
       const mapPayload = _extractPayload(buffer);
       if (!mapPayload) throw new Error(`Failed to assemble payload for ${type}`);
       const map = new Map();
-      // for (const key in mapPayload) {
-      //   map.set(key, mapPayload[key]);
-      // }
       for (const key in mapPayload) {
         map.set(mapPayload[key][0], mapPayload[key][1]);
       }
       return map;
     case 't':
-      // sets
       const setPayload = _extractPayload(buffer);
       if (!setPayload) throw new Error(`Failed to assemble payload for ${type}`);
       const set = new Set();
@@ -1441,28 +1429,14 @@ function _extractPayload(payload: ArrayBuffer): any {
       }
     }
     return data;
-
-    // const data: any = {};
-    // for (let i = 1; i <= Object.keys(metadata).length - 1; i++) { // Exclude 'version' from keys
-    //   const index = i.toString();
-    //   if (metadata[index]) {
-    //     const entry = metadata[index];
-    //     const propertyStartIndex = entry['s'];
-    //     const size = entry['z'];
-    //     const type = entry['t'];
-    //     const buffer = payload.slice(startIndex + propertyStartIndex, startIndex + propertyStartIndex + size);
-    //     data[entry['n']] = deserializeValue(buffer, type);
-    //   } else {
-    //     console.log(`found nothing for index ${i}`);
-    //   }
-    // }
-    // return data;
-
   } catch (e) {
     throw new Error('extractPayload() exception (' + e + ')');
   }
 }
-
+/**
+ * Extract payload - this decodes from our binary (wire) format
+ * to a JS object. This supports a wide range of objects.
+ */
 export function extractPayload(value: ArrayBuffer): any {
   // todo: add hack check for version (must be 003)
   return _extractPayload(value);
