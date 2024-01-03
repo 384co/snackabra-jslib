@@ -21,7 +21,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 22b)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 24)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -2322,12 +2322,20 @@ function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext *
     let get = descriptor.get
     descriptor.get = function () {
       const obj = target.constructor.name
-      const rf = `${obj}ReadyFlag` as keyof PropertyDescriptor
-      _sb_assert(rf in this, `'${obj}.${rf} missing yet getter accessed with @Ready pattern (fatal)`)
-      _sb_assert(this[rf], `'${obj}.${propertyKey}' getter accessed but object not 'ready' (fatal)`)
-      const retValue = get.call(this)
-      _sb_assert(retValue != null, `'${obj}.${propertyKey}' getter accessed but return value will be NULL (fatal)`)
-      return retValue
+      const readyFlagSymbol = target.constructor.ReadyFlag;
+      _sb_assert(readyFlagSymbol in this, `'readyFlagSymbol' missing yet getter accessed with @Ready pattern (fatal)`);
+      _sb_assert((this as any)[readyFlagSymbol], `'${obj}.${propertyKey}' getter accessed but object not 'ready' (fatal)`);
+      const retValue = get.call(this);
+      _sb_assert(retValue != null, `'${obj}.${propertyKey}' getter accessed but return value will be NULL (fatal)`);
+      return retValue;
+
+      // const obj = target.constructor.name
+      // const rf = `${obj}ReadyFlag` as keyof PropertyDescriptor
+      // _sb_assert(rf in this, `'${rf} missing yet getter accessed with @Ready pattern (fatal)`)
+      // _sb_assert(this[rf], `'${obj}.${propertyKey}' getter accessed but object not 'ready' (fatal)`)
+      // const retValue = get.call(this)
+      // _sb_assert(retValue != null, `'${obj}.${propertyKey}' getter accessed but return value will be NULL (fatal)`)
+      // return retValue
     }
   }
 }
@@ -2600,7 +2608,9 @@ function parseSB384string(input: string): jwkStruct | undefined {
 class SB384 {
   // ready: Promise<SB384>
   sb384Ready: Promise<SB384>
-  private SB384ReadyFlag: boolean = false // must be named <class>ReadyFlag
+
+  // SB384ReadyFlag: boolean = false // must be named <class>ReadyFlag
+  static ReadyFlag = Symbol('SB384ReadyFlag');
 
   #private?: boolean
 
@@ -2644,6 +2654,8 @@ class SB384 {
    *
    */
   constructor(key?: CryptoKey | JsonWebKey | SBUserPublicKey | SBUserPrivateKey, forcePrivate?: boolean) {
+    (this as any)[SB384.ReadyFlag] = false;
+
     this.sb384Ready = new Promise<SB384>(async (resolve, reject) => {
       try {
         if (!key) {
@@ -2760,6 +2772,9 @@ class SB384 {
 
     // if (DBG) console.log("SB384() - constructor promises set up, promise is:", this.sb384Ready)
   }
+
+  get SB384ReadyFlag() { return (this as any)[SB384.ReadyFlag] }
+  set SB384ReadyFlag(v: boolean) { (this as any)[SB384.ReadyFlag] = v }
 
   get ready() { return this.sb384Ready }
   // get readyFlag() { return this.#SB384ReadyFlag }

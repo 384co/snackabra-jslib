@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 22b)";
+declare const version = "2.0.0-alpha.5 (build 24)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
@@ -156,8 +156,10 @@ export type SBUserPrivateKey = string;
 declare class SB384 {
     #private;
     sb384Ready: Promise<SB384>;
-    private SB384ReadyFlag;
+    static ReadyFlag: symbol;
     constructor(key?: CryptoKey | JsonWebKey | SBUserPublicKey | SBUserPrivateKey, forcePrivate?: boolean);
+    get SB384ReadyFlag(): boolean;
+    set SB384ReadyFlag(v: boolean);
     get ready(): Promise<SB384>;
     get private(): boolean;
     get hash(): SB384Hash;

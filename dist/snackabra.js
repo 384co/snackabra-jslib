@@ -4,7 +4,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0-alpha.5 (build 22b)';
+const version = '2.0.0-alpha.5 (build 24)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = true;
 var DBG2 = false;
@@ -945,9 +945,9 @@ function Ready(target, propertyKey, descriptor) {
         let get = descriptor.get;
         descriptor.get = function () {
             const obj = target.constructor.name;
-            const rf = `${obj}ReadyFlag`;
-            _sb_assert(rf in this, `'${obj}.${rf} missing yet getter accessed with @Ready pattern (fatal)`);
-            _sb_assert(this[rf], `'${obj}.${propertyKey}' getter accessed but object not 'ready' (fatal)`);
+            const readyFlagSymbol = target.constructor.ReadyFlag;
+            _sb_assert(readyFlagSymbol in this, `'readyFlagSymbol' missing yet getter accessed with @Ready pattern (fatal)`);
+            _sb_assert(this[readyFlagSymbol], `'${obj}.${propertyKey}' getter accessed but object not 'ready' (fatal)`);
             const retValue = get.call(this);
             _sb_assert(retValue != null, `'${obj}.${propertyKey}' getter accessed but return value will be NULL (fatal)`);
             return retValue;
@@ -1053,7 +1053,7 @@ function parseSB384string(input) {
 }
 class SB384 {
     sb384Ready;
-    SB384ReadyFlag = false;
+    static ReadyFlag = Symbol('SB384ReadyFlag');
     #private;
     #x;
     #y;
@@ -1062,6 +1062,7 @@ class SB384 {
     #publicUserKey;
     #hash;
     constructor(key, forcePrivate) {
+        this[SB384.ReadyFlag] = false;
         this.sb384Ready = new Promise(async (resolve, reject) => {
             try {
                 if (!key) {
@@ -1147,6 +1148,8 @@ class SB384 {
         })
             .catch((e) => { throw e; });
     }
+    get SB384ReadyFlag() { return this[SB384.ReadyFlag]; }
+    set SB384ReadyFlag(v) { this[SB384.ReadyFlag] = v; }
     get ready() { return this.sb384Ready; }
     get private() { return this.#private; }
     get hash() { return this.#hash; }
