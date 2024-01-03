@@ -848,51 +848,24 @@ export class SBCrypto {
             }
         });
     }
-    encrypt(data, key, params, returnType = 'encryptedContents') {
-        return new Promise(async (resolve, reject) => {
-            try {
-                if (data === null)
-                    reject(new Error('no contents'));
-                if (!params.iv) {
-                    _sb_assert(returnType !== 'arrayBuffer', "Must provide nonce if you just want the arraybuffer back (L1959)");
-                    params.iv = crypto.getRandomValues(new Uint8Array(12));
-                }
-                if (!params.name)
-                    params.name = 'AES-GCM';
-                else
-                    _sb_assert(params.name === 'AES-GCM', "Must be AES-GCM (L1951)");
-                if (typeof data === 'string')
-                    data = (new TextEncoder()).encode(data);
-                const encrypted = await crypto.subtle.encrypt(params, key, data);
-                if (returnType === 'encryptedContents') {
-                    resolve({
-                        content: encrypted,
-                        iv: params.iv
-                    });
-                }
-                else {
-                    resolve(encrypted);
-                }
-            }
-            catch (e) {
-                reject(e);
-            }
-        });
-    }
-    wrap(k, b) {
-        return new Promise((resolve) => {
-            const timestamp = Math.round(Date.now() / 25) * 25;
-            const view = new DataView(new ArrayBuffer(8));
-            view.setFloat64(0, timestamp);
-            sbCrypto.encrypt(b, k, { additionalData: view }).then((c) => { resolve({ ...c, ...{ timestamp: timestamp } }); });
-        });
+    async encrypt(data, key, params) {
+        if (data === null)
+            throw new Error('no contents');
+        if (!params.iv)
+            throw new Error('no nonce');
+        if (!params.name)
+            params.name = 'AES-GCM';
+        else
+            _sb_assert(params.name === 'AES-GCM', "Must be AES-GCM (L1951)");
+        return crypto.subtle.encrypt(params, key, data);
     }
     unwrap(k, o) {
         return new Promise(async (resolve, reject) => {
             try {
                 if (!o.timestamp)
-                    throw new Error(`unwrap() - no timestamp in encrypted contents`);
-                const { content: t, iv: iv } = o;
+                    throw new Error(`unwrap() - no timestamp in encrypted message`);
+                const { contents: t, iv: iv } = o;
+                _sb_assert(t, "no contents in encrypted message");
                 const view = new DataView(new ArrayBuffer(8));
                 view.setFloat64(0, o.timestamp);
                 const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t);
@@ -1252,6 +1225,7 @@ export class SBChannelKeys extends SB384 {
     channelServer;
     #channelPublicKey;
     #channelPrivateKey;
+    #channelOwnerPublicKey;
     constructor(source, handleOrJWK) {
         switch (source) {
             case 'handle':
@@ -1262,6 +1236,8 @@ export class SBChannelKeys extends SB384 {
                     if (this.channelServer && this.channelServer[this.channelServer.length - 1] === '/')
                         this.channelServer = this.channelServer.slice(0, -1);
                     this.#channelId = handle.channelId;
+                    if (this.#channelId === this.ownerChannelId)
+                        this.#channelOwnerPublicKey = this.userPublicKey;
                 }
                 break;
             case 'jwk':
@@ -1269,11 +1245,15 @@ export class SBChannelKeys extends SB384 {
                     const keys = handleOrJWK;
                     super(keys, true);
                     _sb_assert(this.private, "Channel(): jwk provided but it's not private");
+                    this.#channelOwnerPublicKey = this.userPublicKey;
+                    this.#channelId = this.ownerChannelId;
                 }
                 break;
             case 'new':
                 {
                     super();
+                    this.#channelOwnerPublicKey = this.userPublicKey;
+                    this.#channelId = this.ownerChannelId;
                 }
                 break;
             default: {
@@ -1285,15 +1265,42 @@ export class SBChannelKeys extends SB384 {
                 console.log("SBChannelKeys() constructor.");
             await this.sb384Ready;
             try {
-                if (!this.#channelId)
-                    this.#channelId = this.ownerChannelId;
-                const signKeyPair = await crypto.subtle.generateKey({
-                    name: 'ECDH', namedCurve: 'P-384'
-                }, true, ['deriveKey']);
-                this.#channelPrivateKey = signKeyPair.privateKey;
-                this.#channelPublicKey = signKeyPair.publicKey;
-                const channelKeys = new SB384(this.#channelPrivateKey, true);
-                await channelKeys.ready;
+                let channelKeys;
+                if (source === 'handle') {
+                    if (DBG)
+                        console.log("++++ SBChannelKeys initialized from channel server");
+                    await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys', {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                        .then((response) => {
+                        if (!response.ok)
+                            reject("SBChannelKeys(): failed to get channel keys (network response not ok)");
+                        return response.json();
+                    })
+                        .then(async (data) => {
+                        if (data.error)
+                            reject("SBChannelKeys(): failed to get channel keys (error in response)");
+                        _sb_assert(data.channelId === this.#channelId && data.channelPublicKey && data.ownerPublicKey, "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
+                        channelKeys = new SB384(data.channelPublicKey);
+                        await channelKeys.ready;
+                        this.#channelPublicKey = channelKeys.publicKey;
+                        if (this.#channelOwnerPublicKey)
+                            _sb_assert(data.ownerPublicKey === this.#channelOwnerPublicKey, "SBChannelKeys(): channelId matches handle id as owner, but server returns a different owner key");
+                        else
+                            this.#channelOwnerPublicKey = data.ownerPublicKey;
+                    })
+                        .catch((e) => { throw (e); });
+                }
+                else {
+                    const signKeyPair = await crypto.subtle.generateKey({
+                        name: 'ECDH', namedCurve: 'P-384'
+                    }, true, ['deriveKey']);
+                    this.#channelPrivateKey = signKeyPair.privateKey;
+                    this.#channelPublicKey = signKeyPair.publicKey;
+                    channelKeys = new SB384(this.#channelPrivateKey, true);
+                    await channelKeys.ready;
+                }
                 this.#encryptionKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'AES-GCM', true, ['encrypt', 'decrypt']);
                 this.#signKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'HMAC', true, ['sign', 'verify']);
                 this.#channelData = {
@@ -1351,7 +1358,7 @@ class SBMessage {
     channel;
     [SB_MESSAGE_SYMBOL] = true;
     ready;
-    contents;
+    message;
     #encryptionKey;
     MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
     constructor(channel, contents, ttl) {
@@ -1362,10 +1369,16 @@ class SBMessage {
         this.ready = new Promise(async (resolve) => {
             await channel.channelReady;
             this.#encryptionKey = this.channel.encryptionKey;
-            this.contents = {
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const timestamp = Math.round(Date.now() / 25) * 25;
+            const view = new DataView(new ArrayBuffer(8));
+            view.setFloat64(0, timestamp);
+            this.message = {
                 contents: payload,
-                senderUserId: this.channel.userId,
+                encryptedContents: await sbCrypto.encrypt(payload, this.#encryptionKey, { iv: iv, additionalData: view }),
+                sender: this.channel.userId,
                 sign: await sbCrypto.sign(this.channel.privateKey, payload),
+                timestamp: timestamp,
                 ttl: ttl ? ttl : 0xF
             };
             resolve(this);
@@ -1466,15 +1479,13 @@ class Channel extends SBChannelKeys {
         let encryptionKey = this.encryptionKey;
         if (z) {
             let m = {
-                type: 'encrypted',
                 channelID: z[1],
                 timestampPrefix: z[2],
                 _id: z[1] + z[2],
-                encrypted_contents: m01
             };
             let unwrapped;
             try {
-                unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents);
+                unwrapped = await sbCrypto.unwrap(encryptionKey, m);
             }
             catch (e) {
                 const msg = `ERROR: cannot decrypt message with either locked or unlocked key`;
@@ -1483,12 +1494,12 @@ class Channel extends SBChannelKeys {
                 return (undefined);
             }
             let m2 = { ...m, ...extractPayload(unwrapped).payload };
-            if ((m2.verificationToken) && (!m2.senderUserId)) {
+            if ((m2.verificationToken) && (!m2.sender)) {
                 if (DBG)
                     console.error('ERROR: message with verification token is lacking sender identity (cannot be verified).');
                 return (undefined);
             }
-            const sender = new SB384(m2.senderUserId);
+            const sender = new SB384(m2.sender);
             await sender.ready;
             const verifyKey = await sbCrypto.deriveKey(this.privateKey, sender.publicKey, 'HMAC', false, ['sign', 'verify']);
             const v = await sbCrypto.verify(verifyKey, m2.sign, m2.contents);
@@ -1868,10 +1879,7 @@ class ChannelSocket extends Channel {
         const message = jsonParseWrapper(e.data, 'L2239');
         if (DBG)
             console.log("++++++++ readyPromise() received ChannelKeysMessage:", message);
-        _sb_assert(message.ready, `got roomKeys but channel reports it is not ready [${message}]`);
-        this.motd = message.motd;
         _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)');
-        this.locked = message.roomLocked;
         this.adminData = this.api.getAdminData();
         this.#ws.websocket.addEventListener('message', this.#processMessage.bind(this));
         this.#ws.websocket.removeEventListener('message', blocker);
@@ -1909,55 +1917,45 @@ class ChannelSocket extends Channel {
             this.channelSocketReady = this.#channelSocketReadyFactory();
             this.#ChannelSocketReadyFlag = true;
         }
-        return new Promise((resolve, reject) => {
-            message.ready.then((message) => {
-                this.ready.then(() => {
-                    if (!this.#ChannelSocketReadyFlag)
-                        reject("ChannelSocket.send() is confused - ready or not?");
-                    switch (this.#ws.websocket.readyState) {
-                        case 1:
-                            if (this.#traceSocket)
-                                console.log("++++++++ ChannelSocket.send(): Wrapping message contents:", Object.assign({}, message.contents));
-                            const messagePayload = assemblePayload(message.contents);
-                            _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message");
-                            sbCrypto.wrap(message.encryptionKey, messagePayload)
-                                .then((wrappedMessage) => {
-                                const m = JSON.stringify({
-                                    encrypted_contents: wrappedMessage,
-                                });
-                                crypto.subtle.digest('SHA-256', wrappedMessage.content)
-                                    .then((hash) => {
-                                    const messageHash = arrayBufferToBase64(hash);
-                                    if (this.#traceSocket) {
-                                        console.log("++++++++ ChannelSocket.send():Which has hash:");
-                                        console.log(messageHash);
-                                    }
-                                    this.#ack.set(messageHash, resolve);
-                                    this.#ws.websocket.send(m);
-                                    setTimeout(() => {
-                                        if (this.#ack.has(messageHash)) {
-                                            this.#ack.delete(messageHash);
-                                            const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`;
-                                            console.error(msg);
-                                            reject(msg);
-                                        }
-                                        else {
-                                            if (this.#traceSocket)
-                                                console.log("++++++++ ChannelSocket.send() completed sending");
-                                            resolve("success");
-                                        }
-                                    }, this.#ws.timeout);
-                                });
-                            });
-                            break;
-                        case 3:
-                        case 0:
-                        case 2:
-                            const errMsg = 'socket not OPEN - either CLOSED or in the state of CONNECTING/CLOSING';
-                            reject(errMsg);
+        return new Promise(async (resolve, reject) => {
+            await message.ready;
+            await this.ready;
+            if (!this.#ChannelSocketReadyFlag)
+                reject("ChannelSocket.send() is confused - ready or not?");
+            switch (this.#ws.websocket.readyState) {
+                case 1:
+                    if (this.#traceSocket)
+                        console.log("++++++++ ChannelSocket.send() will send message:", Object.assign({}, message));
+                    const messagePayload = assemblePayload(message);
+                    _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message");
+                    const hash = await crypto.subtle.digest('SHA-256', messagePayload);
+                    const messageHash = arrayBufferToBase64(hash);
+                    if (this.#traceSocket) {
+                        console.log("++++++++ ChannelSocket.send():Which has hash:");
+                        console.log(messageHash);
                     }
-                });
-            });
+                    this.#ack.set(messageHash, resolve);
+                    this.#ws.websocket.send(messagePayload);
+                    setTimeout(() => {
+                        if (this.#ack.has(messageHash)) {
+                            this.#ack.delete(messageHash);
+                            const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`;
+                            console.error(msg);
+                            reject(msg);
+                        }
+                        else {
+                            if (this.#traceSocket)
+                                console.log("++++++++ ChannelSocket.send() completed sending");
+                            resolve("success");
+                        }
+                    }, this.#ws.timeout);
+                    break;
+                case 3:
+                case 0:
+                case 2:
+                    const errMsg = 'socket not OPEN - either CLOSED or in the state of CONNECTING/CLOSING';
+                    reject(errMsg);
+            }
         });
     }
 }
@@ -2231,7 +2229,7 @@ export class StorageApi {
         return new Promise(async (resolve, reject) => {
             try {
                 const key = await this.#getObjectKey(keyData, salt);
-                const data = await sbCrypto.encrypt(image, key, { iv: iv }, 'arrayBuffer');
+                const data = await sbCrypto.encrypt(image, key, { iv: iv });
                 const storageToken = await budgetChannel.getStorageToken(data.byteLength);
                 const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data);
                 if (resp_json.error)
@@ -2389,7 +2387,7 @@ export class StorageApi {
                         console.log("encrypted_image: ");
                         console.log(encrypted_image);
                     }
-                    sbCrypto.unwrap(image_key, { content: encrypted_image, iv: iv }).then((padded_img) => {
+                    sbCrypto.unwrap(image_key, { contents: encrypted_image, iv: iv }).then((padded_img) => {
                         const img = this.#unpadData(padded_img);
                         if (DBG) {
                             console.log("#processData(), unwrapped img: ");

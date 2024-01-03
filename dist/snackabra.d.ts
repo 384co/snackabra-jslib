@@ -15,21 +15,22 @@ export interface ChannelData {
     channelPublicKey: SBUserPublicKey;
     storageToken?: string;
 }
-export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encrypted' | 'control';
 export interface ChannelMessage {
-    type: ChannelMessageTypes;
     _id?: string;
     timestampPrefix?: string;
     channelID?: SBChannelId;
-    encryptedContents?: EncryptedContents;
     contents?: ArrayBuffer;
+    sender?: SBUserId;
+    encryptedContents?: ArrayBuffer;
+    timestamp?: number;
+    ttl?: number;
+    iv?: ArrayBuffer;
     sign?: ArrayBuffer;
-    senderUserId?: SBUserId;
     verificationToken?: string;
 }
 export interface ChannelAdminData {
-    room_id?: SBChannelId;
-    join_requests: Array<SBUserId>;
+    channelID?: SBChannelId;
+    joinRequests: Array<SBUserId>;
     capacity: number;
 }
 export interface EncryptParams {
@@ -38,21 +39,8 @@ export interface EncryptParams {
     additionalData?: BufferSource;
     tagLength?: number;
 }
-export interface EncryptedContents {
-    content: ArrayBuffer;
-    iv: ArrayBuffer;
-    timestamp?: number;
-    sender?: SBUserId;
-    sign?: ArrayBuffer;
-}
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
-export interface SBMessageContents {
-    contents?: ArrayBuffer;
-    senderUserId?: SBUserId;
-    sign?: ArrayBuffer;
-    ttl?: number;
-}
 export type SBObjectType = 'f' | 'p' | 'b' | 't';
 export type SBObjectHandleVersions = '1' | '2';
 export declare namespace Interfaces {
@@ -134,10 +122,8 @@ export declare class SBCrypto {
     importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey | undefined>;
     deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
-    encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType?: 'encryptedContents'): Promise<EncryptedContents>;
-    encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
-    wrap(k: CryptoKey, b: ArrayBuffer): Promise<EncryptedContents>;
-    unwrap(k: CryptoKey, o: EncryptedContents): Promise<ArrayBuffer>;
+    encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer>;
+    unwrap(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
     sign(secretKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
     str2ab(string: string): Uint8Array;
@@ -195,7 +181,7 @@ declare class SBMessage {
     channel: Channel;
     [SB_MESSAGE_SYMBOL]: boolean;
     ready: Promise<SBMessage>;
-    contents?: SBMessageContents;
+    message?: ChannelMessage;
     MAX_SB_BODY_SIZE: number;
     constructor(channel: Channel, contents: any, ttl?: number);
     get encryptionKey(): CryptoKey | undefined;
@@ -212,7 +198,7 @@ declare class Channel extends SBChannelKeys {
     get ready(): Promise<Channel>;
     get readyFlag(): boolean;
     get api(): this;
-    deCryptChannelMessage(m00: string, m01: EncryptedContents): Promise<ChannelMessage | undefined>;
+    deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<ChannelMessage | undefined>;
     getLastMessageTimes(): void;
     getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
     send(_msg: SBMessage | string): Promise<string>;
