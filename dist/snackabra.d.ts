@@ -1,24 +1,26 @@
-declare const version = "2.0.0-alpha.5 (build 24)";
+declare const version = "2.0.0-alpha.5 (build 28)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
     channelId: SBChannelId;
     userPrivateKey: SBUserPrivateKey;
+    channelPrivateKey?: SBUserPrivateKey;
     channelServer?: string;
+    channelData?: SBChannelData;
 }
-export interface Dictionary<T> {
-    [index: string]: T;
-}
-export interface ChannelData {
+export interface SBChannelData {
     channelId: SBChannelId;
     ownerPublicKey: SBUserPublicKey;
     channelPublicKey: SBUserPublicKey;
     storageToken?: string;
 }
+export interface Dictionary<T> {
+    [index: string]: T;
+}
 export interface ChannelMessage {
     _id?: string;
     timestampPrefix?: string;
-    channelID?: SBChannelId;
+    channelId?: SBChannelId;
     contents?: ArrayBuffer;
     sender?: SBUserId;
     encryptedContents?: ArrayBuffer;
@@ -26,10 +28,19 @@ export interface ChannelMessage {
     ttl?: number;
     iv?: ArrayBuffer;
     sign?: ArrayBuffer;
-    verificationToken?: string;
+}
+export interface Message {
+    body: any;
+    channelId: SBChannelId;
+    sender: SBUserId;
+    senderPublicKey: SBUserPublicKey;
+    senderTimestamp: number;
+    serverTimestamp: number;
+    eol?: number;
+    _id: string;
 }
 export interface ChannelAdminData {
-    channelID?: SBChannelId;
+    channelId?: SBChannelId;
     joinRequests: Array<SBUserId>;
     capacity: number;
 }
@@ -123,6 +134,7 @@ export declare class SBCrypto {
     exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey | undefined>;
     deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer>;
+    wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey): Promise<ChannelMessage>;
     unwrap(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
     sign(secretKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
@@ -144,8 +156,7 @@ declare class SB384 {
     sb384Ready: Promise<SB384>;
     static ReadyFlag: symbol;
     constructor(key?: CryptoKey | JsonWebKey | SBUserPublicKey | SBUserPrivateKey, forcePrivate?: boolean);
-    get SB384ReadyFlag(): boolean;
-    set SB384ReadyFlag(v: boolean);
+    get SB384ReadyFlag(): any;
     get ready(): Promise<SB384>;
     get private(): boolean;
     get hash(): SB384Hash;
@@ -161,14 +172,12 @@ declare class SB384 {
 export declare class SBChannelKeys extends SB384 {
     #private;
     sbChannelKeysReady: Promise<SBChannelKeys>;
-    private SBChannelKeysReadyFlag;
+    static ReadyFlag: symbol;
     channelServer?: string;
-    constructor(source: 'handle', handle: SBChannelHandle);
-    constructor(source: 'jwk', handleOrJWK: JsonWebKey);
-    constructor(source: 'new');
+    constructor(handle?: SBChannelHandle);
     get ready(): Promise<SBChannelKeys>;
-    get readyFlag(): boolean;
-    get channelData(): ChannelData;
+    get SBChannelKeysReadyFlag(): any;
+    get channelData(): SBChannelData;
     get owner(): boolean;
     get channelId(): string | undefined;
     get encryptionKey(): CryptoKey;
@@ -182,7 +191,6 @@ declare class SBMessage {
     [SB_MESSAGE_SYMBOL]: boolean;
     ready: Promise<SBMessage>;
     message?: ChannelMessage;
-    MAX_SB_BODY_SIZE: number;
     constructor(channel: Channel, contents: any, ttl?: number);
     get encryptionKey(): CryptoKey | undefined;
     send(): Promise<string>;
@@ -190,15 +198,16 @@ declare class SBMessage {
 declare class Channel extends SBChannelKeys {
     #private;
     channelReady: Promise<Channel>;
+    static ReadyFlag: symbol;
     motd?: string;
     locked?: boolean;
     adminData?: Dictionary<any>;
     verifiedGuest: boolean;
     constructor(handle: SBChannelHandle);
     get ready(): Promise<Channel>;
-    get readyFlag(): boolean;
+    get ChannelReadyFlag(): boolean;
     get api(): this;
-    deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<ChannelMessage | undefined>;
+    deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<Message | undefined>;
     getLastMessageTimes(): void;
     getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
     send(_msg: SBMessage | string): Promise<string>;
@@ -224,12 +233,13 @@ declare class Channel extends SBChannelKeys {
 declare class ChannelSocket extends Channel {
     #private;
     channelSocketReady: Promise<ChannelSocket>;
-    constructor(handle: SBChannelHandle, onMessage: (m: ChannelMessage) => void);
+    static ReadyFlag: symbol;
+    constructor(handle: SBChannelHandle, onMessage: (m: Message) => void);
     get ready(): Promise<ChannelSocket>;
-    get readyFlag(): boolean;
+    get ChannelSocketReadyFlag(): boolean;
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
-    set onMessage(f: (m: ChannelMessage) => void);
-    get onMessage(): (m: ChannelMessage) => void;
+    set onMessage(f: (m: Message) => void);
+    get onMessage(): (m: Message) => void;
     set enableTrace(b: boolean);
     send(msg: SBMessage | any): Promise<string>;
 }
@@ -276,7 +286,7 @@ declare class Snackabra {
     sbFetch: typeof SBFetch;
     constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean);
     attach(handle: SBChannelHandle): Promise<Channel>;
-    create(owner: SB384, budget: Channel): Promise<SBChannelHandle>;
+    create(budget: Channel): Promise<SBChannelHandle>;
     connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): ChannelSocket;
     get storage(): StorageApi;
     get crypto(): SBCrypto;

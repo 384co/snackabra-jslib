@@ -4,7 +4,8 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-const version = '2.0.0-alpha.5 (build 24)';
+var _a;
+const version = '2.0.0-alpha.5 (build 28)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 var DBG = true;
 var DBG2 = false;
@@ -101,7 +102,6 @@ export function getRandomValues(buffer) {
         return buffer;
     }
 }
-const messageIdRegex = /([A-Za-z0-9+/_\-=]{64})([01]{42})/;
 const b64_regex = /^([A-Za-z0-9+/_\-=]*)$/;
 function _assertBase64(base64) {
     return b64_regex.test(base64);
@@ -859,12 +859,30 @@ export class SBCrypto {
             _sb_assert(params.name === 'AES-GCM', "Must be AES-GCM (L1951)");
         return crypto.subtle.encrypt(params, key, data);
     }
+    async wrap(body, sender, encryptionKey, signingKey) {
+        const payload = assemblePayload(body);
+        _sb_assert(payload, "wrapMessage(): failed to assemble payload");
+        _sb_assert(payload.byteLength < MAX_SB_BODY_SIZE, `wrapMessage(): body must be smaller than ${MAX_SB_BODY_SIZE / 1024} KiB (we got ${payload.byteLength / 1024} KiB)})`);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const timestamp = Math.round(Date.now() / 25) * 25;
+        const view = new DataView(new ArrayBuffer(8));
+        view.setFloat64(0, timestamp);
+        const message = {
+            contents: payload,
+            encryptedContents: await sbCrypto.encrypt(payload, encryptionKey, { iv: iv, additionalData: view }),
+            iv: iv,
+            sender: sender,
+            sign: await sbCrypto.sign(signingKey, payload),
+            timestamp: timestamp,
+        };
+        return message;
+    }
     unwrap(k, o) {
         return new Promise(async (resolve, reject) => {
             try {
                 if (!o.timestamp)
                     throw new Error(`unwrap() - no timestamp in encrypted message`);
-                const { contents: t, iv: iv } = o;
+                const { encryptedContents: t, iv: iv } = o;
                 _sb_assert(t, "no contents in encrypted message");
                 const view = new DataView(new ArrayBuffer(8));
                 view.setFloat64(0, o.timestamp);
@@ -1106,23 +1124,15 @@ class SB384 {
                 this.#hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', channelBytes));
                 if (DBG2)
                     console.log("SB384() constructor; hash:\n", this.#hash);
-                this.SB384ReadyFlag = true;
+                this[SB384.ReadyFlag] = true;
                 resolve(this);
             }
             catch (e) {
                 reject('ERROR creating SB384 object failed: ' + WrapError(e));
             }
         });
-        this.sb384Ready
-            .then(() => {
-            this.SB384ReadyFlag = true;
-            if (DBG2)
-                console.log("SB384() - constructor wrapping up, ready:", this.SB384ReadyFlag);
-        })
-            .catch((e) => { throw e; });
     }
     get SB384ReadyFlag() { return this[SB384.ReadyFlag]; }
-    set SB384ReadyFlag(v) { this[SB384.ReadyFlag] = v; }
     get ready() { return this.sb384Ready; }
     get private() { return this.#private; }
     get hash() { return this.#hash; }
@@ -1218,97 +1228,83 @@ __decorate([
 export class SBChannelKeys extends SB384 {
     #channelId;
     sbChannelKeysReady;
-    SBChannelKeysReadyFlag = false;
+    static ReadyFlag = Symbol('SBChannelKeysReadyFlag');
     #channelData;
     #encryptionKey;
     #signKey;
     channelServer;
     #channelPublicKey;
     #channelPrivateKey;
-    #channelOwnerPublicKey;
-    constructor(source, handleOrJWK) {
-        switch (source) {
-            case 'handle':
-                {
-                    const handle = handleOrJWK;
-                    super(handle.userPrivateKey, true);
-                    this.channelServer = handle.channelServer;
-                    if (this.channelServer && this.channelServer[this.channelServer.length - 1] === '/')
-                        this.channelServer = this.channelServer.slice(0, -1);
-                    this.#channelId = handle.channelId;
-                    if (this.#channelId === this.ownerChannelId)
-                        this.#channelOwnerPublicKey = this.userPublicKey;
-                }
-                break;
-            case 'jwk':
-                {
-                    const keys = handleOrJWK;
-                    super(keys, true);
-                    _sb_assert(this.private, "Channel(): jwk provided but it's not private");
-                    this.#channelOwnerPublicKey = this.userPublicKey;
-                    this.#channelId = this.ownerChannelId;
-                }
-                break;
-            case 'new':
-                {
-                    super();
-                    this.#channelOwnerPublicKey = this.userPublicKey;
-                    this.#channelId = this.ownerChannelId;
-                }
-                break;
-            default: {
-                throw new Error("Illegal parameters");
+    constructor(handle) {
+        if (handle) {
+            super(handle.userPrivateKey, true);
+            if (this.channelServer) {
+                this.channelServer = handle.channelServer;
+                if (this.channelServer[this.channelServer.length - 1] === '/')
+                    this.channelServer = this.channelServer.slice(0, -1);
             }
+            this.#channelId = handle.channelId;
         }
+        else {
+            super();
+        }
+        this[SBChannelKeys.ReadyFlag] = false;
         this.sbChannelKeysReady = new Promise(async (resolve, reject) => {
             if (DBG)
                 console.log("SBChannelKeys() constructor.");
             await this.sb384Ready;
             try {
-                let channelKeys;
-                if (source === 'handle') {
-                    if (DBG)
-                        console.log("++++ SBChannelKeys initialized from channel server");
-                    await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys', {
-                        method: 'GET',
-                        headers: { 'Content-Type': 'application/json' },
-                    })
-                        .then((response) => {
-                        if (!response.ok)
-                            reject("SBChannelKeys(): failed to get channel keys (network response not ok)");
-                        return response.json();
-                    })
-                        .then(async (data) => {
-                        if (data.error)
-                            reject("SBChannelKeys(): failed to get channel keys (error in response)");
-                        _sb_assert(data.channelId === this.#channelId && data.channelPublicKey && data.ownerPublicKey, "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
-                        channelKeys = new SB384(data.channelPublicKey);
-                        await channelKeys.ready;
-                        this.#channelPublicKey = channelKeys.publicKey;
-                        if (this.#channelOwnerPublicKey)
-                            _sb_assert(data.ownerPublicKey === this.#channelOwnerPublicKey, "SBChannelKeys(): channelId matches handle id as owner, but server returns a different owner key");
-                        else
-                            this.#channelOwnerPublicKey = data.ownerPublicKey;
-                    })
-                        .catch((e) => { throw (e); });
+                if (handle) {
+                    if (handle.channelData) {
+                        this.#channelData = handle.channelData;
+                    }
+                    else {
+                        _sb_assert(this.channelServer, "SBChannelKeys() constructor: need either channelKeys or channelServer");
+                        if (DBG)
+                            console.log("++++ SBChannelKeys initialized from channel server");
+                        await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys', {
+                            method: 'GET',
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                            .then((response) => {
+                            if (!response.ok)
+                                reject("SBChannelKeys(): failed to get channel keys (network response not ok)");
+                            return response.json();
+                        })
+                            .then((cpk) => {
+                            if (cpk.error)
+                                reject("SBChannelKeys(): failed to get channel keys (error in response)");
+                            _sb_assert(cpk.channelId === this.#channelId && cpk.channelPublicKey && cpk.ownerPublicKey, "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
+                            this.#channelData = cpk;
+                        })
+                            .catch((e) => { throw (e); });
+                    }
+                    const ck1 = await (new SB384(this.#channelData.channelPublicKey)).ready;
+                    this.#channelPublicKey = ck1.publicKey;
+                    if (handle.channelPrivateKey) {
+                        const ck2 = await (new SB384(handle.channelPrivateKey, true)).ready;
+                        _sb_assert(ck1.userPublicKey === ck2.userPublicKey, "SBChannelKeys(): channel public key mismatch (?)");
+                        this.#channelPrivateKey = ck2.privateKey;
+                    }
                 }
                 else {
+                    this.#channelId = this.ownerChannelId;
                     const signKeyPair = await crypto.subtle.generateKey({
                         name: 'ECDH', namedCurve: 'P-384'
                     }, true, ['deriveKey']);
                     this.#channelPrivateKey = signKeyPair.privateKey;
                     this.#channelPublicKey = signKeyPair.publicKey;
-                    channelKeys = new SB384(this.#channelPrivateKey, true);
-                    await channelKeys.ready;
+                    const ck = await (new SB384(this.#channelPrivateKey, true)).ready;
+                    this.#channelData = {
+                        channelId: this.#channelId,
+                        ownerPublicKey: this.userPublicKey,
+                        channelPublicKey: ck.userPublicKey
+                    };
                 }
+                _sb_assert(this.SB384ReadyFlag, "SBChannelKeys(): parent SB384 object is not ready (?)");
                 this.#encryptionKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'AES-GCM', true, ['encrypt', 'decrypt']);
                 this.#signKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'HMAC', true, ['sign', 'verify']);
-                this.#channelData = {
-                    channelId: this.#channelId,
-                    ownerPublicKey: this.userPublicKey,
-                    channelPublicKey: channelKeys.userPublicKey,
-                };
-                this.SBChannelKeysReadyFlag = true;
+                this[SBChannelKeys.ReadyFlag] = true;
                 resolve(this);
             }
             catch (e) {
@@ -1317,7 +1313,7 @@ export class SBChannelKeys extends SB384 {
         });
     }
     get ready() { return this.sbChannelKeysReady; }
-    get readyFlag() { return this.SBChannelKeysReadyFlag; }
+    get SBChannelKeysReadyFlag() { return this[SBChannelKeys.ReadyFlag]; }
     get channelData() { return this.#channelData; }
     get owner() { return this.private && this.ownerChannelId === this.channelId; }
     get channelId() { return this.#channelId; }
@@ -1354,33 +1350,20 @@ __decorate([
     Memoize,
     Ready
 ], SBChannelKeys.prototype, "channelPublicKey", null);
+const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
 class SBMessage {
     channel;
     [SB_MESSAGE_SYMBOL] = true;
     ready;
     message;
     #encryptionKey;
-    MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
     constructor(channel, contents, ttl) {
         this.channel = channel;
-        const payload = assemblePayload(contents);
-        _sb_assert(payload, "SBMessage(): failed to assemble payload");
-        _sb_assert(payload.byteLength < this.MAX_SB_BODY_SIZE, `SBMessage(): body must be smaller than ${this.MAX_SB_BODY_SIZE / 1024} KiB (we got ${payload.byteLength / 1024} KiB)})`);
         this.ready = new Promise(async (resolve) => {
             await channel.channelReady;
             this.#encryptionKey = this.channel.encryptionKey;
-            const iv = crypto.getRandomValues(new Uint8Array(12));
-            const timestamp = Math.round(Date.now() / 25) * 25;
-            const view = new DataView(new ArrayBuffer(8));
-            view.setFloat64(0, timestamp);
-            this.message = {
-                contents: payload,
-                encryptedContents: await sbCrypto.encrypt(payload, this.#encryptionKey, { iv: iv, additionalData: view }),
-                sender: this.channel.userId,
-                sign: await sbCrypto.sign(this.channel.privateKey, payload),
-                timestamp: timestamp,
-                ttl: ttl ? ttl : 0xF
-            };
+            this.message = await sbCrypto.wrap(contents, this.channel.userId, this.#encryptionKey, this.channel.privateKey);
+            this.message.ttl = ttl ? ttl : 0xF;
             resolve(this);
         });
     }
@@ -1405,7 +1388,7 @@ __decorate([
 ], SBMessage.prototype, "encryptionKey", null);
 class Channel extends SBChannelKeys {
     channelReady;
-    #ChannelReadyFlag = false;
+    static ReadyFlag = Symbol('ChannelReadyFlag');
     motd = '';
     locked = false;
     adminData;
@@ -1414,25 +1397,25 @@ class Channel extends SBChannelKeys {
     constructor(handle) {
         if (!handle.channelServer)
             throw new Error("Channel(): no channel server provided");
-        super('handle', handle);
+        super(handle);
         this.channelReady =
             this.sbChannelKeysReady
                 .then(() => {
-                this.#ChannelReadyFlag = true;
+                this[Channel.ReadyFlag] = true;
                 return this;
             })
                 .catch(e => { throw e; });
     }
     get ready() { return this.channelReady; }
-    get readyFlag() { return this.#ChannelReadyFlag; }
+    get ChannelReadyFlag() { return this[Channel.ReadyFlag]; }
     get api() { return this; }
     async #callApi(path, body) {
         if (DBG)
             console.log("#callApi:", path);
-        if (!this.#ChannelReadyFlag) {
+        if (!this.channelReady) {
             if (DBG2)
                 console.log("ChannelApi.#callApi: channel not ready (we will wait)");
-            await (this.channelReady);
+            await this.ready;
         }
         const method = 'POST';
         return new Promise(async (resolve, reject) => {
@@ -1451,7 +1434,7 @@ class Channel extends SBChannelKeys {
             };
             let fullBody = {
                 userId: this.userId,
-                channelID: this.channelId,
+                channelId: this.channelId,
                 ...body
             };
             init.body = JSON.stringify(fullBody);
@@ -1475,54 +1458,9 @@ class Channel extends SBChannelKeys {
         });
     }
     async deCryptChannelMessage(m00, m01) {
-        const z = messageIdRegex.exec(m00);
-        let encryptionKey = this.encryptionKey;
-        if (z) {
-            let m = {
-                channelID: z[1],
-                timestampPrefix: z[2],
-                _id: z[1] + z[2],
-            };
-            let unwrapped;
-            try {
-                unwrapped = await sbCrypto.unwrap(encryptionKey, m);
-            }
-            catch (e) {
-                const msg = `ERROR: cannot decrypt message with either locked or unlocked key`;
-                if (DBG)
-                    console.error(msg);
-                return (undefined);
-            }
-            let m2 = { ...m, ...extractPayload(unwrapped).payload };
-            if ((m2.verificationToken) && (!m2.sender)) {
-                if (DBG)
-                    console.error('ERROR: message with verification token is lacking sender identity (cannot be verified).');
-                return (undefined);
-            }
-            const sender = new SB384(m2.sender);
-            await sender.ready;
-            const verifyKey = await sbCrypto.deriveKey(this.privateKey, sender.publicKey, 'HMAC', false, ['sign', 'verify']);
-            const v = await sbCrypto.verify(verifyKey, m2.sign, m2.contents);
-            if (!v) {
-                console.error("***** signature is NOT correct for message (rejecting)");
-                if (DBG) {
-                    console.log("verifyKey:", Object.assign({}, verifyKey));
-                    console.log("m2.sign", Object.assign({}, m2.sign));
-                    console.log("m2.contents", structuredClone(m2.contents));
-                    console.log("Message:", Object.assign({}, m2));
-                }
-                return (undefined);
-            }
-            return (m2);
-        }
-        else {
-            console.error(`++++++++ #processMessage: ERROR - cannot parse channel ID / timestamp, invalid message`);
-            if (DBG) {
-                console.log(Object.assign({}, m00));
-                console.log(Object.assign({}, m01));
-            }
-            return (undefined);
-        }
+        if (DBG)
+            console.log("Asked to decrypt:", m00, m01);
+        return undefined;
     }
     getLastMessageTimes() {
         throw new Error("Channel.getLastMessageTimes(): not supported in 2.0 yet");
@@ -1532,10 +1470,10 @@ class Channel extends SBChannelKeys {
             if (!this.channelId) {
                 reject("Channel.getOldMessages: no channel ID (?)");
             }
-            if (!this.#ChannelReadyFlag) {
+            if (!this.channelReady) {
                 if (DBG)
                     console.log("Channel.getOldMessages: channel not ready (we will wait)");
-                await (this.channelReady);
+                await this.ready;
             }
             let cursorOption = '';
             if (paginate)
@@ -1705,27 +1643,23 @@ __decorate([
 ], Channel.prototype, "budd", null);
 class ChannelSocket extends Channel {
     channelSocketReady;
-    #ChannelSocketReadyFlag = false;
+    static ReadyFlag = Symbol('ChannelSocketReadyFlag');
     #ws;
     #socketServer;
     #onMessage = this.#noMessageHandler;
     #ack = new Map();
     #traceSocket = false;
-    #resolveFirstMessage = () => { _sb_exception('L2461', 'this should never be called'); };
-    #firstMessageEventHandlerReference = (_e) => { _sb_exception('L2462', 'this should never be called'); };
     constructor(handle, onMessage) {
         _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided');
-        if (handle.hasOwnProperty('channelId') && handle.hasOwnProperty('userPrivateKey')) {
-            if (!handle.channelServer)
-                throw new Error("ChannelSocket(): no channel server provided (required)");
-            super(handle);
-            this.#socketServer = handle.channelServer.replace(/^http/, 'ws');
-        }
-        else {
+        if (!handle.hasOwnProperty('channelId') || !handle.hasOwnProperty('userPrivateKey'))
             throw new Error("ChannelSocket(): first argument must be valid SBChannelHandle");
-        }
+        if (!handle.channelServer)
+            throw new Error("ChannelSocket(): no channel server provided (required)");
+        super(handle);
+        this[_a.ReadyFlag] = false;
+        this.#socketServer = handle.channelServer.replace(/^http/, 'ws');
         this.#onMessage = onMessage;
-        const url = this.#socketServer + '/api/room/' + this.channelId + '/websocket';
+        const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket';
         this.#ws = {
             url: url,
             ready: false,
@@ -1735,41 +1669,28 @@ class ChannelSocket extends Channel {
         this.channelSocketReady = this.#channelSocketReadyFactory();
     }
     #noMessageHandler(_m) { _sb_assert(false, "NO MESSAGE HANDLER"); }
-    #channelSocketReadyFactory() {
+    async #processMessage(msg) {
         if (DBG)
-            console.log("++++ CREATING ChannelSocket.readyPromise()");
-        return new Promise((resolve, reject) => {
+            console.log("Received socket message:", msg);
+    }
+    #channelSocketReadyFactory() {
+        return new Promise(async (resolve, reject) => {
             if (DBG)
                 console.log("++++ STARTED ChannelSocket.readyPromise()");
-            this.#resolveFirstMessage = resolve;
             const url = this.#ws.url;
-            if (DBG) {
-                console.log("++++++++ readyPromise() has url:");
-                console.log(url);
-            }
-            if (!this.#ws.websocket)
-                this.#ws.websocket = new WebSocket(this.#ws.url);
-            if (this.#ws.websocket.readyState === 3) {
+            if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2)
                 this.#ws.websocket = new WebSocket(url);
-            }
-            else if (this.#ws.websocket.readyState === 2) {
-                console.warn("STRANGE - trying to use a ChannelSocket that is in the process of closing ...");
-                this.#ws.websocket = new WebSocket(url);
-            }
-            this.#ws.websocket.addEventListener('open', () => {
+            this.#ws.websocket.addEventListener('open', async () => {
                 this.#ws.closed = false;
-                this.channelReady.then(() => {
-                    _sb_assert(this.userId, "ChannelSocket.readyPromise(): no userId of channel owner/user?");
-                    this.#ws.init = { userId: this.userId };
-                    if (DBG) {
-                        console.log("++++++++ readyPromise() constructed init:");
-                        console.log(this.#ws.init);
-                    }
-                    this.#ws.websocket.send(JSON.stringify(this.#ws.init));
-                });
+                await this.ready;
+                this.#ws.init = { userId: this.userId };
+                if (DBG) {
+                    console.log("++++++++ readyPromise() constructed init:");
+                    console.log(this.#ws.init);
+                }
+                this.#ws.websocket.send(JSON.stringify(this.#ws.init));
             });
-            this.#firstMessageEventHandlerReference = this.#firstMessageEventHandler.bind(this);
-            this.#ws.websocket.addEventListener('message', this.#firstMessageEventHandlerReference);
+            this.#ws.websocket.addEventListener('message', this.#processMessage);
             this.#ws.websocket.addEventListener('close', (e) => {
                 this.#ws.closed = true;
                 if (!e.wasClean) {
@@ -1789,107 +1710,22 @@ class ChannelSocket extends Channel {
                 reject('ChannelSocket creation error (see log)');
             });
             setTimeout(() => {
-                if (!this.#ChannelSocketReadyFlag) {
-                    console.warn("ChannelSocket() - this socket is not resolving (waited 10s) ...");
-                    console.log(this);
-                    reject('ChannelSocket() - this socket is not resolving (waited 10s) ...');
+                if (!this[_a.ReadyFlag]) {
+                    const msg = "ChannelSocket() - this socket is not resolving (waited 10s) ...";
+                    console.warn(msg);
+                    reject(msg);
                 }
                 else {
-                    if (DBG) {
-                        console.log("ChannelSocket() - this socket resolved");
-                        console.log(this);
-                    }
+                    if (DBG)
+                        console.log("ChannelSocket() - this socket resolved", this);
                 }
             }, 10000);
+            this[_a.ReadyFlag] = true;
+            resolve(this);
         });
     }
-    async #processMessage(msg) {
-        let m = msg.data;
-        if (this.#traceSocket) {
-            console.log("... raw unwrapped message:");
-            console.log(structuredClone(m));
-        }
-        const data = jsonParseWrapper(m, 'L1489');
-        if (this.#traceSocket) {
-            console.log("... json unwrapped version of raw message:");
-            console.log(Object.assign({}, data));
-        }
-        if (typeof this.#onMessage !== 'function')
-            _sb_exception('ChannelSocket', 'received message but there is no handler');
-        const message = data;
-        try {
-            const m01 = Object.entries(message)[0][1];
-            if (Object.keys(m01)[0] === 'encrypted_contents') {
-                if (DBG)
-                    console.log("++++++++ #processMessage: received message:", m01.encrypted_contents.content);
-                const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(m01.encrypted_contents.content));
-                const ack_id = arrayBufferToBase64(hash);
-                if (DBG2)
-                    console.log("Received message with hash:", ack_id);
-                const r = this.#ack.get(ack_id);
-                if (r) {
-                    if (this.#traceSocket)
-                        console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`);
-                    this.#ack.delete(ack_id);
-                    r("success");
-                }
-                const m00 = Object.entries(data)[0][0];
-                const iv_b64 = m01.encrypted_contents.iv;
-                if ((iv_b64) && (_assertBase64(iv_b64)) && (iv_b64.length == 16)) {
-                    m01.encrypted_contents.iv = base64ToArrayBuffer(iv_b64);
-                    try {
-                        const m = await this.deCryptChannelMessage(m00, m01.encrypted_contents);
-                        if (!m)
-                            return;
-                        if (this.#traceSocket) {
-                            console.log("++++++++ #processMessage: passing to message handler:");
-                            console.log(Object.assign({}, m));
-                        }
-                        this.#onMessage(m);
-                    }
-                    catch {
-                        console.warn('Error decrypting message, dropping (ignoring) message');
-                    }
-                }
-                else {
-                    console.error('#processMessage: - iv is malformed, should be 16-char b64 string (ignoring)');
-                }
-            }
-            else {
-                console.warn("++++++++ #processMessage: can't decipher message, passing along unchanged:");
-                console.log(Object.assign({}, message));
-                this.onMessage(message);
-            }
-        }
-        catch (e) {
-            console.log(`++++++++ #processMessage: caught exception while decyphering (${e}), passing it along unchanged`);
-            this.onMessage(message);
-        }
-    }
-    #insideFirstMessageHandler(e) {
-        console.warn("WARNING: firstMessageEventHandler() called recursively (?)");
-        console.warn(e);
-    }
-    #firstMessageEventHandler(e) {
-        if (this.#traceSocket)
-            console.log("FIRST MESSAGE HANDLER CALLED");
-        const blocker = this.#insideFirstMessageHandler.bind(this);
-        this.#ws.websocket.addEventListener('message', blocker);
-        this.#ws.websocket.removeEventListener('message', this.#firstMessageEventHandlerReference);
-        const message = jsonParseWrapper(e.data, 'L2239');
-        if (DBG)
-            console.log("++++++++ readyPromise() received ChannelKeysMessage:", message);
-        _sb_assert(this.readyFlag, '#ChannelReadyFlag is false, parent not ready (?)');
-        this.adminData = this.api.getAdminData();
-        this.#ws.websocket.addEventListener('message', this.#processMessage.bind(this));
-        this.#ws.websocket.removeEventListener('message', blocker);
-        if (DBG)
-            console.log("++++++++ readyPromise() all done - resolving!");
-        this.#ChannelSocketReadyFlag = true;
-        this.#resolveFirstMessage(this);
-    }
     get ready() { return this.channelSocketReady; }
-    get readyFlag() { return this.#ChannelSocketReadyFlag; }
+    get ChannelSocketReadyFlag() { return this[_a.ReadyFlag]; }
     get status() {
         if (!this.#ws.websocket)
             return 'CLOSED';
@@ -1915,12 +1751,12 @@ class ChannelSocket extends Channel {
             if (this.#traceSocket)
                 console.info("send() triggered reset of #readyPromise() (normal)");
             this.channelSocketReady = this.#channelSocketReadyFactory();
-            this.#ChannelSocketReadyFlag = true;
+            this[_a.ReadyFlag] = false;
         }
         return new Promise(async (resolve, reject) => {
             await message.ready;
             await this.ready;
-            if (!this.#ChannelSocketReadyFlag)
+            if (!this.ChannelSocketReadyFlag)
                 reject("ChannelSocket.send() is confused - ready or not?");
             switch (this.#ws.websocket.readyState) {
                 case 1:
@@ -1959,6 +1795,7 @@ class ChannelSocket extends Channel {
         });
     }
 }
+_a = ChannelSocket;
 __decorate([
     Ready
 ], ChannelSocket.prototype, "onMessage", null);
@@ -2489,26 +2326,16 @@ class Snackabra {
             }
         });
     }
-    create(owner, budget) {
+    create(budget) {
         return new Promise(async (resolve, reject) => {
             try {
-                let _storageToken;
-                let _sbChannelKeys;
-                if (owner instanceof SB384) {
-                    _sbChannelKeys = new SBChannelKeys('jwk', owner.jwkPrivate);
-                }
-                else {
-                    const msg = `Wrong parameters to create channel: ${owner}`;
-                    console.error(msg);
-                    reject(msg);
-                    return;
-                }
-                _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET);
-                if (!_storageToken)
-                    reject('[create channel] Failed to get storage token for the provided channel');
-                _sbChannelKeys.channelData.storageToken = _storageToken;
-                const data = new TextEncoder().encode(JSON.stringify(_sbChannelKeys.channelData));
-                let resp = await SBFetch(this.channelServer + '/api/v2/channel/' + _sbChannelKeys.channelId + '/create', {
+                const _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET);
+                _sb_assert(_storageToken, '[create channel] Failed to get storage token for the provided channel');
+                const channelKeys = await new SBChannelKeys().ready;
+                const channelData = channelKeys.channelData;
+                channelData.storageToken = _storageToken;
+                const data = new TextEncoder().encode(JSON.stringify(channelData));
+                let resp = await SBFetch(this.channelServer + '/api/v2/channel/' + channelData.channelId + '/create', {
                     method: 'POST',
                     body: data
                 });
@@ -2521,9 +2348,11 @@ class Snackabra {
                 }
                 resolve({
                     [SB_CHANNEL_HANDLE_SYMBOL]: true,
-                    channelId: _sbChannelKeys.channelId,
-                    userPrivateKey: _sbChannelKeys.userPrivateKey,
-                    channelServer: this.channelServer
+                    channelId: channelData.channelId,
+                    userPrivateKey: channelKeys.userPrivateKey,
+                    channelPrivateKey: (await new SB384(channelKeys.channelPrivateKey).ready).userPrivateKey,
+                    channelServer: this.channelServer,
+                    channelData: channelData
                 });
             }
             catch (e) {
