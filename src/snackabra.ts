@@ -80,6 +80,18 @@ export interface SBChannelHandle {
 }
 
 /**
+ * This is whatever token system the channel server uses.
+ * 
+ * For example with 'channel-server', you could command-line bootstrap with
+ * something like:
+ * 
+ * '''bash
+ *   wrangler kv:key put --preview false --binding=LEDGER_NAMESPACE "zzR5Ljv8LlYjgOnO5yOr4Gtgr9yVS7dTAQkJeVQ4I7w" '{"used":false,"size":33554432}'
+ * 
+ */
+export type SBStorageToken = string
+
+/**
  * This is what the Channel Server knows about the channel.
  * 
  * Note: all of these are (ultimately) strings, and are sent straight-up
@@ -89,7 +101,7 @@ export interface SBChannelData {
   channelId: SBChannelId,
   ownerPublicKey: SBUserPublicKey,
   channelPublicKey: SBUserPublicKey,
-  storageToken?: string, // used when creating/authorizing a channel from a handle
+  storageToken?: SBStorageToken, // used when creating/authorizing a channel from a handle
 }
 
 
@@ -2280,7 +2292,8 @@ class SB384 {
   /** ChannelID that corresponds to this, if it's an owner */
   @Memoize @Ready get ownerChannelId() {
     // error even though there's a #hash, since we know it needs to be private
-    if (!this.private) throw new Error(`ownerChannelId() - not a private key, cannot be an owner key`)
+    // ... update, hm, actually this is still used as "whatif" for non-owner
+    // if (!this.private) throw new Error(`ownerChannelId() - not a private key, cannot be an owner key`)
     return this.hash
   }
 
@@ -2438,7 +2451,7 @@ export class SBChannelKeys extends SB384 {
   constructor(handle?: SBChannelHandle)  {
     if (handle) {
       super(handle.userPrivateKey, true);
-      if (this.channelServer) {
+      if (handle.channelServer) {
         this.channelServer = handle.channelServer;
         // make sure there are no trailing '/' in channelServer
         if (this.channelServer![this.channelServer!.length - 1] === '/')
@@ -2859,10 +2872,11 @@ class Channel extends SBChannelKeys {
   async #callApi(path: string, body: any): Promise<any>
   async #callApi(path: string, body?: any): Promise<any> {
     if (DBG) console.log("#callApi:", path)
-    if (!this.channelReady) {
-      if (DBG2) console.log("ChannelApi.#callApi: channel not ready (we will wait)")
-      await this.ready
-    }
+    await this.channelReady
+    // if (!this.channelReady) {
+    //   if (DBG2) console.log("ChannelApi.#callApi: channel not ready (we will wait)")
+    //   await this.ready
+    // }
     // const method = body ? 'POST' : 'GET'
     const method = 'POST' // we're always providing userId, ergo always a POST
     return new Promise(async (resolve, reject) => {
@@ -3463,7 +3477,7 @@ class ChannelSocket extends Channel {
     this.#socketServer = handle.channelServer.replace(/^http/, 'ws')
     this.#onMessage = onMessage
     // url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
-    const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket'
+    const url = this.#socketServer + '/api/v2/channel/' + handle.channelId + '/websocket'
     this.#ws = {
       url: url,
       // websocket: new WebSocket(url),
@@ -4704,17 +4718,28 @@ class Snackabra {
    * you to create new channels when a 'guest' on some other channel (for example),
    * or to create a new channel with a minimal budget.
    */
-  create(budget: Channel): Promise<SBChannelHandle> {
+  create(budgetChannelOrToken: Channel | SBStorageToken): Promise<SBChannelHandle> {
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       try {
-        // get a token to spend
-        const _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET)
-        _sb_assert(_storageToken, '[create channel] Failed to get storage token for the provided channel')
+        let _storageToken: SBStorageToken
+        if (typeof budgetChannelOrToken === 'string') {
+          _storageToken = budgetChannelOrToken as SBStorageToken
+        } else if (budgetChannelOrToken instanceof Channel) {
+          const budget = budgetChannelOrToken as Channel
+          // get a token to spend
+          await budget.ready
+          _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET)
+          _sb_assert(_storageToken, '[create channel] Failed to get storage token for the provided channel')
+        } else {
+          reject('Invalid parameter to create() - need a token or a budget channel')
+        }
+
         // create all the keys
         const channelKeys = await new SBChannelKeys().ready
 
         const channelData = channelKeys.channelData
-        channelData.storageToken = _storageToken
+        channelData.storageToken = _storageToken!
+        if (DBG) console.log("Will try to create channel with channelData:", channelData)
 
         const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
         let resp: Dictionary<any> = await SBFetch(this.channelServer + '/api/v2/channel/' + channelData.channelId + '/create',
@@ -4729,7 +4754,6 @@ class Snackabra {
           console.error(msg)
           reject(msg); return;
         }
-
         resolve({
           [SB_CHANNEL_HANDLE_SYMBOL]: true,
           channelId: channelData.channelId!,
@@ -4738,7 +4762,6 @@ class Snackabra {
           channelServer: this.channelServer,
           channelData: channelData
         })
-
       } catch (e) {
         const msg = `Creating channel did not succeed: ${e}`
         console.error(msg);

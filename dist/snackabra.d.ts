@@ -8,11 +8,12 @@ export interface SBChannelHandle {
     channelServer?: string;
     channelData?: SBChannelData;
 }
+export type SBStorageToken = string;
 export interface SBChannelData {
     channelId: SBChannelId;
     ownerPublicKey: SBUserPublicKey;
     channelPublicKey: SBUserPublicKey;
-    storageToken?: string;
+    storageToken?: SBStorageToken;
 }
 export interface Dictionary<T> {
     [index: string]: T;
@@ -286,7 +287,7 @@ declare class Snackabra {
     sbFetch: typeof SBFetch;
     constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean);
     attach(handle: SBChannelHandle): Promise<Channel>;
-    create(budget: Channel): Promise<SBChannelHandle>;
+    create(budgetChannelOrToken: Channel | SBStorageToken): Promise<SBChannelHandle>;
     connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): ChannelSocket;
     get storage(): StorageApi;
     get crypto(): SBCrypto;

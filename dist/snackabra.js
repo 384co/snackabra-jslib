@@ -1138,8 +1138,6 @@ class SB384 {
     get hash() { return this.#hash; }
     get userId() { return this.hash; }
     get ownerChannelId() {
-        if (!this.private)
-            throw new Error(`ownerChannelId() - not a private key, cannot be an owner key`);
         return this.hash;
     }
     get privateKey() {
@@ -1238,7 +1236,7 @@ export class SBChannelKeys extends SB384 {
     constructor(handle) {
         if (handle) {
             super(handle.userPrivateKey, true);
-            if (this.channelServer) {
+            if (handle.channelServer) {
                 this.channelServer = handle.channelServer;
                 if (this.channelServer[this.channelServer.length - 1] === '/')
                     this.channelServer = this.channelServer.slice(0, -1);
@@ -1412,11 +1410,7 @@ class Channel extends SBChannelKeys {
     async #callApi(path, body) {
         if (DBG)
             console.log("#callApi:", path);
-        if (!this.channelReady) {
-            if (DBG2)
-                console.log("ChannelApi.#callApi: channel not ready (we will wait)");
-            await this.ready;
-        }
+        await this.channelReady;
         const method = 'POST';
         return new Promise(async (resolve, reject) => {
             if (!this.channelId)
@@ -1659,7 +1653,7 @@ class ChannelSocket extends Channel {
         this[_a.ReadyFlag] = false;
         this.#socketServer = handle.channelServer.replace(/^http/, 'ws');
         this.#onMessage = onMessage;
-        const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket';
+        const url = this.#socketServer + '/api/v2/channel/' + handle.channelId + '/websocket';
         this.#ws = {
             url: url,
             ready: false,
@@ -2326,14 +2320,27 @@ class Snackabra {
             }
         });
     }
-    create(budget) {
+    create(budgetChannelOrToken) {
         return new Promise(async (resolve, reject) => {
             try {
-                const _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET);
-                _sb_assert(_storageToken, '[create channel] Failed to get storage token for the provided channel');
+                let _storageToken;
+                if (typeof budgetChannelOrToken === 'string') {
+                    _storageToken = budgetChannelOrToken;
+                }
+                else if (budgetChannelOrToken instanceof Channel) {
+                    const budget = budgetChannelOrToken;
+                    await budget.ready;
+                    _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET);
+                    _sb_assert(_storageToken, '[create channel] Failed to get storage token for the provided channel');
+                }
+                else {
+                    reject('Invalid parameter to create() - need a token or a budget channel');
+                }
                 const channelKeys = await new SBChannelKeys().ready;
                 const channelData = channelKeys.channelData;
                 channelData.storageToken = _storageToken;
+                if (DBG)
+                    console.log("Will try to create channel with channelData:", channelData);
                 const data = new TextEncoder().encode(JSON.stringify(channelData));
                 let resp = await SBFetch(this.channelServer + '/api/v2/channel/' + channelData.channelId + '/create', {
                     method: 'POST',
