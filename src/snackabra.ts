@@ -56,8 +56,7 @@ export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024; // 8 MB
 //   shard_server?: string
 // }
 
-/** SBChannelHandle
- *
+/** 
  * Complete descriptor of a channel. The channel ID is a hash
  * of the public key of the channel owner. The channel key is
  * the private key with which we are joining the channel. 
@@ -80,18 +79,6 @@ export interface SBChannelHandle {
 }
 
 /**
- * This is whatever token system the channel server uses.
- * 
- * For example with 'channel-server', you could command-line bootstrap with
- * something like:
- * 
- * '''bash
- *   wrangler kv:key put --preview false --binding=LEDGER_NAMESPACE "zzR5Ljv8LlYjgOnO5yOr4Gtgr9yVS7dTAQkJeVQ4I7w" '{"used":false,"size":33554432}'
- * 
- */
-export type SBStorageToken = string
-
-/**
  * This is what the Channel Server knows about the channel.
  * 
  * Note: all of these are (ultimately) strings, and are sent straight-up
@@ -103,6 +90,20 @@ export interface SBChannelData {
   channelPublicKey: SBUserPublicKey,
   storageToken?: SBStorageToken, // used when creating/authorizing a channel from a handle
 }
+
+/**
+ * This is whatever token system the channel server uses.
+ * 
+ * For example with 'channel-server', you could command-line bootstrap with
+ * something like:
+ * 
+ * '''bash
+ *   wrangler kv:key put --preview false --binding=LEDGER_NAMESPACE "zzR5Ljv8LlYjgOnO5yOr4Gtgr9yVS7dTAQkJeVQ4I7w" '{"used":false,"size":33554432}'
+ * 
+ */
+export type SBStorageToken = string
+
+
 
 
 interface WSProtocolOptions {
@@ -1270,23 +1271,21 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
   switch(type) {
     case 'o':
       return _extractPayload(buffer);
-    case 'n':
+    case 'n': // Number
       return new DataView(buffer).getFloat64(0);
-    case 'i':
+    case 'i': // Integer (32 bit signed)
       return new DataView(buffer).getInt32(0);
-    case 'd':
+    case 'd': // Date
       return new Date(new DataView(buffer).getFloat64(0));
-    case 'b':
+    case 'b': // Boolean
       return new Uint8Array(buffer)[0] === 1;
-    case 's':
+    case 's': // String
       return new TextDecoder().decode(buffer);
-    case 'b':
-      return buffer;
-    case 'a':
+    case 'a': // Array
       const arrayPayload = _extractPayload(buffer);
       if (!arrayPayload) throw new Error(`Failed to assemble payload for ${type}`);
       return Object.values(arrayPayload);
-    case 'm':
+    case 'm': // Map
       const mapPayload = _extractPayload(buffer);
       if (!mapPayload) throw new Error(`Failed to assemble payload for ${type}`);
       const map = new Map();
@@ -1294,7 +1293,7 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
         map.set(mapPayload[key][0], mapPayload[key][1]);
       }
       return map;
-    case 't':
+    case 't': // Set
       const setPayload = _extractPayload(buffer);
       if (!setPayload) throw new Error(`Failed to assemble payload for ${type}`);
       const set = new Set();
@@ -1302,13 +1301,13 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
         set.add(setPayload[key]);
       }
       return set;
-    case 'x':
+    case 'x': // ArrayBuffer
       return buffer;
-    case '8':
+    case '8': // Uint8Array
       return new Uint8Array(buffer);
-    case '0':
+    case '0': // Null
       return null;
-    case 'u':
+    case 'u': // Undefined
       return undefined;
     case 'v':
     case '<unsupported>':
@@ -1818,15 +1817,15 @@ export class SBCrypto {  /******************************************************
   /**
    * SBCrypto.sign()
    */
-  async sign(secretKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer> {
-    return await crypto.subtle.sign('HMAC', secretKey, contents);
+  sign(secretKey: CryptoKey, contents: ArrayBuffer) {
+    return crypto.subtle.sign('HMAC', secretKey, contents);
   }
 
   /**
    * SBCrypto.verify()
    */
-  async verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer) {
-    return await crypto.subtle.verify('HMAC', verifyKey, sign, contents)
+  verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer) {
+    return crypto.subtle.verify('HMAC', verifyKey, sign, contents)
   }
 
   /**
@@ -2868,11 +2867,10 @@ class Channel extends SBChannelKeys {
   // @Memoize @Ready get capacity() { return this.#capacity }
   // @Memoize get channelServer() { return this.#channelServer }
 
-  async #callApi(path: string): Promise<any>
-  async #callApi(path: string, body: any): Promise<any>
-  async #callApi(path: string, body?: any): Promise<any> {
+  #callApi(path: string): Promise<any>
+  #callApi(path: string, body: any): Promise<any>
+  #callApi(path: string, body?: any): Promise<any> {
     if (DBG) console.log("#callApi:", path)
-    await this.channelReady
     // if (!this.channelReady) {
     //   if (DBG2) console.log("ChannelApi.#callApi: channel not ready (we will wait)")
     //   await this.ready
@@ -2880,14 +2878,20 @@ class Channel extends SBChannelKeys {
     // const method = body ? 'POST' : 'GET'
     const method = 'POST' // we're always providing userId, ergo always a POST
     return new Promise(async (resolve, reject) => {
+      if (DBG) console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", body)
+      // await this.channelReady
       if (!this.channelId)
         reject("ChannelApi.#callApi: no channel ID (?)")
-      await (this.ready)
+
       let authString = '';
       const token_data = (new TextEncoder).encode(new Date().getTime().toString())
       // ToDo: this is outdated (and weak) auth; should sign with user key any api call
       // authString = token_data + '.' + await sbCrypto.sign(this.channelSignKey, token_data)
-      authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.privateKey, token_data))
+
+      if (DBG) console.log("will sign using:", this.privateKey, token_data)
+      authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.signKey, token_data))
+      if (DBG) console.log("finished signing, got authstring:", authString)
+
       let init: RequestInit = {
         method: method,
         headers: {
@@ -2904,16 +2908,20 @@ class Channel extends SBChannelKeys {
       // if (body) {
       //   init.body = JSON.stringify(body);
       // }
-      await (this.ready)
-      SBFetch(this.channelServer + '/api/room/' + this.channelId! + path, init)
+      // await (this.ready)
+
+      if (DBG) console.log("ChannelApi.#callApi: calling fetch with init:", init)
+      SBFetch(this.channelServer + '/api/v2/channel/' + this.channelId! + path, init)
         .then(async (response: Response) => {
           const retValue = await response.json()
           if ((!response.ok) || (retValue.error)) {
             let apiErrorMsg = 'Network or Server error on Channel API call'
             if (response.status) apiErrorMsg += ' [' + response.status + ']'
             if (retValue.error) apiErrorMsg += ': ' + retValue.error
+            if (DBG) console.error("ChannelApi.#callApi error:", apiErrorMsg)
             reject(new Error(apiErrorMsg))
           } else {
+            if (DBG) console.log("ChannelApi.#callApi: success")
             resolve(retValue)
           }
         })
@@ -3308,15 +3316,13 @@ class Channel extends SBChannelKeys {
   /**
    * returns a storage token (promise); basic consumption of channel budget
    */
-  @Ready getStorageToken(size: number): Promise<string> {
-    return new Promise((resolve, reject) => {
-      this.#callApi(`/storageRequest?size=${size}`)
-        .then((storageTokenReq) => {
-          if (storageTokenReq.hasOwnProperty('error')) reject(`storage token request error (${storageTokenReq.error})`)
-          resolve(JSON.stringify(storageTokenReq))
-        })
-        .catch((e: Error) => { reject("ChannelApi (getStorageToken) Error [3]: " + WrapError(e)) })
-    });
+  @Ready async getStorageToken(size: number): Promise<string> {
+    const storageTokenReq = await this.#callApi(`/storageRequest?size=${size}`)
+    _sb_assert(!storageTokenReq.hasOwnProperty('error'),
+      `storage token request error (${storageTokenReq.error})`)
+    // return(JSON.stringify(storageTokenReq))
+    if (DBG) console.log("getStorageToken():", storageTokenReq)
+    return storageTokenReq
   }
 
   // ToDo: if both keys and storage are specified, should we check for server secret?
@@ -4719,6 +4725,7 @@ class Snackabra {
    * or to create a new channel with a minimal budget.
    */
   create(budgetChannelOrToken: Channel | SBStorageToken): Promise<SBChannelHandle> {
+    _sb_assert(budgetChannelOrToken !== null, '[create channel] Invalid parameter (null)')
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       try {
         let _storageToken: SBStorageToken

@@ -596,8 +596,6 @@ function deserializeValue(buffer, type) {
             return new Uint8Array(buffer)[0] === 1;
         case 's':
             return new TextDecoder().decode(buffer);
-        case 'b':
-            return buffer;
         case 'a':
             const arrayPayload = _extractPayload(buffer);
             if (!arrayPayload)
@@ -896,11 +894,11 @@ export class SBCrypto {
             }
         });
     }
-    async sign(secretKey, contents) {
-        return await crypto.subtle.sign('HMAC', secretKey, contents);
+    sign(secretKey, contents) {
+        return crypto.subtle.sign('HMAC', secretKey, contents);
     }
-    async verify(verifyKey, sign, contents) {
-        return await crypto.subtle.verify('HMAC', verifyKey, sign, contents);
+    verify(verifyKey, sign, contents) {
+        return crypto.subtle.verify('HMAC', verifyKey, sign, contents);
     }
     str2ab(string) {
         return new TextEncoder().encode(string);
@@ -1407,18 +1405,22 @@ class Channel extends SBChannelKeys {
     get ready() { return this.channelReady; }
     get ChannelReadyFlag() { return this[Channel.ReadyFlag]; }
     get api() { return this; }
-    async #callApi(path, body) {
+    #callApi(path, body) {
         if (DBG)
             console.log("#callApi:", path);
-        await this.channelReady;
         const method = 'POST';
         return new Promise(async (resolve, reject) => {
+            if (DBG)
+                console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", body);
             if (!this.channelId)
                 reject("ChannelApi.#callApi: no channel ID (?)");
-            await (this.ready);
             let authString = '';
             const token_data = (new TextEncoder).encode(new Date().getTime().toString());
-            authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.privateKey, token_data));
+            if (DBG)
+                console.log("will sign using:", this.privateKey, token_data);
+            authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.signKey, token_data));
+            if (DBG)
+                console.log("finished signing, got authstring:", authString);
             let init = {
                 method: method,
                 headers: {
@@ -1432,8 +1434,9 @@ class Channel extends SBChannelKeys {
                 ...body
             };
             init.body = JSON.stringify(fullBody);
-            await (this.ready);
-            SBFetch(this.channelServer + '/api/room/' + this.channelId + path, init)
+            if (DBG)
+                console.log("ChannelApi.#callApi: calling fetch with init:", init);
+            SBFetch(this.channelServer + '/api/v2/channel/' + this.channelId + path, init)
                 .then(async (response) => {
                 const retValue = await response.json();
                 if ((!response.ok) || (retValue.error)) {
@@ -1442,9 +1445,13 @@ class Channel extends SBChannelKeys {
                         apiErrorMsg += ' [' + response.status + ']';
                     if (retValue.error)
                         apiErrorMsg += ': ' + retValue.error;
+                    if (DBG)
+                        console.error("ChannelApi.#callApi error:", apiErrorMsg);
                     reject(new Error(apiErrorMsg));
                 }
                 else {
+                    if (DBG)
+                        console.log("ChannelApi.#callApi: success");
                     resolve(retValue);
                 }
             })
@@ -1533,16 +1540,12 @@ class Channel extends SBChannelKeys {
     acceptVisitor(userId) {
         console.warn(`WARNING: acceptVisitor(${userId}) on channel api has not been tested/debugged fully ..`);
     }
-    getStorageToken(size) {
-        return new Promise((resolve, reject) => {
-            this.#callApi(`/storageRequest?size=${size}`)
-                .then((storageTokenReq) => {
-                if (storageTokenReq.hasOwnProperty('error'))
-                    reject(`storage token request error (${storageTokenReq.error})`);
-                resolve(JSON.stringify(storageTokenReq));
-            })
-                .catch((e) => { reject("ChannelApi (getStorageToken) Error [3]: " + WrapError(e)); });
-        });
+    async getStorageToken(size) {
+        const storageTokenReq = await this.#callApi(`/storageRequest?size=${size}`);
+        _sb_assert(!storageTokenReq.hasOwnProperty('error'), `storage token request error (${storageTokenReq.error})`);
+        if (DBG)
+            console.log("getStorageToken():", storageTokenReq);
+        return storageTokenReq;
     }
     budd(options) {
         let { keys, storage, targetChannel } = options ?? {};
@@ -2321,6 +2324,7 @@ class Snackabra {
         });
     }
     create(budgetChannelOrToken) {
+        _sb_assert(budgetChannelOrToken !== null, '[create channel] Invalid parameter (null)');
         return new Promise(async (resolve, reject) => {
             try {
                 let _storageToken;

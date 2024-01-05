@@ -8,13 +8,13 @@ export interface SBChannelHandle {
     channelServer?: string;
     channelData?: SBChannelData;
 }
-export type SBStorageToken = string;
 export interface SBChannelData {
     channelId: SBChannelId;
     ownerPublicKey: SBUserPublicKey;
     channelPublicKey: SBUserPublicKey;
     storageToken?: SBStorageToken;
 }
+export type SBStorageToken = string;
 export interface Dictionary<T> {
     [index: string]: T;
 }
