@@ -80,6 +80,44 @@ function _sb_assert(val, msg) {
         throw new Error(m);
     }
 }
+function parseSB384string(input) {
+    try {
+        if (input.length <= 4)
+            return undefined;
+        const prefix = input.slice(0, 4);
+        const data = input.slice(4);
+        switch (prefix) {
+            case KeyPrefix.SBPublicKey: {
+                const combined = base62ToArrayBuffer(data);
+                if (combined.byteLength !== (48 * 2))
+                    return undefined;
+                return {
+                    prefix: KeyPrefix.SBPublicKey,
+                    x: arrayBufferToBase64(combined.slice(0, 48)),
+                    y: arrayBufferToBase64(combined.slice(48, 96))
+                };
+            }
+            case KeyPrefix.SBPrivateKey: {
+                const combined = base62ToArrayBuffer(data);
+                if (combined.byteLength !== (48 * 3))
+                    return undefined;
+                return {
+                    prefix: KeyPrefix.SBPrivateKey,
+                    x: arrayBufferToBase64(combined.slice(0, 48)),
+                    y: arrayBufferToBase64(combined.slice(48, 96)),
+                    d: arrayBufferToBase64(combined.slice(96, 144))
+                };
+            }
+            default: {
+                return undefined;
+            }
+        }
+    }
+    catch (e) {
+        console.error("parseSB384string() - malformed input, exception: ", e);
+        return undefined;
+    }
+}
 export function getRandomValues(buffer) {
     if (buffer.byteLength < (4096)) {
         return crypto.getRandomValues(buffer);
@@ -1002,44 +1040,6 @@ function SBValidateObject(obj, type) {
     }
 }
 export const sbCrypto = new SBCrypto();
-function parseSB384string(input) {
-    try {
-        if (input.length <= 4)
-            return undefined;
-        const prefix = input.slice(0, 4);
-        const data = input.slice(4);
-        switch (prefix) {
-            case KeyPrefix.SBPublicKey: {
-                const combined = base62ToArrayBuffer(data);
-                if (combined.byteLength !== (48 * 2))
-                    return undefined;
-                return {
-                    prefix: KeyPrefix.SBPublicKey,
-                    x: arrayBufferToBase64(combined.slice(0, 48)),
-                    y: arrayBufferToBase64(combined.slice(48, 96))
-                };
-            }
-            case KeyPrefix.SBPrivateKey: {
-                const combined = base62ToArrayBuffer(data);
-                if (combined.byteLength !== (48 * 3))
-                    return undefined;
-                return {
-                    prefix: KeyPrefix.SBPrivateKey,
-                    x: arrayBufferToBase64(combined.slice(0, 48)),
-                    y: arrayBufferToBase64(combined.slice(48, 96)),
-                    d: arrayBufferToBase64(combined.slice(96, 144))
-                };
-            }
-            default: {
-                return undefined;
-            }
-        }
-    }
-    catch (e) {
-        console.error("parseSB384string() - malformed input, exception: ", e);
-        return undefined;
-    }
-}
 class SB384 {
     sb384Ready;
     static ReadyFlag = Symbol('SB384ReadyFlag');
@@ -1231,6 +1231,7 @@ export class SBChannelKeys extends SB384 {
     channelServer;
     #channelPublicKey;
     #channelPrivateKey;
+    #channelUserPrivateKey;
     constructor(handle) {
         if (handle) {
             super(handle.userPrivateKey, true);
@@ -1291,6 +1292,7 @@ export class SBChannelKeys extends SB384 {
                     this.#channelPrivateKey = signKeyPair.privateKey;
                     this.#channelPublicKey = signKeyPair.publicKey;
                     const ck = await (new SB384(this.#channelPrivateKey, true)).ready;
+                    this.#channelUserPrivateKey = ck.userPrivateKey;
                     this.#channelData = {
                         channelId: this.#channelId,
                         ownerPublicKey: this.userPublicKey,
@@ -1317,6 +1319,7 @@ export class SBChannelKeys extends SB384 {
     get signKey() { return this.#signKey; }
     get channelPrivateKey() { return this.#channelPrivateKey; }
     get channelPublicKey() { return this.#channelPublicKey; }
+    get channelUserPrivateKey() { return this.#channelUserPrivateKey; }
 }
 __decorate([
     Memoize,
@@ -1346,6 +1349,10 @@ __decorate([
     Memoize,
     Ready
 ], SBChannelKeys.prototype, "channelPublicKey", null);
+__decorate([
+    Memoize,
+    Ready
+], SBChannelKeys.prototype, "channelUserPrivateKey", null);
 const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
 class SBMessage {
     channel;
@@ -1405,6 +1412,16 @@ class Channel extends SBChannelKeys {
     get ready() { return this.channelReady; }
     get ChannelReadyFlag() { return this[Channel.ReadyFlag]; }
     get api() { return this; }
+    get handle() {
+        return {
+            [SB_CHANNEL_HANDLE_SYMBOL]: true,
+            channelId: this.channelId,
+            userPrivateKey: this.userPrivateKey,
+            channelPrivateKey: this.channelUserPrivateKey,
+            channelServer: this.channelServer,
+            channelData: this.channelData
+        };
+    }
     #callApi(path, body) {
         if (DBG)
             console.log("#callApi:", path);
@@ -1412,6 +1429,7 @@ class Channel extends SBChannelKeys {
         return new Promise(async (resolve, reject) => {
             if (DBG)
                 console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", body);
+            await this.channelReady;
             if (!this.channelId)
                 reject("ChannelApi.#callApi: no channel ID (?)");
             let authString = '';
@@ -1590,6 +1608,10 @@ __decorate([
     Memoize,
     Ready
 ], Channel.prototype, "api", null);
+__decorate([
+    Memoize,
+    Ready
+], Channel.prototype, "handle", null);
 __decorate([
     Ready,
     Owner
@@ -2290,21 +2312,17 @@ class Snackabra {
     sbFetch = SBFetch;
     constructor(channelServer, setDBG, setDBG2) {
         console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`);
+        _sb_assert(typeof channelServer === 'string', '[Snackabra] Invalid parameter type for constructor');
         if (setDBG && setDBG === true)
             DBG = true;
         if (DBG && setDBG2 && setDBG2 === true)
             DBG2 = true;
         if (DBG)
-            console.warn("++++ Snackabra constructor ++++ setting DBG to TRUE ++++");
+            console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
         if (DBG2)
-            console.warn("++++ Snackabra constructor ++++ ALSO setting DBG2 to TRUE ++++");
-        if (typeof channelServer === 'string') {
-            this.channelServer = channelServer;
-            this.storageServer = "TODO";
-        }
-        else {
-            throw new Error('[Snackabra] Invalid parameter type for constructor');
-        }
+            console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
+        this.channelServer = channelServer;
+        this.storageServer = "TODO";
         this.#storage = new StorageApi(this.storageServer);
     }
     attach(handle) {
@@ -2374,16 +2392,16 @@ class Snackabra {
         });
     }
     connect(handle, onMessage) {
-        const newChannelHandle = {
-            [SB_CHANNEL_HANDLE_SYMBOL]: true,
-            channelId: handle.channelId,
-            userPrivateKey: handle.userPrivateKey,
-            channelServer: this.channelServer
-        };
+        _sb_assert(handle && handle.channelId && handle.userPrivateKey, '[connect] Invalid parameter (missing info)');
+        if (handle.channelServer && handle.channelServer !== this.channelServer)
+            throw new Error('SBChannelHandle channelId does not match channelServer (use a different Snackabra object)');
+        const newChannelHandle = { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.channelServer } };
         if (DBG)
             console.log("++++ Snackabra.connect() ++++", newChannelHandle);
-        return new ChannelSocket(newChannelHandle, onMessage ? onMessage :
-            (m) => { console.log("MESSAGE (not caught):", m); });
+        if (onMessage)
+            return new ChannelSocket(newChannelHandle, (m) => { console.log("MESSAGE (not caught):", m); });
+        else
+            return new Channel(newChannelHandle);
     }
     get storage() {
         if (typeof this.#storage === 'string')

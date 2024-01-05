@@ -84,6 +84,11 @@ export declare namespace Interfaces {
     }
     type SBObjectHandle = SBObjectHandle_v1 | SBObjectHandle_v2;
 }
+export type SB384Hash = string;
+export type SBUserId = SB384Hash;
+export type SBChannelId = SB384Hash;
+export type SBUserPublicKey = string;
+export type SBUserPrivateKey = string;
 export declare class MessageBus {
     #private;
     bus: Dictionary<any>;
@@ -147,11 +152,6 @@ declare const SB_CHANNEL_HANDLE_SYMBOL: unique symbol;
 declare const SB_MESSAGE_SYMBOL: unique symbol;
 declare const SB_OBJECT_HANDLE_SYMBOL: unique symbol;
 export declare const sbCrypto: SBCrypto;
-export type SB384Hash = string;
-export type SBUserId = SB384Hash;
-export type SBChannelId = SB384Hash;
-export type SBUserPublicKey = string;
-export type SBUserPrivateKey = string;
 declare class SB384 {
     #private;
     sb384Ready: Promise<SB384>;
@@ -185,6 +185,7 @@ export declare class SBChannelKeys extends SB384 {
     get signKey(): CryptoKey;
     get channelPrivateKey(): CryptoKey;
     get channelPublicKey(): CryptoKey;
+    get channelUserPrivateKey(): string;
 }
 declare class SBMessage {
     #private;
@@ -208,6 +209,7 @@ declare class Channel extends SBChannelKeys {
     get ready(): Promise<Channel>;
     get ChannelReadyFlag(): boolean;
     get api(): this;
+    get handle(): SBChannelHandle;
     deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<Message | undefined>;
     getLastMessageTimes(): void;
     getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
@@ -287,8 +289,10 @@ declare class Snackabra {
     sbFetch: typeof SBFetch;
     constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean);
     attach(handle: SBChannelHandle): Promise<Channel>;
-    create(budgetChannelOrToken: Channel | SBStorageToken): Promise<SBChannelHandle>;
-    connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): ChannelSocket;
+    create(budgetChannel: Channel): Promise<SBChannelHandle>;
+    create(storageToken: SBStorageToken): Promise<SBChannelHandle>;
+    connect(handle: SBChannelHandle): Channel;
+    connect(handle: SBChannelHandle, onMessage: (m: ChannelMessage) => void): ChannelSocket;
     get storage(): StorageApi;
     get crypto(): SBCrypto;
     get version(): string;
