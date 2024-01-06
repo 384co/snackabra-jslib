@@ -1,10 +1,9 @@
-declare const version = "2.0.0-alpha.5 (build 30)";
+declare const version = "2.0.0-alpha.5 (build 31)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
     channelId: SBChannelId;
     userPrivateKey: SBUserPrivateKey;
-    channelPrivateKey?: SBUserPrivateKey;
     channelServer?: string;
     channelData?: SBChannelData;
 }
@@ -200,13 +199,8 @@ export declare class SBChannelKeys extends SB384 {
     get ready(): Promise<SBChannelKeys>;
     get SBChannelKeysReadyFlag(): any;
     get channelData(): SBChannelData;
-    get owner(): boolean;
+    get owner(): boolean | "" | undefined;
     get channelId(): string | undefined;
-    get encryptionKey(): CryptoKey;
-    get signKey(): CryptoKey;
-    get channelPrivateKey(): CryptoKey;
-    get channelPublicKey(): CryptoKey;
-    get channelUserPrivateKey(): string;
 }
 declare class SBMessage {
     #private;
@@ -222,7 +216,6 @@ declare class Channel extends SBChannelKeys {
     #private;
     channelReady: Promise<Channel>;
     static ReadyFlag: symbol;
-    motd?: string;
     locked?: boolean;
     adminData?: Dictionary<any>;
     verifiedGuest: boolean;
@@ -242,6 +235,9 @@ declare class Channel extends SBChannelKeys {
     getJoinRequests(): Promise<any>;
     isLocked(): Promise<boolean>;
     storageRequest(byteLength: number): Promise<Dictionary<any>>;
+    lock(): Promise<{
+        success: boolean;
+    }>;
     acceptVisitor(userId: SBUserId): Promise<any>;
     getStorageToken(size: number): Promise<string>;
     budd(): Promise<SBChannelHandle>;

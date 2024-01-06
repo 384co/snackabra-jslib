@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a;
-const version = '2.0.0-alpha.5 (build 30)';
+const version = '2.0.0-alpha.5 (build 31)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 export function validate_ChannelApiBody(body) {
     if (!body)
@@ -104,10 +104,13 @@ function SBFetch(input, init) {
     });
 }
 function WrapError(e) {
-    if (e instanceof Error)
+    const pre = ' ***ERRORMSGSTART*** ', post = ' ***ERRORMSGEND*** ';
+    if (e instanceof Error) {
+        e.message = pre + e.message + post;
         return e;
+    }
     else
-        return new Error(String(e));
+        return new Error(pre + String(e) + post);
 }
 function _sb_exception(loc, msg) {
     const m = '[_sb_exception] << SB lib error (' + loc + ': ' + msg + ') >>';
@@ -115,7 +118,7 @@ function _sb_exception(loc, msg) {
 }
 function _sb_assert(val, msg) {
     if (!(val)) {
-        const m = `[_sb_assert] << SB assertion error: ${msg} >>`;
+        const m = ` <<<<[_sb_assert] assertion failed: '${msg}'>>>> `;
         if (DBG)
             console.trace(m);
         throw new Error(m);
@@ -888,6 +891,7 @@ export class SBCrypto {
         });
     }
     deriveKey(privateKey, publicKey, type, extractable, keyUsages) {
+        _sb_assert(privateKey && publicKey, "Either private or public key is null or undefined (L1836)");
         return new Promise(async (resolve, reject) => {
             let _keyAlgorithm;
             switch (type) {
@@ -1269,12 +1273,7 @@ export class SBChannelKeys extends SB384 {
     sbChannelKeysReady;
     static ReadyFlag = Symbol('SBChannelKeysReadyFlag');
     #channelData;
-    #encryptionKey;
-    #signKey;
     channelServer;
-    #channelPublicKey;
-    #channelPrivateKey;
-    #channelUserPrivateKey;
     constructor(handle) {
         if (handle) {
             super(handle.userPrivateKey, true);
@@ -1313,39 +1312,25 @@ export class SBChannelKeys extends SB384 {
                 }
                 else {
                     this.#channelId = this.ownerChannelId;
-                    const signKeyPair = await crypto.subtle.generateKey({
-                        name: 'ECDH', namedCurve: 'P-384'
-                    }, true, ['deriveKey']);
-                    this.#channelPrivateKey = signKeyPair.privateKey;
-                    this.#channelPublicKey = signKeyPair.publicKey;
-                    const ck = await (new SB384(this.#channelPrivateKey, true)).ready;
-                    this.#channelUserPrivateKey = ck.userPrivateKey;
                     this.#channelData = {
                         channelId: this.#channelId,
                         ownerPublicKey: this.userPublicKey,
                     };
                 }
                 _sb_assert(this.SB384ReadyFlag, "SBChannelKeys(): parent SB384 object is not ready (?)");
-                this.#encryptionKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'AES-GCM', true, ['encrypt', 'decrypt']);
-                this.#signKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey, 'HMAC', true, ['sign', 'verify']);
                 this[SBChannelKeys.ReadyFlag] = true;
                 resolve(this);
             }
             catch (e) {
-                reject('ERROR creating SBChannelKeys object failed: ' + WrapError(e));
+                reject('[SBChannelKeys] constructor failed. ' + WrapError(e));
             }
         });
     }
     get ready() { return this.sbChannelKeysReady; }
     get SBChannelKeysReadyFlag() { return this[SBChannelKeys.ReadyFlag]; }
     get channelData() { return this.#channelData; }
-    get owner() { return this.private && this.ownerChannelId === this.channelId; }
+    get owner() { return this.private && this.ownerChannelId && this.channelId && this.ownerChannelId === this.channelId; }
     get channelId() { return this.#channelId; }
-    get encryptionKey() { return this.#encryptionKey; }
-    get signKey() { return this.#signKey; }
-    get channelPrivateKey() { return this.#channelPrivateKey; }
-    get channelPublicKey() { return this.#channelPublicKey; }
-    get channelUserPrivateKey() { return this.#channelUserPrivateKey; }
 }
 __decorate([
     Memoize,
@@ -1359,26 +1344,6 @@ __decorate([
     Memoize,
     Ready
 ], SBChannelKeys.prototype, "channelId", null);
-__decorate([
-    Memoize,
-    Ready
-], SBChannelKeys.prototype, "encryptionKey", null);
-__decorate([
-    Memoize,
-    Ready
-], SBChannelKeys.prototype, "signKey", null);
-__decorate([
-    Memoize,
-    Ready
-], SBChannelKeys.prototype, "channelPrivateKey", null);
-__decorate([
-    Memoize,
-    Ready
-], SBChannelKeys.prototype, "channelPublicKey", null);
-__decorate([
-    Memoize,
-    Ready
-], SBChannelKeys.prototype, "channelUserPrivateKey", null);
 const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
 class SBMessage {
     channel;
@@ -1418,7 +1383,6 @@ __decorate([
 class Channel extends SBChannelKeys {
     channelReady;
     static ReadyFlag = Symbol('ChannelReadyFlag');
-    motd = '';
     locked = false;
     adminData;
     verifiedGuest = false;
@@ -1443,7 +1407,6 @@ class Channel extends SBChannelKeys {
             [SB_CHANNEL_HANDLE_SYMBOL]: true,
             channelId: this.channelId,
             userPrivateKey: this.userPrivateKey,
-            channelPrivateKey: this.channelUserPrivateKey,
             channelServer: this.channelServer,
             channelData: this.channelData
         };
@@ -1564,6 +1527,9 @@ class Channel extends SBChannelKeys {
     storageRequest(byteLength) {
         return this.#callApi('/storageRequest?size=' + byteLength);
     }
+    lock() {
+        return this.#callApi('/lockChannel');
+    }
     acceptVisitor(userId) {
         return this.#callApi('/acceptVisitor', { userId: userId });
     }
@@ -1646,6 +1612,10 @@ __decorate([
 __decorate([
     Ready
 ], Channel.prototype, "storageRequest", null);
+__decorate([
+    Ready,
+    Owner
+], Channel.prototype, "lock", null);
 __decorate([
     Ready,
     Owner
@@ -2370,7 +2340,6 @@ class Snackabra {
                     [SB_CHANNEL_HANDLE_SYMBOL]: true,
                     channelId: channelData.channelId,
                     userPrivateKey: channelKeys.userPrivateKey,
-                    channelPrivateKey: (await new SB384(channelKeys.channelPrivateKey).ready).userPrivateKey,
                     channelServer: this.channelServer,
                     channelData: channelData
                 });

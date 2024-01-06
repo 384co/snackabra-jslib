@@ -21,7 +21,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 30)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 31)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -29,32 +29,7 @@ const version = '2.0.0-alpha.5 (build 30)' // working on 2.0.0 release
 // minimum when creating a new channel
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024; // 8 MB
 
-// export interface SBServer {
-//   /**
-//    * The channel server is the server that handles channel creation,
-//    * channel deletion, and channel access. It is also the server that
-//    * handles channel messages.
-//    */
-//   channel_server: string,
-//   /**
-//    * The channel websocket is the websocket that handles channel
-//    * messages. It is the same as the channel server, but with a
-//    * different protocol.
-//    */
-//   channel_ws: string,
-//   /**
-//    * The storage server is the server that all "shard" (blob) storage
-//    */
-//   storage_server: string,
-//   /**
-//    * "shard" server is a more modern version of the storage server,
-//    * generally acting as a caching and/or mirroring layer. It proxies
-//    * any new storage to one or more storage servers, and handles
-//    * it's own caching behavior. Generally, this will be the fastest
-//    * interface, in particular for reading.
-//    */
-//   shard_server?: string
-// }
+
 
 /** 
  * Complete descriptor of a channel. The channel ID is a hash
@@ -68,8 +43,8 @@ export interface SBChannelHandle {
   channelId: SBChannelId,
   userPrivateKey: SBUserPrivateKey,
 
-  // if we're the owner, we will also need to track the private channel key
-  channelPrivateKey?: SBUserPrivateKey,
+  // // if we're the owner, we will also need to track the private channel key
+  // channelPrivateKey?: SBUserPrivateKey,
 
   // channel server that hosts this channel
   channelServer?: string,
@@ -114,12 +89,6 @@ interface WSProtocolOptions {
   onError?: null | CallableFunction,
   timeout?: number,
   closed: boolean,
-
-  // init?: { userId: SBUserId },
-  // identity?: Identity,
-  // keys?: ChannelKeys,
-  // motd?: string,
-  // locked?: boolean,
 }
 
 
@@ -131,77 +100,6 @@ interface WSProtocolOptions {
 export interface Dictionary<T> {
   [index: string]: T;
 }
-
-
-// export interface ChannelData {
-//   // roomId?: SBChannelId
-//   channelId?: SBChannelId;
-//   ownerKey: string;
-//   encryptionKey: string;
-//   // signKey: string;
-//   motherChannel?: SBChannelId;
-//   storageToken?: string; // used internally for storage budget authentication
-//   // SERVER_SECRET?: string; // used internally for storage budget authentication (dev or local servers only)
-//   size?: number; // used internally
-// }
-
-
-// interface ImageMetaData {
-//   imgObjVersion?: SBObjectHandleVersions, // if empty is type '1', new objects need to be '2'
-//   imageId?: string,
-//   imageKey?: string,
-//   previewId?: string,
-//   previewKey?: string,
-//   // nonce and salt not needed, but if it's there, we do extra checks
-//   previewNonce?: string,
-//   previewSalt?: string
-// }
-
-//     export interface ChannelMessage {
-//   type?: ChannelMessageTypes,
-//   keys?: ChannelKeyStrings,
-//   _id?: string,
-//   id?: string,
-//   timestamp?: number,
-//   timestampPrefix?: string, // '0'/'1' - 42 of them
-//   channelId?: SBChannelId, // base64 - 64 chars (512 bits)
-//   control?: boolean,
-//   encrypted?: boolean,
-//   encrypted_contents?: EncryptedContents,
-//   contents?: string, // if present means unencrypted
-//   text?: string, // backwards compat, same as contents, ToDo: should be removed
-//   sign?: string,
-//   image?: string,
-//   image_sign?: string,
-//   imageMetaData?: ImageMetaData,
-//   imageMetadata_sign?: string,
-//   motd?: string,
-//   ready?: boolean,
-//   roomLocked?: boolean,
-//   sender_pubKey?: JsonWebKey,
-//   sender_username?: string,
-//   system?: boolean,
-//   user?: { name: string, _id?: JsonWebKey },
-//   verificationToken?: string,
-//   replyTo?: JsonWebKey, // used for old design for whispers.  todo: clean up
-//   // whisper: if present, it's the unwrapped 1:1 contents
-//   whisper?: string,
-//   whispered?: boolean,
-//   // 'new': intended recipient; means contents are further encrypted
-//   //        using key derived from 'sender_pubKey' and our own (private) key;
-//   //        jslib will only decode if it's intended for us (that's the only
-//   //        way we can decrypt it anyway)
-//   sendTo?: SBUserId, // public (hash) of recipient
-// }
-
-// interface ChannelAckMessage {
-//   type: 'ack',
-//   _id: string,
-// }
-
-
-// export type ChannelMessageTypes = 'ack' | 'keys' | 'invalid' | 'ready' | 'encrypted' | 'control'
-
 
 /**
  * The "app" level message format, provided to onMessage (by ChannelSocket)
@@ -218,7 +116,6 @@ export interface Message {
   _id: string;
 }
 
-
 export interface ChannelApiBody {
   [SB_CHANNEL_API_BODY_SYMBOL]?: boolean,
   channelId: SBChannelId,
@@ -230,7 +127,6 @@ export interface ChannelApiBody {
   timestamp: number,
   sign: ArrayBuffer
 }
-
 
 // return self if it matches shape, otherwise throw
 // extraneous properties are ignored
@@ -308,54 +204,6 @@ export function validate_ChannelMessage(body: any): ChannelMessage {
     throw new Error(`invalid ChannelMessage`)
   }
 }
-
-
-// REPLACED by ChannelMessage
-// export interface SBMessageContents {
-//   contents?: ArrayBuffer,
-//   senderUserId?: SBUserId,
-//   sign?: ArrayBuffer,
-//   ttl?: number,
-
-//   // sender_pubKey?: JsonWebKey, // ... being replaced by senderUserId
-//   // sender_username?: string,
-//   // encrypted: boolean,
-//   // isVerfied: boolean,
-// }
-
-
-// REPLACED by above ChannelMessage
-// export interface EncryptedContents {
-//   contents: ArrayBuffer,
-//   sign?: ArrayBuffer, // signature of content (not including timestamp)
-// }
-
-
-
-// interface ChannelEncryptedMessage {
-//   _id: string, // channelId + '.' + timestampPrefix 
-//   timestampPrefix?: string,
-//   channelId?: SBChannelId,
-//   encryptedContents?: EncryptedContents,
-//   contents?: ArrayBuffer, // if present means unencrypted
-// }
-
-// interface ChannelKeyStrings {
-//   encryptionKey: string,
-//   guestKey?: string,
-//   ownerKey: string,
-//   signKey: string,
-//   // lockedKey?: string,
-//   encryptedLockedKey?: string,
-//   error?: string,
-// }
-
-// interface ChannelKeysMessage {
-//   type: 'channelKeys',
-//   ready: boolean,
-//   motd: string,
-//   roomLocked: boolean,
-// }
 
 export interface ChannelAdminData {
   channelId: SBChannelId,
@@ -516,21 +364,11 @@ type jwkStruct = {
   d?: string
 }
 
-// export interface SBObjectMetadata {
-//   [SB_OBJECT_HANDLE_SYMBOL]: boolean;
-//   version: SBObjectHandleVersions;
-//   type: SBObjectType;
-//   id: Base62Encoded;
-//   key: Base62Encoded;
-//   paddedBuffer: ArrayBuffer;
-//   iv: Uint8Array;
-//   salt: Uint8Array;
-// }
-
 //#endregion - Interfaces - Types
 
 /******************************************************************************************************/
 //#region - MessageBus
+
 /**
  * MessageBus
  */
@@ -612,8 +450,12 @@ function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response
 // variation on solving this issue:
 // https://kentcdodds.com/blog/get-a-catch-block-error-message-with-typescript
 function WrapError(e: any) {
-  if (e instanceof Error) return e;
-  else return new Error(String(e));
+  const pre = ' ***ERRORMSGSTART*** ', post = ' ***ERRORMSGEND*** ';
+  if (e instanceof Error) {
+    e.message = pre + e.message + post;
+    return e;
+  }
+  else return new Error(pre + String(e) + post);
 }
 
 /** @private */
@@ -628,7 +470,7 @@ function _sb_exception(loc: string, msg: string) {
 /** @private */
 function _sb_assert(val: unknown, msg: string) {
   if (!(val)) {
-    const m = `[_sb_assert] << SB assertion error: ${msg} >>`;
+    const m = ` <<<<[_sb_assert] assertion failed: '${msg}'>>>> `;
     // debugger;
     if (DBG) console.trace(m)
     throw new Error(m);
@@ -641,14 +483,6 @@ function parseSB384string(input: string): jwkStruct | undefined {
     const prefix = input.slice(0, 4);
     const data = input.slice(4);
     switch (prefix) {
-      // case KeyPrefix.SBAES256Key: {
-      //   if (data.length !== 43) return undefined;
-      //   const k = base62ToArrayBuffer(data);
-      //   return {
-      //     prefix: KeyPrefix.SBAES256Key,
-      //     k: arrayBufferToBase64(k)
-      //   };
-      // }
       case KeyPrefix.SBPublicKey: {
         const combined = base62ToArrayBuffer(data)
         if (combined.byteLength !== (48 * 2)) return undefined;
@@ -735,20 +569,6 @@ function _assertBase64(base64: string) {
   // if (z) return (z[0] === base64); else return false;
 }
 const isBase64Encoded = _assertBase64 // alias
-
-// // this also functions as a place to identify "internal" from
-// // "external" uses of A32 format (eg users of the library should
-// // never see the 'a32.' prefix directly)
-// function stripA32(value: string | Base62Encoded): string {
-//   if ((value) && (value !== '')) {
-//     if (value.startsWith('a32.'))
-//       console.warn("[stripA32] removing 'a32.' prefix, these should be cleaned up by now")
-//     return value.replace(/^a32\./, '')
-//   } else {
-//     console.warn("[stripA32] asked to strip an empty/missing string?")
-//     return ''
-//   }
-// }
 
 /*
   we use URI/URL 'safe' characters in our b64 encoding to avoid having
@@ -1525,13 +1345,13 @@ export function decodeB64Url(input: string) {
 
 // /**
 //  * 
-//   * Typically a jsonwebkey (JWK) will look something like this:
+//   * Typically a public jsonwebkey (JWK) will look something like this in json string format:
 //   *
 //   *                        "{\"crv\":\"P-384\",\"ext\":true,\"key_ops\":[],\"kty\":\"EC\",
 //   *                        \"x\":\"9s17B4i0Cuf_w9XN_uAq2DFePOr6S3sMFMA95KjLN8akBUWEhPAcuMEMwNUlrrkN\",
 //   *                        \"y\":\"6dAtcyMbtsO5ufKvlhxRsvjTmkABGlTYG1BrEjTpwrAgtmn6k25GR7akklz9klBr\"}"
 //   * 
-//   * (public key), or this:
+//   * A private key will look something like this:
 //   * 
 //   *                       "{\"crv\":\"P-384\",
 //   *                       \"d\":\"KCJHDZ34XgVFsS9-sU09HFzXZhnGCvnDgJ5a8GTSfjuJQaq-1N2acvchPRhknk8B\",
@@ -1539,14 +1359,13 @@ export function decodeB64Url(input: string) {
 //   *                       \"x\":\"rdsyBle0DD1hvp2OE2mINyyI87Cyg7FS3tCQUIeVkfPiNOACtFxi6iP8oeYt-Dge\",
 //   *                       \"y\":\"qW9VP72uf9rgUU117G7AfTkCMncJbT5scIaIRwBXfqET6FYcq20fwSP7R911J2_t\"}"
 //   * 
-//   * (private key). These are elliptic curve keys encoded in "JWK" format. 
+//   * These are elliptic curve keys. 
 //   * 
 //   * The main RFC is 7518 (https://datatracker.ietf.org/doc/html/rfc7518#section-6.2),
 //   * supervised by IESG except for a tiny addition of one parameter ("ext") that is 
 //   * supervised by the W3C Crypto WG (https://w3c.github.io/webcrypto/#ecdsa).
 //   * 
-//   * We define an internal SBKey format that encodes/decodes any sort of key or identifier
-//   * to a variable-length (a32) string. The most important case is JWK format.
+//   * We internally encode these in internal (base62) formats.
 //   * 
 //   * EC in JWK has a number of parameters, but for us the only required ones are:
 //   * 
@@ -1558,23 +1377,22 @@ export function decodeB64Url(input: string) {
 //   *  ext: the 'extractable' flag
 //   *  key_ops: (optional) permitted the key operations
 //   * 
-//   * Our SBKey format has a four-character prefix to distinguish types, currently:
+//   * Our SBKey formats have a four-character prefix to distinguish types, currently:
 //   * 
 //   *  "PNk2": public key; only x and y are present, the rest implied [KeyPrefix.SBPublicKey]
 //   *  "Xj3p": private key: x, y, d are present, the rest implied [KeyPrefix.SBPrivateKey]
-//   *  "X881": AES 256 key (32 bytes) [KeyPrefix.SBAES256Key]
 //   * 
-//   * For the AES key, properties will include:
+//   * For the AES key, we don't have an internal format; properties would include:
 //   * 
 //   *  "k": the key itself, encoded as base64
 //   *  "alg": "A256GCM"
 //   *  "key_ops": ["encrypt", "decrypt"]
 //   *  "kty": "oct"
 //   * 
-//   * Only the "k" property is required, the rest are implied.
+//   * Only the "k" property is required, the rest are implied, so it's trivial to track.
 //   * 
-//   * In JWK, x, y, and d are all encoded as 64 characters (or 384 bits), d is omitted
-//   * for public keys.
+//   * In JWK, x, y, and d are all encoded as base64 characters (or 384 bits), d is omitted
+//   * for public keys. We don't use base62 for internal encoding of these.
 //   *
 // */
 
@@ -1585,52 +1403,6 @@ export enum KeyPrefix {
   // anything starting with 'X' is private key
   SBPrivateKey = "Xj3p"
 }
-
-// /**
-//  * Defines internal SBKey format for (private) EC keys.
-//  */
-// export interface SBPrivateKey {
-//   prefix: KeyPrefix.SBPrivateKey,
-//   x: Base62Encoded,
-//   y: Base62Encoded,
-//   d: Base62Encoded
-// }
-
-// /**
-//  * Defines internal SBKey format for (public) EC keys.
-//  */
-// export interface SBPublicKey {
-//   prefix: KeyPrefix.SBPublicKey,
-//   x: Base62Encoded,
-//   y: Base62Encoded
-// }
-
-// /**
-//  * Returns true if the input is an SBKey.
-//  */
-// export function isSBKey(key: any): key is SBKey {
-//   return key && Object.values(KeyPrefix).includes(key.prefix);
-// }
-
-// /**
-//  * Global type for SBKey.
-//  */
-// export type SBKey = SBPrivateKey | SBPublicKey
-
-// /**
-//  * Global type for private/public key pairs (EC) of SBKey.
-//  */
-// export type SBUserKey = SBPrivateKey | SBPublicKey
-
-// /**
-//  * String encoding of SBPrivateKey - full key can be reconstructed from this
-//  */
-// export type SBUserKeyString = string
-
-// /**
-//  * Mostly internal. Used as supertype for all known key types.
-//  */
-// export type Key = JsonWebKey | SB384 | CryptoKey | SBKey
 
 /**
  * SBCrypto
@@ -1833,6 +1605,7 @@ export class SBCrypto {  /******************************************************
    * for 1:1 communication and/or sign/verify
    */
   deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey> {
+    _sb_assert(privateKey && publicKey, "Either private or public key is null or undefined (L1836)")
     return new Promise(async (resolve, reject) => {
       let _keyAlgorithm: any
       switch (type) {
@@ -2058,6 +1831,8 @@ function Owner(target: any, propertyKey: string /* ClassGetterDecoratorContext *
 
 // Decorator
 // asserts any types that are SB classes are valid
+// we're not quite doing this yet. interfaces would be more important to handle in this manner,
+// however even with new (upcoming) additional type metadata for decorators, can't yet be done.
 /** @private */
 function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecoratorContext */, descriptor?: PropertyDescriptor): any {
   if ((descriptor) && (descriptor.value)) {
@@ -2189,16 +1964,6 @@ class SB384 {
   #publicUserKey?: CryptoKey  // always public
 
   #hash?: SB384Hash // generic 'identifier', see hash getter below
-
-  // #jwk?: JsonWebKey // jwk version of userkey; this also replaces 'exportable_privateKey'
-
-  // these are being reworked as getters:
-  // replaced by (type SBUserId) 
-  // #exportable_pubKey?: JsonWebKey
-  // #exportable_privateKey?: JsonWebKey
-  // #sbUserKey?: SBKey // ditto, variation
-  // #privateKey?: CryptoKey // internal representation of private key
-  // #publicKey?: CryptoKey // internal rep if we're not an owner ID
 
   constructor(key?: CryptoKey | JsonWebKey | SBUserPublicKey | SBUserPrivateKey, forcePrivate?: boolean) {
     (this as any)[SB384.ReadyFlag] = false;
@@ -2395,24 +2160,6 @@ class SB384 {
     }
   }
 
-
-  // case KeyPrefix.SBPublicKey: {
-  //   // public keys are two 384-bit numbers
-  //   const publicKey = key as SBPublicKey;
-  //   const combined = new Uint8Array(48 * 2);
-  //   combined.set(base64ToArrayBuffer(publicKey.x), 0);
-  //   combined.set(base64ToArrayBuffer(publicKey.y), 48);
-  //   return prefix + arrayBufferToBase62(combined) as SBUserId
-  // }
-  // case KeyPrefix.SBPrivateKey: {
-  //   const privateKey = key as SBPrivateKey;
-  //   const combined = new Uint8Array(3 * 48);
-  //   combined.set(base64ToArrayBuffer(privateKey.x), 0);
-  //   combined.set(base64ToArrayBuffer(privateKey.y), 48);
-  //   combined.set(base64ToArrayBuffer(privateKey.d), 96);
-  //   return prefix + arrayBufferToBase62(combined) as SBUserKeyString
-  // }
-
   /**
    * Wire format of full (decodable) public key
    * @type {SBUserPublicKey}
@@ -2439,31 +2186,6 @@ class SB384 {
     return (KeyPrefix.SBPrivateKey + arrayBufferToBase62(combined)) as SBUserPrivateKey
   }
 
-
-  // @Memoize @Ready get userKeyString() {
-  //   
-  //   return sbCrypto.SBKeyToString(sbCrypto.JWKToSBKey(this.#jwk!)!)
-  // }
-
-  // /**
-  //  * Somewhat confusing at times, the string version of the user key per se is
-  //  * different from "hash" (the full public key can be recovered from SBUserId).
-  //  * Eg this is the public identifier.
-  //  */
-  // @Memoize @Ready get userId(): SBUserId { return sbCrypto.SBKeyToString(sbCrypto.JWKToSBKey(this.jwk, true)!) }
-
-  // reworking all of these:
-  // /** @type {CryptoKey}     */ @Memoize @Ready get privateKey() { return this.#privateKey! }
-  // /** @type {CryptoKey}     */ @Memoize @Ready get publicKey() { return this.#publicKey! } // todo: needed?
-  // /** @type {CryptoKey}     */ @Memoize @Ready get key() { return this.#privateKey ? this.#privateKey : this.#publicKey }
-  // /** @type {CryptoKeyPair} */ @Memoize @Ready get keyPair() { return this.#keyPair }
-  // /** @type {JsonWebKey}    */ @Memoize @Ready get exportable_privateKey() { return this.#exportable_privateKey! }
-  // @Memoize @Ready get jwkPub(): JsonWebKey { return sbCrypto.extractPubKey(this.#jwk!)! }
-  // @Memoize @Ready get toString(): string { return this.userId }
-  // @Memoize @Ready get toJSON(): string { return this.userId }
-  // // older approach, used in similar contexts as hash() above
-  // @Memoize @Ready get _id() { return JSON.stringify(this.exportable_pubKey!) }
-
 } /* class SB384 */
 
 /**
@@ -2482,28 +2204,10 @@ class SB384 {
  */
 export class SBChannelKeys extends SB384 {
   #channelId?: SBChannelId
-
-  // ready: Promise<SBChannelKeys>
   sbChannelKeysReady: Promise<SBChannelKeys>
-  // private SBChannelKeysReadyFlag: boolean = false // must be named <class>ReadyFlag
   static ReadyFlag = Symbol('SBChannelKeysReadyFlag'); // see below for '(this as any)[<class>.ReadyFlag] = false;'
-
   #channelData?: SBChannelData
-
-  #encryptionKey?: CryptoKey // for encrypting messages
-  #signKey?: CryptoKey // matching key for signing messages
-
   channelServer?: string // can be read/written freely
-
-  // for ease of use these are imported
-  #channelPublicKey?: CryptoKey;
-  #channelPrivateKey?: CryptoKey;
-
-  #channelUserPrivateKey?: SBUserPrivateKey;
-
-  // #channelOwnerPublicKey?: SBUserPublicKey // might be 'us' (ie sb384 parent)
-
-  // #channelSignKey?: CryptoKey;
 
   constructor(handle?: SBChannelHandle) {
     if (handle) {
@@ -2544,144 +2248,40 @@ export class SBChannelKeys extends SB384 {
                 "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
             this.#channelData = cpk
           }
-          // const ck1 = await (new SB384(this.#channelData!.channelPublicKey)).ready
-          // this.#channelPublicKey = ck1.publicKey
-          // if (handle.channelPrivateKey) {
-          //   // if the handle includes this, then process it and sanity check
-          //   const ck2 = await (new SB384(handle.channelPrivateKey, true)).ready
-          //   _sb_assert(ck1.userPublicKey === ck2.userPublicKey, "SBChannelKeys(): channel public key mismatch (?)")
-          //   this.#channelPrivateKey = ck2.privateKey
-          // }
         } else {
-          // in this case it's new, we're the owner, and we decide all the keys
           this.#channelId = this.ownerChannelId
-          const signKeyPair: CryptoKeyPair = await crypto.subtle.generateKey({
-            name: 'ECDH', namedCurve: 'P-384'
-          }, true, ['deriveKey']);
-          this.#channelPrivateKey = signKeyPair.privateKey
-          this.#channelPublicKey = signKeyPair.publicKey
-          const ck = await (new SB384(this.#channelPrivateKey, true)).ready
-          this.#channelUserPrivateKey = ck.userPrivateKey
           this.#channelData = {
             channelId: this.#channelId!,
             ownerPublicKey: this.userPublicKey,
             // channelPublicKey: ck.userPublicKey
           }
         }
-
         _sb_assert(this.SB384ReadyFlag, "SBChannelKeys(): parent SB384 object is not ready (?)")
 
-        // default is to both encrypt and sign against the channel public key
-        this.#encryptionKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey!, 'AES-GCM', true, ['encrypt', 'decrypt'])
-        this.#signKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey!, 'HMAC', true, ['sign', 'verify'])
+        // // default is to both encrypt and sign against the channel public key
+        // this.#encryptionKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey!, 'AES-GCM', true, ['encrypt', 'decrypt'])
+        // this.#signKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey!, 'HMAC', true, ['sign', 'verify'])
 
           // this.SBChannelKeysReadyFlag = true
           ; (this as any)[SBChannelKeys.ReadyFlag] = true;
         resolve(this)
 
-        // if (channelKeyStrings) {
-        //   if (DBG) console.log("++++ SBChannelKeys initialized from key strings")
-        //   await this.#setKeys(await sbCrypto.channelKeyStringsToCryptoKeys(channelKeyStrings))
-        // } else
-
-        // if (this.#channelServer) {
-        //   if (DBG) console.log("++++ SBChannelKeys initialized from channel server")
-        //   await SBFetch(this.#channelServer + '/api/v2/channel/' + this.#channelId! + '/getChannelKeys',
-        //     {
-        //       method: 'GET',
-        //       headers: { 'Content-Type': 'application/json' },
-        //     })
-        //     .then((response: Response) => {
-        //       if (!response.ok)
-        //         reject("ChannelEndpoint(): failed to get channel keys (network response not ok)");
-        //       return response.json() as unknown as ChannelKeyStrings // continues below
-        //     })
-        //     .then(async (data) => {
-        //       if (data.error)
-        //         reject("ChannelEndpoint(): failed to get channel keys (error in response)");
-        //       // we have the authoritative keys from the server, import them
-        //       await this.#setKeys(await sbCrypto.channelKeyStringsToCryptoKeys(data))
-        //       this.#SBChannelKeysReadyFlag = true
-        //       resolve(this)
-        //     })
-        //     .catch((e) => { throw (e) });
-        // } else {
-
-        // if (this.#channelData) throw new Error(`newKeys() called but channelData already exists (already initialized)`)
-
-
-        // // first encryption key is created from random
-        // const encryptionKey: CryptoKey = await crypto.subtle.generateKey({
-        //   name: 'AES-GCM',
-        //   length: 256
-        // }, true, ['encrypt', 'decrypt']);
-        // this.#encryptionKey = encryptionKey
-        // // const exportable_encryptionKey: JsonWebKey = await crypto.subtle.exportKey('jwk', encryptionKey);
-
-        // // signing key of the *channel* is created from random
-        // const signKeyPair: CryptoKeyPair = await crypto.subtle.generateKey({
-        //   name: 'ECDH', namedCurve: 'P-384'
-        // }, true, ['deriveKey']);
-        // const exportable_signKey: JsonWebKey = await crypto.subtle.exportKey('jwk', signKeyPair.privateKey);
-
-        // channel key is used for signing to/from broadcast (all channel participants)
-
-        // encryption key for channel (broadcast) is derived off the channel ('sign') key
-
-
-        // const exportable_publicKey: JsonWebKey = this.jwkPub;
-
-        // this.#channelData = {
-        //   roomId: this.hash,
-        //   ownerKey: JSON.stringify(this.exportable_pubKey),
-        //   encryptionKey: JSON.stringify(exportable_encryptionKey),
-        //   signKey: JSON.stringify(exportable_signKey),
-        // };
-
-
-
       } catch (e) {
-        reject('ERROR creating SBChannelKeys object failed: ' + WrapError(e))
+        reject('[SBChannelKeys] constructor failed. ' + WrapError(e))
       }
     })
     // this.sbChannelKeysReady = this.ready
   }
 
-  // /** @private */
-  // async #setKeys(k: ChannelKeys) {
-  //   if (DBG2) console.log("[channel.#setKeys] set channelkeys to 'k':", k)
-  //   this.#channelKeys = k
-  //   _sb_assert(k, "Channel.importKeys: no channel keys (?)")
-  //   _sb_assert(this.#channelKeys!.publicSignKey, "Channel.importKeys: no public sign key (?)")
-  //   // _sb_assert(this.privateKey, "Channel.importKeys: no private key (?)")
-  //   _sb_assert(this.private && this.key, "setKeys(): no private key (?)") // there must be "user" info at the root
-  //   this.#channelSignKey = await sbCrypto.deriveKey(
-  //     this.key, this.#channelKeys.publicSignKey, 'HMAC', false, ['sign', 'verify']
-  //   )
-  // }
-
   get ready() { return this.sbChannelKeysReady }
   // get readyFlag() { return this.SBChannelKeysReadyFlag }
   get SBChannelKeysReadyFlag() { return (this as any)[SBChannelKeys.ReadyFlag] }
-
-  // @Memoize @Ready get channelData() { return this.#channelData! }
+  
   @Memoize @Ready get channelData() { return this.#channelData! }
 
-  @Memoize @Ready get owner() { return this.private && this.ownerChannelId === this.channelId }
-  // @Memoize @Ready get keys() { return this.#channelKeys! }
+  @Memoize @Ready get owner() { return this.private && this.ownerChannelId && this.channelId && this.ownerChannelId === this.channelId }
   @Memoize @Ready get channelId() { return this.#channelId }
 
-  @Memoize @Ready get encryptionKey() { return this.#encryptionKey! }
-  @Memoize @Ready get signKey() { return this.#signKey! } // convenience
-  @Memoize @Ready get channelPrivateKey() { return this.#channelPrivateKey! }
-  @Memoize @Ready get channelPublicKey() { return this.#channelPublicKey! }
-  @Memoize @Ready get channelUserPrivateKey() { return this.#channelUserPrivateKey! }
-
-  // set channelServer(channelServer: string) {
-  //   _sb_assert(!this.#channelServer, "ChannelServer already set on this SBChannelKeys object - can't change")
-  //   this.#channelServer = channelServer
-  // }
-  // @Memoize @Ready get channelServer() { return this.#channelServer! }
 
 } /* class SBChannelKeys */
 
@@ -2714,51 +2314,6 @@ class SBMessage {
       this.message = await sbCrypto.wrap(contents, this.channel.userId, this.#encryptionKey, this.channel.privateKey)
       this.message.ttl = ttl ? ttl : 0xF // default is inifinte
       resolve(this)
-
-      // constructor(public channel: Channel, contents: string | ArrayBuffer /*, sendToJsonWebKey?: JsonWebKey */)
-      // if (typeof bodyParameter === 'string') {
-      //   this.contents = { /* encrypted: false, isVerfied: false, */ contents: bodyParameter, sign: '' /*, image: '', imageMetaData: {} */ }
-      // } else {
-      //   this.contents = { /* encrypted: false, isVerfied: false, */ contents: '', sign: '' /*, image: bodyParameter.image, imageMetaData: bodyParameter.imageMetaData */ }
-      // }
-      // let body = this.contents
-      // let bodyJson = JSON.stringify(body)
-      // if (sendToJsonWebKey) this.#sendToPubKey = sbCrypto.extractPubKey(sendToJsonWebKey)!
-
-      // this.contents.sender_pubKey = this.channel.exportable_pubKey! // duplicate info, slowly moving to just senderUserId
-      // if (channel.userName) this.contents.sender_username = channel.userName
-      // const signKey = this.channel.channelSignKey
-      // const sign = sbCrypto.sign(signKey, body.contents)
-
-      // const image_sign = sbCrypto.sign(signKey!, this.contents.image)
-      // const imageMetadata_sign = sbCrypto.sign(signKey, JSON.stringify(this.contents.imageMetaData))
-
-      // // if present, this is 1:1 message (such as a whisper) 
-      // if (this.#sendToPubKey) {
-      //   this.#encryptionKey = await sbCrypto.deriveKey(
-      //     this.channel.key,
-      //     await sbCrypto.importKey("jwk", this.#sendToPubKey, "ECDH", true, []),
-      //     "AES", false, ["encrypt", "decrypt"]
-      //   )
-      // } else {
-
-      // const lockedKey = this.channel.keys.lockedKey
-      // console.log('==== SBMessage() picking what key to use for channel (and this is channel.keys.lockedKey):', this.channel, lockedKey)
-      // this.#encryptionKey = lockedKey ? lockedKey : this.channel.keys.encryptionKey
-
-      // Promise.all([sign, image_sign, imageMetadata_sign]).then((values) => {
-      //   this.contents.sign = values[0]
-      //   this.contents.image_sign = values[1]
-      //   this.contents.imageMetadata_sign = values[2]
-      //   this.contents.imgObjVersion = '2' // default for anything new
-      //   // NOTE: mtg:adding this breaks messages... but I dont understand why
-      //   // const isVerfied = await this.channel.api.postPubKey(this.channel.exportable_pubKey!)
-      //   // console.log('here',isVerfied)
-      //   // this.contents.isVerfied = isVerfied?.success ? true : false
-      //   // console.log(this)
-      //   resolve(this)
-      // })
-
     })
   }
 
@@ -2794,19 +2349,7 @@ class SBMessage {
   }
 } /* class SBMessage */
 
-// // backwards compatibility
-// function oldChannelConstructorInterface(sbServer: SBServer, userKey: JsonWebKey, channelId: string): SBChannelHandle {
-//   // constructor(sbServer?: SBServer, userKey?: JsonWebKey, channelId?: string) {
-//   const _sbKey = sbCrypto.JWKToSBKey(userKey)
-//   _sb_assert(_sbKey && _sbKey.prefix === KeyPrefix.SBPrivateKey, "Unable to import JWK (keys)") 
-//   const _userKeyString = sbCrypto.SBKeyToString(_sbKey!)
-//   _sb_assert(_userKeyString, "Unable to import JWK (keys)")
-//   return {
-//     channelId: channelId,
-//     userKeyString: _userKeyString!,
-//     channelServer: sbServer.channel_server
-//   }
-// }
+
 
 /**
  * Join a channel, taking a channel handle. Returns channel object.
@@ -2831,36 +2374,13 @@ class SBMessage {
  * 
  */
 class Channel extends SBChannelKeys {
-  // ready: Promise<Channel>
   channelReady: Promise<Channel>
-  // #ChannelReadyFlag: boolean = false // must be named <class>ReadyFlag
   static ReadyFlag = Symbol('ChannelReadyFlag'); // see below for '(this as any)[Channel.ReadyFlag] = false;'
-
-  // #sbServer?: SBServer
-  motd?: string = ''
   locked?: boolean = false // TODO: need to make sure we're tracking whenever this has changed
-
   // this is actually info for lock status, and is now available to Owner (no admin status anymore)
   adminData?: Dictionary<any> // todo: make into getter
-
-  // we no longer have admin concept; the SSO model is being deprecated in SB 2.x
-  // admin: boolean = false
-
   verifiedGuest: boolean = false
-  // userName: string = ''
-
-  // owner: boolean = false // true if above user is owner
-
-  // // these should all be in SBChannelKeys
-  // #channelKeys?: ChannelKeys;
-  // #channelSignKey?: CryptoKey;
-  // #channelId: string
-  // #channelServer: string = '';
-  // // #channelApi: string = '';
-
   #cursor: string = ''; // last (oldest) message key seen
-
-  // abstract send(message: SBMessage): Promise<string>
 
   /**
    * Channel
@@ -2877,28 +2397,6 @@ class Channel extends SBChannelKeys {
           return this;
         })
         .catch(e => { throw e; });
-
-    // /** Historical (1.x) inteface:
-    //  * 
-    //  * @param SBServer - server to join
-    //  * @param JsonWebKey - key to use to join, this is "us" on the channel
-    //  * @param SBChannelId - the <a href="../glossary.html#term-channel-name">Channel Name</a> to connect to.
-    //  */
-    // constructor(sbServer: SBServer, userKey: JsonWebKey, channelId: SBChannelId);
-
-    // constructor(sbServerOrHandle: SBServer | SBChannelHandle, userKey?: JsonWebKey, channelId?: SBChannelId)
-
-    // let _handle: SBChannelHandle
-    // if (typeof sbServerOrHandle === 'object' && 'channelId' in sbServerOrHandle && 'userKeyString' in sbServerOrHandle) {
-    //   // modern interface
-    //   _sb_assert((!userKey) && (!channelId), "If you pass a handle, you cannot pass other parameters")
-    //   _handle = sbServerOrHandle as SBChannelHandle;
-    // } else {
-    //   // older interface
-    //   console.warn("Deprecated channel constructor used, please update your code")
-    //   _sb_assert(userKey && channelId, "If first parameter is SBServer, you must also pass both userKey and channelId")
-    //   _handle = oldChannelConstructorInterface(sbServerOrHandle as SBServer, userKey!, channelId!)
-    // }
   }
 
   get ready() { return this.channelReady }
@@ -2912,19 +2410,11 @@ class Channel extends SBChannelKeys {
       [SB_CHANNEL_HANDLE_SYMBOL]: true,
       channelId: this.channelId!,
       userPrivateKey: this.userPrivateKey,
-      channelPrivateKey: this.channelUserPrivateKey,
+      // channelPrivateKey: this.channelUserPrivateKey,
       channelServer: this.channelServer,
       channelData: this.channelData
     }
   }
-
-  // refactoring - most of these are now in SBChannelKeys:
-  // @Memoize @Ready get sbServer() { return this.#sbServer }
-  // @Memoize @Ready get keys() { return this.#channelKeys! }
-  // @Memoize @Ready get channelId() { return this.#channelId }
-  // @Memoize @Ready get channelSignKey() { return (this.#channelSignKey!) }
-  // @Memoize @Ready get capacity() { return this.#capacity }
-  // @Memoize get channelServer() { return this.#channelServer }
 
   /*
    * Implements Channel api calls.
@@ -2989,14 +2479,7 @@ class Channel extends SBChannelKeys {
         .catch((e: Error) => { reject("ChannelApi (SBFetch) Error [2]: " + WrapError(e)) })
     })
 
-    // let authString = '';
-    // const token_data = (new TextEncoder).encode(new Date().getTime().toString())
-    // // ToDo: this is outdated (and weak) auth; should sign with user key any api call
-    // // authString = token_data + '.' + await sbCrypto.sign(this.channelSignKey, token_data)
 
-    // if (DBG) console.log("will sign using:", this.privateKey, token_data)
-    // authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.signKey, token_data))
-    // if (DBG) console.log("finished signing, got authstring:", authString)
 
   }
 
@@ -3005,107 +2488,6 @@ class Channel extends SBChannelKeys {
     return undefined
   }
 
-
-  // // decrypts message, if there are any issues with it return 'undefined',
-  // // which basically means "i don't know what to do with it"
-  // async deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<ChannelMessage | undefined> {
-  //   const z = messageIdRegex.exec(m00)
-
-  //   // const keys = this.keys
-  //   // let encryptionKey = keys.lockedKey ? keys.lockedKey : keys.encryptionKey
-  //   let encryptionKey = this.encryptionKey
-
-  //   if (z) {
-  //     let m: ChannelMessage = {
-  //       // type: 'encrypted',
-  //       channelId: z[1],
-  //       timestampPrefix: z[2],
-  //       _id: z[1] + z[2],
-  //       // encryptedContents: m01 // encryptedContentsMakeBinary(m01) //TODO fix
-  //     }
-  //     let unwrapped: ArrayBuffer
-  //     try {
-  //       unwrapped = await sbCrypto.unwrap(encryptionKey, m)
-  //     } catch (e) {
-
-  //       const msg = `ERROR: cannot decrypt message with either locked or unlocked key`
-  //       if (DBG) console.error(msg)
-  //       return (undefined)
-
-  //       // if (encryptionKey === keys.lockedKey) {
-  //       //   try {
-  //       //     encryptionKey = keys.encryptionKey
-  //       //     unwrapped = await sbCrypto.unwrap(encryptionKey, m.encrypted_contents!, 'string')
-  //       //   } catch (e) {
-  //       //     const msg = `ERROR: cannot decrypt message with either locked or unlocked key`
-  //       //     if (DBG) console.error(msg)
-  //       //     return (undefined)
-
-  //       //   }
-  //       // } else {
-  //       //   const msg = `ERROR: cannot decrypt message with either locked or unlocked key`
-  //       //   if (DBG) console.error(msg)
-  //       //   return (undefined)
-  //       // }
-
-  //     }
-
-  //     // let m2: ChannelMessage = { ...m, ...jsonParseWrapper(unwrapped, 'L1977') };
-
-  //     let m2: ChannelMessage = { ...m, ...extractPayload(unwrapped).payload };
-
-  //     // if (m2.contents) {
-  //     //   m2.text = m2.contents
-  //     //   // if(!m2?.contents?.hasOwnProperty('isVerfied')){
-  //     //   //   m2.contents!.isVerified
-  //     //   // }
-  //     // }
-  //     // m2.user = {
-  //     //   name: m2.sender_username ? m2.sender_username : 'Unknown',
-  //     //   _id: m2.sender_pubKey
-  //     // }
-
-  //     if ((m2.verificationToken) && (!m2.sender /* sender_pubKey */)) {
-  //       if (DBG) console.error('ERROR: message with verification token is lacking sender identity (cannot be verified).')
-  //       return (undefined)
-  //     }
-
-  //     // const senderPubKey = await sbCrypto.importKey('jwk', m2.sender_pubKey!, 'ECDH', true, [])
-  //     // const verifyKey = await sbCrypto.deriveKey(keys.signKey, senderPubKey, 'HMAC', false, ['sign', 'verify'])
-
-  //     const sender = new SB384(m2.sender) // we're now using SBUserId as the sender identity
-  //     await sender.ready
-  //     // const verifyKey = await sbCrypto.deriveKey(this.channelSignKey, sender.key, 'HMAC', false, ['sign', 'verify'])
-  //     const verifyKey = await sbCrypto.deriveKey(this.privateKey, sender.publicKey, 'HMAC', false, ['sign', 'verify'])
-  //     const v = await sbCrypto.verify(verifyKey, m2.sign!, m2.contents!)
-
-  //     if (!v) {
-  //       console.error("***** signature is NOT correct for message (rejecting)")
-  //       if (DBG) {
-  //         console.log("verifyKey:", Object.assign({}, verifyKey))
-  //         console.log("m2.sign", Object.assign({}, m2.sign))
-  //         console.log("m2.contents", structuredClone(m2.contents))
-  //         console.log("Message:", Object.assign({}, m2))
-  //       }
-  //       return (undefined)
-  //     }
-
-  //     // // if it's a whisper, we unwrap from text to whisper
-  //     // if (m2.whispered === true) {
-  //     //   // ToDo: add the whisper 
-  //     //   console.error("ERROR: whisper not yet implemented in SB 2.0")
-  //     // }
-
-  //     return (m2)
-  //   } else {
-  //     console.error(`++++++++ #processMessage: ERROR - cannot parse channel ID / timestamp, invalid message`)
-  //     if (DBG) {
-  //       console.log(Object.assign({}, m00))
-  //       console.log(Object.assign({}, m01))
-  //     }
-  //     return (undefined)
-  //   }
-  // }
 
   /**
    * Channel.getLastMessageTimes
@@ -3276,11 +2658,15 @@ class Channel extends SBChannelKeys {
     return this.#callApi('/storageRequest?size=' + byteLength)
   }
 
-  // /** Channel.lock()
-  //  * 
-  //  * Locks the channel, so that new visitors need an "ack" to join.
-  //  * 
-  //  */
+
+/**
+ * Locks the channel. It's now invisible to any visitor whose userId has not
+ * been 'accepted' by the owner. Returns '{ success: true }' on success.
+ */
+  @Ready @Owner lock(): Promise<{ success: boolean }> {
+    return this.#callApi('/lockChannel')
+  }
+
   // @Ready @Owner lock(key?: CryptoKey): Promise<{ locked: boolean, lockedKey: JsonWebKey }> {
   //   console.warn("WARNING: lock() on channel api is in the process of being updated and tested ...")
   //   return new Promise(async (resolve, reject) => {
@@ -3313,56 +2699,8 @@ class Channel extends SBChannelKeys {
   // }
 
   @Ready @Owner acceptVisitor(userId: SBUserId) {
-
-    // Old code:
-    // // todo: assert that you're owner
-    // return new Promise(async (resolve, reject) => {
-    //   // ... no longer possible
-    //   // if (!this.privateKey /* this.keys.privateKey */)
-    //   //   reject(new Error("acceptVisitor(): no private key"))
-    //   const pubKey = sbCrypto.StringToJWK(userId)
-    //   if (!pubKey)
-    //     reject(new Error("acceptVisitor(): could not determine public key from SBUserId (should be able to)"))
-    //   const shared_key = await sbCrypto.deriveKey(
-    //     this.key /* this.keys.privateKey! */,
-    //     await sbCrypto.importKey('jwk', pubKey!, 'ECDH', false, []),
-    //     'AES', false, ['encrypt', 'decrypt']
-    //   );
-    //   const _encrypted_locked_key = await sbCrypto.encrypt(sbCrypto.str2ab(JSON.stringify(this.keys.lockedKey!)), shared_key)
-    //   resolve(this.#callApi('/acceptVisitor',
-    //     {
-    //       // pubKey: pubKey, encryptedLockedKey: JSON.stringify(_encrypted_locked_key) // deprecated
-    //       userId: userId, encryptedLockedKey: JSON.stringify(_encrypted_locked_key)
-    //     }))
-    // });
-
-    // New code:
     return this.#callApi('/acceptVisitor', { userId: userId })
-
-    // ... and ... we're done
   }
-
-
-    // EVEN older version:
-    // @Ready acceptVisitor(pubKey: string) {
-    //   console.warn("WARNING: acceptVisitor() on channel api has not been tested/debugged fully ..")
-    //   // todo: assert that you're owner
-    //   return new Promise(async (resolve, reject) => {
-    //     if (!this.privateKey /* this.keys.privateKey */)
-    //       reject(new Error("acceptVisitor(): no private key"))
-    //     const shared_key = await sbCrypto.deriveKey(
-    //       this.privateKey /* this.keys.privateKey! */,
-    //       await sbCrypto.importKey('jwk', jsonParseWrapper(pubKey, 'L2276'), 'ECDH', false, []),
-    //       'AES', false, ['encrypt', 'decrypt']
-    //     );
-    //     const _encrypted_locked_key = await sbCrypto.encrypt(sbCrypto.str2ab(JSON.stringify(this.keys.lockedKey!)), shared_key)
-    //     resolve(this.#callApi('/acceptVisitor',
-    //       {
-    //         pubKey: pubKey, encryptedLockedKey: JSON.stringify(_encrypted_locked_key)
-    //       }))
-    //   });
-    // }
-
 
   /**
    * returns a storage token (promise); basic consumption of channel budget
@@ -4774,7 +4112,7 @@ class Snackabra {
           [SB_CHANNEL_HANDLE_SYMBOL]: true,
           channelId: channelData.channelId!,
           userPrivateKey: channelKeys.userPrivateKey,
-          channelPrivateKey: (await new SB384(channelKeys.channelPrivateKey).ready).userPrivateKey,
+          // channelPrivateKey: (await new SB384(channelKeys.channelPrivateKey).ready).userPrivateKey,
           channelServer: this.channelServer,
           channelData: channelData
         })
