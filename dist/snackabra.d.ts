@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 28)";
+declare const version = "2.0.0-alpha.5 (build 30)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
@@ -11,24 +11,11 @@ export interface SBChannelHandle {
 export interface SBChannelData {
     channelId: SBChannelId;
     ownerPublicKey: SBUserPublicKey;
-    channelPublicKey: SBUserPublicKey;
     storageToken?: SBStorageToken;
 }
 export type SBStorageToken = string;
 export interface Dictionary<T> {
     [index: string]: T;
-}
-export interface ChannelMessage {
-    _id?: string;
-    timestampPrefix?: string;
-    channelId?: SBChannelId;
-    contents?: ArrayBuffer;
-    sender?: SBUserId;
-    encryptedContents?: ArrayBuffer;
-    timestamp?: number;
-    ttl?: number;
-    iv?: ArrayBuffer;
-    sign?: ArrayBuffer;
 }
 export interface Message {
     body: any;
@@ -40,10 +27,43 @@ export interface Message {
     eol?: number;
     _id: string;
 }
-export interface ChannelAdminData {
+export interface ChannelApiBody {
+    [SB_CHANNEL_API_BODY_SYMBOL]?: boolean;
+    channelId: SBChannelId;
+    path: string;
+    userId: SBUserId;
+    userPublicKey: SBUserPublicKey;
+    isOwner?: boolean;
+    apiPayload?: ArrayBuffer;
+    timestamp: number;
+    sign: ArrayBuffer;
+}
+export declare function validate_ChannelApiBody(body: any): ChannelApiBody;
+export interface ChannelMessage {
+    _id?: string;
+    ready?: boolean;
+    timestampPrefix?: string;
     channelId?: SBChannelId;
-    joinRequests: Array<SBUserId>;
-    capacity: number;
+    contents?: ArrayBuffer;
+    sendTo?: SBUserId;
+    sender?: SBUserId;
+    encryptedContents?: ArrayBuffer;
+    timestamp?: number;
+    ttl?: number;
+    iv?: ArrayBuffer;
+    sign?: ArrayBuffer;
+}
+export declare function validate_ChannelMessage(body: any): ChannelMessage;
+export interface ChannelAdminData {
+    channelId: SBChannelId;
+    channelData: SBChannelData;
+    channelCapacity: number;
+    locked: boolean;
+    accepted: Set<SBUserId>;
+    visitors: Map<SBUserId, SBUserPublicKey>;
+    storageLimit: number;
+    motherChannel: SBChannelId;
+    lastTimestamp: number;
 }
 export interface EncryptParams {
     name?: string;
@@ -148,6 +168,7 @@ export declare class SBCrypto {
     ab2str(buffer: Uint8Array): string;
     compareKeys(key1: Dictionary<any>, key2: Dictionary<any>): boolean;
 }
+declare const SB_CHANNEL_API_BODY_SYMBOL: unique symbol;
 declare const SB_CHANNEL_HANDLE_SYMBOL: unique symbol;
 declare const SB_MESSAGE_SYMBOL: unique symbol;
 declare const SB_OBJECT_HANDLE_SYMBOL: unique symbol;
@@ -220,11 +241,8 @@ declare class Channel extends SBChannelKeys {
     getMother(): Promise<any>;
     getJoinRequests(): Promise<any>;
     isLocked(): Promise<boolean>;
-    setMOTD(motd: string): Promise<any>;
-    getAdminData(): Promise<ChannelAdminData>;
-    authorize(ownerPublicKey: Dictionary<any>, serverSecret: string): Promise<any>;
     storageRequest(byteLength: number): Promise<Dictionary<any>>;
-    acceptVisitor(userId: SBUserId): void;
+    acceptVisitor(userId: SBUserId): Promise<any>;
     getStorageToken(size: number): Promise<string>;
     budd(): Promise<SBChannelHandle>;
     budd(options: {
@@ -276,7 +294,7 @@ declare class SBObjectHandle implements Interfaces.SBObjectHandle_base {
 export declare class StorageApi {
     #private;
     storageServer: string;
-    constructor(sbServerOrStorageServer: string);
+    constructor(storageServer: string);
     storeObject(type: string, fileId: Base62Encoded, iv: ArrayBuffer, salt: ArrayBuffer, storageToken: string, data: ArrayBuffer): Promise<Dictionary<any>>;
     storeData(buf: BodyInit | Uint8Array, type: SBObjectType, channelOrHandle: SBChannelHandle | Channel): Promise<Interfaces.SBObjectHandle>;
     fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>;

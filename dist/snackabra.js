@@ -5,8 +5,53 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a;
-const version = '2.0.0-alpha.5 (build 28)';
+const version = '2.0.0-alpha.5 (build 30)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
+export function validate_ChannelApiBody(body) {
+    if (!body)
+        throw new Error(`invalid ChannelApiBody (null or undefined)`);
+    else if (body[SB_CHANNEL_API_BODY_SYMBOL])
+        return body;
+    else if (body.channelId && body.channelId.length === 43
+        && body.path && typeof body.path === 'string' && body.path.length > 0
+        && body.userId && typeof body.userId === 'string' && body.userId.length === 43
+        && body.userPublicKey && body.userPublicKey.length > 0
+        && (!body.isOwner || typeof body.isOwner === 'boolean')
+        && (!body.apiPayload || body.apiPayload instanceof ArrayBuffer)
+        && body.timestamp && typeof body.timestamp === 'number'
+        && body.sign && body.sign instanceof ArrayBuffer) {
+        return { ...body, [SB_CHANNEL_API_BODY_SYMBOL]: true };
+    }
+    else {
+        if (DBG)
+            console.error('invalid ChannelApiBody ... trying to ingest:\n', body);
+        throw new Error(`invalid ChannelApiBody`);
+    }
+}
+export function validate_ChannelMessage(body) {
+    if (!body)
+        throw new Error(`invalid ChannelMessage (null or undefined)`);
+    else if (body[SB_CHANNEL_MESSAGE_SYMBOL])
+        return body;
+    else if ((!body._id || typeof body._id === 'string' && body._id.length === 86)
+        && (!body.ready || typeof body.ready === 'boolean')
+        && (!body.timestampPrefix || typeof body.timestampPrefix === 'string' && body.timestampPrefix.length === 26)
+        && (!body.channelId || typeof body.channelId === 'string' && body.channelId.length === 43)
+        && (!body.contents || body.contents instanceof ArrayBuffer)
+        && (!body.sender || typeof body.sender === 'string' && body.sender.length === 43)
+        && (!body.encryptedContents || body.encryptedContents instanceof ArrayBuffer)
+        && (!body.timestamp || typeof body.timestamp === 'number')
+        && (!body.ttl || typeof body.ttl === 'number')
+        && (!body.iv || body.iv instanceof ArrayBuffer)
+        && (!body.sign || body.sign instanceof ArrayBuffer)) {
+        return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true };
+    }
+    else {
+        if (DBG)
+            console.error('invalid ChannelMessage ... trying to ingest:\n', body);
+        throw new Error(`invalid ChannelMessage`);
+    }
+}
 var DBG = true;
 var DBG2 = false;
 export const msgTtlToSeconds = [0, 60, 300, 1200, 3600, 14400, 64800, 259200, 1036800, 4147200, 31622400, 0, 0, 0, 0, Infinity];
@@ -46,19 +91,15 @@ export class MessageBus {
 function SBFetch(input, init) {
     return new Promise((resolve, reject) => {
         try {
-            fetch(input, init ?? { method: 'GET' })
+            fetch(input, init ?? { method: 'GET', headers: { 'Content-Type': 'application/json' } })
                 .then((response) => {
                 resolve(response);
-            }).catch((error) => {
-                const msg = `[SBFetch] Error (fetch through a reject, might be normal): ${error}`;
-                console.warn(msg);
-                reject(msg);
-            });
+            }).catch((error) => { throw error; });
         }
         catch (e) {
             const msg = `[SBFetch] Error (fetch exception, might be normal operation): ${e}`;
             console.warn(msg);
-            reject();
+            reject(msg);
         }
     });
 }
@@ -1024,7 +1065,9 @@ function ExceptionReject(target, _propertyKey, descriptor) {
         };
     }
 }
-const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle', 'SBChannelHandle'];
+const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle', 'SBChannelHandle', 'ChannelApiBody'];
+const SB_CHANNEL_MESSAGE_SYMBOL = Symbol('SB_CHANNEL_MESSAGE_SYMBOL');
+const SB_CHANNEL_API_BODY_SYMBOL = Symbol('SB_CHANNEL_API_BODY_SYMBOL');
 const SB_CHANNEL_HANDLE_SYMBOL = Symbol('SBChannelHandle');
 const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage');
 const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle');
@@ -1259,29 +1302,13 @@ export class SBChannelKeys extends SB384 {
                         _sb_assert(this.channelServer, "SBChannelKeys() constructor: need either channelKeys or channelServer");
                         if (DBG)
                             console.log("++++ SBChannelKeys initialized from channel server");
-                        await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys', {
-                            method: 'GET',
-                            headers: { 'Content-Type': 'application/json' },
-                        })
-                            .then((response) => {
-                            if (!response.ok)
-                                reject("SBChannelKeys(): failed to get channel keys (network response not ok)");
-                            return response.json();
-                        })
-                            .then((cpk) => {
-                            if (cpk.error)
-                                reject("SBChannelKeys(): failed to get channel keys (error in response)");
-                            _sb_assert(cpk.channelId === this.#channelId && cpk.channelPublicKey && cpk.ownerPublicKey, "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
-                            this.#channelData = cpk;
-                        })
-                            .catch((e) => { throw (e); });
-                    }
-                    const ck1 = await (new SB384(this.#channelData.channelPublicKey)).ready;
-                    this.#channelPublicKey = ck1.publicKey;
-                    if (handle.channelPrivateKey) {
-                        const ck2 = await (new SB384(handle.channelPrivateKey, true)).ready;
-                        _sb_assert(ck1.userPublicKey === ck2.userPublicKey, "SBChannelKeys(): channel public key mismatch (?)");
-                        this.#channelPrivateKey = ck2.privateKey;
+                        const response = await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys');
+                        _sb_assert(response && !response.ok, "SBChannelKeys(): failed to get channel keys (network response not 'ok')");
+                        const resp = extractPayload(await response.arrayBuffer());
+                        _sb_assert(resp && !resp.error, "SBChannelKeys(): failed to get channel keys (error in response)");
+                        const cpk = resp;
+                        _sb_assert(cpk.channelId === this.#channelId && cpk.ownerPublicKey, "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
+                        this.#channelData = cpk;
                     }
                 }
                 else {
@@ -1296,7 +1323,6 @@ export class SBChannelKeys extends SB384 {
                     this.#channelData = {
                         channelId: this.#channelId,
                         ownerPublicKey: this.userPublicKey,
-                        channelPublicKey: ck.userPublicKey
                     };
                 }
                 _sb_assert(this.SB384ReadyFlag, "SBChannelKeys(): parent SB384 object is not ready (?)");
@@ -1422,41 +1448,50 @@ class Channel extends SBChannelKeys {
             channelData: this.channelData
         };
     }
-    #callApi(path, body) {
+    #callApi(path, apiPayload) {
         if (DBG)
-            console.log("#callApi:", path);
-        const method = 'POST';
+            console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", apiPayload);
+        _sb_assert(this.channelId && path, "Internal Error (L2864)");
         return new Promise(async (resolve, reject) => {
-            if (DBG)
-                console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", body);
             await this.channelReady;
-            if (!this.channelId)
-                reject("ChannelApi.#callApi: no channel ID (?)");
-            let authString = '';
-            const token_data = (new TextEncoder).encode(new Date().getTime().toString());
-            if (DBG)
-                console.log("will sign using:", this.privateKey, token_data);
-            authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.signKey, token_data));
-            if (DBG)
-                console.log("finished signing, got authstring:", authString);
-            let init = {
-                method: method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'authorization': authString,
-                }
-            };
-            let fullBody = {
-                userId: this.userId,
+            const timestamp = Math.round(Date.now() / 25) * 25;
+            const viewBuf = new ArrayBuffer(8);
+            const view = new DataView(viewBuf);
+            view.setFloat64(0, timestamp);
+            const pathAsArrayBuffer = new TextEncoder().encode(path).buffer;
+            const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer);
+            const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload) : undefined;
+            const sign = await sbCrypto.sign(this.privateKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf);
+            const apiBody = {
                 channelId: this.channelId,
-                ...body
+                path: path,
+                userId: this.userId,
+                userPublicKey: this.userPublicKey,
+                apiPayload: apiPayloadBuf,
+                timestamp: timestamp,
+                sign: sign
             };
-            init.body = JSON.stringify(fullBody);
+            const init = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/octet-stream"',
+                },
+                body: assemblePayload(validate_ChannelApiBody(apiBody))
+            };
             if (DBG)
-                console.log("ChannelApi.#callApi: calling fetch with init:", init);
+                console.log("==== ChannelApi.#callApi: calling fetch with init:\n", init);
             SBFetch(this.channelServer + '/api/v2/channel/' + this.channelId + path, init)
                 .then(async (response) => {
-                const retValue = await response.json();
+                var retValue;
+                if (response.headers.get('content-type') === 'application/json; charset=utf-8') {
+                    retValue = jsonParseWrapper(await response.json(), "L2928");
+                }
+                else if (response.headers.get('content-type') === 'application/octet-stream') {
+                    retValue = extractPayload(await response.arrayBuffer());
+                }
+                else {
+                    throw new Error("ChannelApi.#callApi: invalid content-type in response");
+                }
                 if ((!response.ok) || (retValue.error)) {
                     let apiErrorMsg = 'Network or Server error on Channel API call';
                     if (response.status)
@@ -1464,12 +1499,12 @@ class Channel extends SBChannelKeys {
                     if (retValue.error)
                         apiErrorMsg += ': ' + retValue.error;
                     if (DBG)
-                        console.error("ChannelApi.#callApi error:", apiErrorMsg);
+                        console.error("ChannelApi.#callApi error:\n", apiErrorMsg);
                     reject(new Error(apiErrorMsg));
                 }
                 else {
                     if (DBG)
-                        console.log("ChannelApi.#callApi: success");
+                        console.log("ChannelApi.#callApi: success\n", retValue);
                     resolve(retValue);
                 }
             })
@@ -1486,48 +1521,27 @@ class Channel extends SBChannelKeys {
     }
     getOldMessages(currentMessagesLength = 100, paginate = false) {
         return new Promise(async (resolve, reject) => {
-            if (!this.channelId) {
-                reject("Channel.getOldMessages: no channel ID (?)");
-            }
-            if (!this.channelReady) {
-                if (DBG)
-                    console.log("Channel.getOldMessages: channel not ready (we will wait)");
-                await this.ready;
-            }
-            let cursorOption = '';
-            if (paginate)
-                cursorOption = '&cursor=' + this.#cursor;
-            SBFetch(this.channelServer + '/' + this.channelId + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
-                method: 'GET',
-            }).then(async (response) => {
-                if (!response.ok)
-                    reject(new Error('Network response was not OK'));
-                return response.json();
-            }).then((messages) => {
-                if (DBG) {
-                    console.log("getOldMessages");
-                    console.log(messages);
-                }
-                Promise.all(Object
-                    .keys(messages)
-                    .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-                    .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
-                    .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v) => Boolean(v)))
-                    .then((decryptedMessageArray) => {
-                    let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-                    if (lastMessage)
-                        this.#cursor = lastMessage._id || '';
-                    if (DBG2)
-                        console.log(decryptedMessageArray);
-                    resolve(decryptedMessageArray);
-                })
-                    .catch((e) => {
-                    const msg = `Channel.getOldMessages(): failed to decrypt messages: ${e}`;
-                    console.error(msg);
-                    reject(msg);
-                });
-            }).catch((e) => {
-                const msg = `Channel.getOldMessages(): SBFetch failed: ${e}`;
+            _sb_assert(this.channelId, "Channel.getOldMessages: no channel ID (?)");
+            let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
+            const messages = await this.#callApi('/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption);
+            _sb_assert(messages, "Channel.getOldMessages: no messages (empty/null response)");
+            if (DBG)
+                console.log("getOldMessages\n", messages);
+            Promise.all(Object
+                .keys(messages)
+                .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
+                .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
+                .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v) => Boolean(v)))
+                .then((decryptedMessageArray) => {
+                let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
+                if (lastMessage)
+                    this.#cursor = lastMessage._id || '';
+                if (DBG2)
+                    console.log(decryptedMessageArray);
+                resolve(decryptedMessageArray);
+            })
+                .catch((e) => {
+                const msg = `Channel.getOldMessages(): failed to decrypt messages: ${e}`;
                 console.error(msg);
                 reject(msg);
             });
@@ -1547,16 +1561,11 @@ class Channel extends SBChannelKeys {
             resolve(this.locked);
         }));
     }
-    setMOTD(motd) { return this.#callApi('/motd', { motd: motd }); }
-    getAdminData() { return this.#callApi('/getAdminData'); }
-    authorize(ownerPublicKey, serverSecret) {
-        return this.#callApi('/authorizeRoom', { roomId: this.channelId, SERVER_SECRET: serverSecret, ownerKey: ownerPublicKey });
-    }
     storageRequest(byteLength) {
         return this.#callApi('/storageRequest?size=' + byteLength);
     }
     acceptVisitor(userId) {
-        console.warn(`WARNING: acceptVisitor(${userId}) on channel api has not been tested/debugged fully ..`);
+        return this.#callApi('/acceptVisitor', { userId: userId });
     }
     async getStorageToken(size) {
         const storageTokenReq = await this.#callApi(`/storageRequest?size=${size}`);
@@ -1635,18 +1644,6 @@ __decorate([
     ExceptionReject
 ], Channel.prototype, "isLocked", null);
 __decorate([
-    Ready,
-    Owner
-], Channel.prototype, "setMOTD", null);
-__decorate([
-    Ready,
-    Owner
-], Channel.prototype, "getAdminData", null);
-__decorate([
-    Ready,
-    Owner
-], Channel.prototype, "authorize", null);
-__decorate([
     Ready
 ], Channel.prototype, "storageRequest", null);
 __decorate([
@@ -1699,17 +1696,14 @@ class ChannelSocket extends Channel {
             const url = this.#ws.url;
             if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2)
                 this.#ws.websocket = new WebSocket(url);
+            this.#ws.websocket.addEventListener('message', this.#processMessage);
             this.#ws.websocket.addEventListener('open', async () => {
                 this.#ws.closed = false;
                 await this.ready;
-                this.#ws.init = { userId: this.userId };
-                if (DBG) {
-                    console.log("++++++++ readyPromise() constructed init:");
-                    console.log(this.#ws.init);
-                }
-                this.#ws.websocket.send(JSON.stringify(this.#ws.init));
+                if (DBG)
+                    console.log("++++++++ readyPromise() sending init");
+                this.#ws.websocket.send(JSON.stringify({ ready: true }));
             });
-            this.#ws.websocket.addEventListener('message', this.#processMessage);
             this.#ws.websocket.addEventListener('close', (e) => {
                 this.#ws.closed = true;
                 if (!e.wasClean) {
@@ -2011,13 +2005,9 @@ class SBObjectHandle {
 }
 export class StorageApi {
     storageServer;
-    constructor(sbServerOrStorageServer) {
-        if (typeof sbServerOrStorageServer === 'string') {
-            this.storageServer = sbServerOrStorageServer;
-        }
-        else {
-            throw new Error('[StorageApi] Invalid parameter to constructor');
-        }
+    constructor(storageServer) {
+        _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)');
+        this.storageServer = storageServer;
     }
     #padBuf(buf) {
         const image_size = buf.byteLength;
@@ -2363,13 +2353,14 @@ class Snackabra {
                 channelData.storageToken = _storageToken;
                 if (DBG)
                     console.log("Will try to create channel with channelData:", channelData);
-                const data = new TextEncoder().encode(JSON.stringify(channelData));
-                let resp = await SBFetch(this.channelServer + '/api/v2/channel/' + channelData.channelId + '/create', {
+                const data = assemblePayload(channelData);
+                const response = await SBFetch(this.channelServer + '/api/v2/channel/' + channelData.channelId + '/create', {
                     method: 'POST',
+                    headers: { 'Content-Type': 'application/octet-stream"' },
                     body: data
                 });
-                resp = await resp.json();
-                if (!resp.success) {
+                const resp = extractPayload(await response.arrayBuffer());
+                if (!resp || !resp.success) {
                     const msg = `Creating channel did not succeed (${JSON.stringify(resp)})`;
                     console.error(msg);
                     reject(msg);

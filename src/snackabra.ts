@@ -21,7 +21,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 28)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 30)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -87,7 +87,7 @@ export interface SBChannelHandle {
 export interface SBChannelData {
   channelId: SBChannelId,
   ownerPublicKey: SBUserPublicKey,
-  channelPublicKey: SBUserPublicKey,
+  // channelPublicKey: SBUserPublicKey, ... actually ... not using this now :-)
   storageToken?: SBStorageToken, // used when creating/authorizing a channel from a handle
 }
 
@@ -114,7 +114,8 @@ interface WSProtocolOptions {
   onError?: null | CallableFunction,
   timeout?: number,
   closed: boolean,
-  init?: { userId: SBUserId }, // publi identifier
+
+  // init?: { userId: SBUserId },
   // identity?: Identity,
   // keys?: ChannelKeys,
   // motd?: string,
@@ -203,30 +204,7 @@ export interface Dictionary<T> {
 
 
 /**
- * SB standard wrapped encrypted messages.
- * 
- * Encryption is done with AES-GCM, 16 bytes of salt, The
- * ``contents`` are url-safe base64, same thing with the nonce (iv),
- *  depending on if it's internal or over wire.
- * Timestamp prefix is fourty-two (42) 0s and 1s as string, e.g.:
- * '011000001110001011010110101010000100000110'
- * 
- */
-export interface ChannelMessage {
-  _id?: string, // channelId + '.' + timestampPrefix
-  timestampPrefix?: string, // '0'/'1' - 42 of them
-  channelId?: SBChannelId, // base62 x 43
-  contents?: ArrayBuffer, // if present means unencrypted
-  sender?: SBUserId, // public (hash) of sender, matches publicKey of sender, verified by channel server
-  encryptedContents?: ArrayBuffer, // encrypted contents
-  timestamp?: number, // timestamp at point of encryption, verified along with encrypt/decrypt
-  ttl?: number, // Value 0-15; if it's missing it's 15/0xF (infinite)
-  iv?: ArrayBuffer,
-  sign?: ArrayBuffer,
-}
-
-/**
- * The "app" level message format, provided to onMessage of ChannelSocket.
+ * The "app" level message format, provided to onMessage (by ChannelSocket)
  * Note it will only be forwarded if verified.
  */
 export interface Message {
@@ -235,10 +213,102 @@ export interface Message {
   sender: SBUserId;
   senderPublicKey: SBUserPublicKey;
   senderTimestamp: number;
-  serverTimestamp: number;
+  serverTimestamp: number; // reconstructed from timestampPrefix
   eol?: number; // end of life (timestamp), if present
   _id: string;
 }
+
+
+export interface ChannelApiBody {
+  [SB_CHANNEL_API_BODY_SYMBOL]?: boolean,
+  channelId: SBChannelId,
+  path: string,
+  userId: SBUserId,
+  userPublicKey: SBUserPublicKey,
+  isOwner?: boolean,
+  apiPayload?: ArrayBuffer,
+  timestamp: number,
+  sign: ArrayBuffer
+}
+
+
+// return self if it matches shape, otherwise throw
+// extraneous properties are ignored
+export function validate_ChannelApiBody(body: any): ChannelApiBody {
+  if (!body) throw new Error(`invalid ChannelApiBody (null or undefined)`)
+  else if (body[SB_CHANNEL_API_BODY_SYMBOL]) return body as ChannelApiBody
+  else if (
+    body.channelId && body.channelId.length === 43
+    && body.path && typeof body.path === 'string' && body.path.length > 0
+    && body.userId && typeof body.userId === 'string' && body.userId.length === 43
+    && body.userPublicKey && body.userPublicKey.length > 0
+    && (!body.isOwner || typeof body.isOwner === 'boolean')
+    && (!body.apiPayload || body.apiPayload instanceof ArrayBuffer)
+    && body.timestamp && typeof body.timestamp === 'number'
+    && body.sign && body.sign instanceof ArrayBuffer
+  ) {
+    return { ...body, [SB_CHANNEL_API_BODY_SYMBOL]: true } as ChannelApiBody
+  } else {
+    if (DBG) console.error('invalid ChannelApiBody ... trying to ingest:\n', body)
+    throw new Error(`invalid ChannelApiBody`)
+  }
+}
+
+/**
+ * SB standard wrapped encrypted messages.
+ * 
+ * Encryption is done with AES-GCM, 16 bytes of salt, The
+ * ``contents`` are url-safe base64, same thing with the nonce (iv),
+ *  depending on if it's internal or over wire.
+ * 
+ * Timestamp prefix is fourty-two (26) [0-3] characters.
+ * It encodes epoch milliseconds * 4^4 (last four are '0000').
+ * 
+ * "Everything is optional" as this is used in multiple contexts.
+ * Use ``validate_ChannelMessage()`` to validate.
+ * 
+ * Note that channel server doesn't ened userPublicKey on every
+ * channel message since it's provided on websocket setup.
+ * 
+ */
+export interface ChannelMessage {
+  _id?: string, // channelId + '.' + timestampPrefix
+  ready?: boolean, // if present, signals other side is ready to receive messages (rest of message ignored)
+  timestampPrefix?: string, // '0'/'1'/'2'/'3' - 26 of them (note last four are '0000'), timestamp per server
+  channelId?: SBChannelId, // base62 x 43
+  contents?: ArrayBuffer, // if present means unencrypted (client side)
+  sendTo?: SBUserId, // public (hash) of recipient; note that Owner sees all messages
+  sender?: SBUserId, // public (hash) of sender, matches publicKey of sender, verified by channel server
+  encryptedContents?: ArrayBuffer, // encrypted contents
+  timestamp?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
+  ttl?: number, // Value 0-15; if it's missing it's 15/0xF (infinite)
+  iv?: ArrayBuffer,
+  sign?: ArrayBuffer,
+}
+
+export function validate_ChannelMessage(body: any): ChannelMessage {
+  if (!body) throw new Error(`invalid ChannelMessage (null or undefined)`)
+  else if (body[SB_CHANNEL_MESSAGE_SYMBOL]) return body as ChannelMessage
+  else if (
+       (!body._id || typeof body._id === 'string' && body._id.length === 86)
+    && (!body.ready || typeof body.ready === 'boolean')
+    && (!body.timestampPrefix || typeof body.timestampPrefix === 'string' && body.timestampPrefix.length === 26)
+    && (!body.channelId || typeof body.channelId === 'string' && body.channelId.length === 43)
+    && (!body.contents || body.contents instanceof ArrayBuffer)
+    && (!body.sender || typeof body.sender === 'string' && body.sender.length === 43)
+    && (!body.encryptedContents || body.encryptedContents instanceof ArrayBuffer)
+    && (!body.timestamp || typeof body.timestamp === 'number')
+    && (!body.ttl || typeof body.ttl === 'number')
+    && (!body.iv || body.iv instanceof ArrayBuffer)
+    && (!body.sign || body.sign instanceof ArrayBuffer)
+  ) {
+    return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true } as ChannelMessage
+  } else {
+    if (DBG) console.error('invalid ChannelMessage ... trying to ingest:\n', body)
+    throw new Error(`invalid ChannelMessage`)
+  }
+}
+
 
 // REPLACED by ChannelMessage
 // export interface SBMessageContents {
@@ -288,9 +358,15 @@ export interface Message {
 // }
 
 export interface ChannelAdminData {
-  channelId?: SBChannelId,
-  joinRequests: Array<SBUserId>,
-  capacity: number,
+  channelId: SBChannelId,
+  channelData: SBChannelData,
+  channelCapacity: number,
+  locked: boolean,
+  accepted: Set<SBUserId>,
+  visitors: Map<SBUserId, SBUserPublicKey>,
+  storageLimit: number,
+  motherChannel: SBChannelId,
+  lastTimestamp: number,
 }
 
 /**
@@ -520,21 +596,14 @@ export class MessageBus {
 function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
     try {
-      // const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      // if (url.includes("a32.")) // for code transitioning, 'a32' prefix should be only internal to jslib
-      //   reject(`[SBFetch] ERROR: url contains substring 'a32.' (${url})`);
-      fetch(input, init ?? { method: 'GET' })
+      fetch(input, init ?? { method: 'GET', headers: { 'Content-Type': 'application/json' } }, )
         .then((response) => {
           resolve(response); // we don't check for status here, we'll do that in the caller
-        }).catch((error) => {
-          const msg = `[SBFetch] Error (fetch through a reject, might be normal): ${error}`;
-          console.warn(msg); // not necessarily an error but helps trace up through callee
-          reject(msg);
-        });
+        }).catch((error) => { throw error; })
     } catch (e) {
       const msg = `[SBFetch] Error (fetch exception, might be normal operation): ${e}`;
       console.warn(msg); // not necessarily an error but helps trace up through callee
-      reject();
+      reject(msg);
     }
   });
 }
@@ -2023,10 +2092,13 @@ function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecorat
   }
 }
 
-const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle', 'SBChannelHandle'] as const
+const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle', 'SBChannelHandle', 'ChannelApiBody'] as const
+
 type SB_CLASS_TYPES = typeof SB_CLASS_ARRAY[number]
 type SB_CLASSES = SBMessage | SBObjectHandle | SBChannelHandle
 
+const SB_CHANNEL_MESSAGE_SYMBOL = Symbol('SB_CHANNEL_MESSAGE_SYMBOL')
+const SB_CHANNEL_API_BODY_SYMBOL = Symbol('SB_CHANNEL_API_BODY_SYMBOL') 
 const SB_CHANNEL_HANDLE_SYMBOL = Symbol('SBChannelHandle')
 const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage')
 const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle')
@@ -2462,34 +2534,24 @@ export class SBChannelKeys extends SB384 {
             // (can't use channel api since ... we don't have channel yet)
             _sb_assert(this.channelServer, "SBChannelKeys() constructor: need either channelKeys or channelServer")
             if (DBG) console.log("++++ SBChannelKeys initialized from channel server")
-            await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys',
-              {
-                method: 'GET',
-                headers: { 'Content-Type': 'application/json' },
-              })
-              .then((response: Response) => {
-                if (!response.ok)
-                  reject("SBChannelKeys(): failed to get channel keys (network response not ok)");
-                return response.json() as unknown as SBChannelData // continues below
-              })
-              .then((cpk) => {
-                if ((cpk as any).error)
-                  reject("SBChannelKeys(): failed to get channel keys (error in response)");
-                // we have the authoritative keys from the server, double check
-                _sb_assert(cpk.channelId === this.#channelId && cpk.channelPublicKey && cpk.ownerPublicKey,
-                  "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
-                this.#channelData = cpk
-              })
-              .catch((e) => { throw (e) });
+            const response = await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys')
+            _sb_assert(response && !response.ok, "SBChannelKeys(): failed to get channel keys (network response not 'ok')")
+            const resp: any = extractPayload(await response.arrayBuffer())
+            _sb_assert(resp && !resp.error, "SBChannelKeys(): failed to get channel keys (error in response)")
+            const cpk: SBChannelData = resp
+            // we have the authoritative keys from the server, sanity check
+            _sb_assert(cpk.channelId === this.#channelId && cpk.ownerPublicKey,
+                "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
+            this.#channelData = cpk
           }
-          const ck1 = await (new SB384(this.#channelData!.channelPublicKey)).ready
-          this.#channelPublicKey = ck1.publicKey
-          if (handle.channelPrivateKey) {
-            // if the handle includes this, then process it and sanity check
-            const ck2 = await (new SB384(handle.channelPrivateKey, true)).ready
-            _sb_assert(ck1.userPublicKey === ck2.userPublicKey, "SBChannelKeys(): channel public key mismatch (?)")
-            this.#channelPrivateKey = ck2.privateKey
-          }
+          // const ck1 = await (new SB384(this.#channelData!.channelPublicKey)).ready
+          // this.#channelPublicKey = ck1.publicKey
+          // if (handle.channelPrivateKey) {
+          //   // if the handle includes this, then process it and sanity check
+          //   const ck2 = await (new SB384(handle.channelPrivateKey, true)).ready
+          //   _sb_assert(ck1.userPublicKey === ck2.userPublicKey, "SBChannelKeys(): channel public key mismatch (?)")
+          //   this.#channelPrivateKey = ck2.privateKey
+          // }
         } else {
           // in this case it's new, we're the owner, and we decide all the keys
           this.#channelId = this.ownerChannelId
@@ -2503,7 +2565,7 @@ export class SBChannelKeys extends SB384 {
           this.#channelData = {
             channelId: this.#channelId!,
             ownerPublicKey: this.userPublicKey,
-            channelPublicKey: ck.userPublicKey
+            // channelPublicKey: ck.userPublicKey
           }
         }
 
@@ -2864,66 +2926,78 @@ class Channel extends SBChannelKeys {
   // @Memoize @Ready get capacity() { return this.#capacity }
   // @Memoize get channelServer() { return this.#channelServer }
 
+  /*
+   * Implements Channel api calls.
+   * 
+   * Note that the API call details are also embedded in the ChannelMessage,
+   * and signed by the sender, completely separate from HTTP etc auth.
+   */
   #callApi(path: string): Promise<any>
-  #callApi(path: string, body: any): Promise<any>
-  #callApi(path: string, body?: any): Promise<any> {
-    if (DBG) console.log("#callApi:", path)
-    // if (!this.channelReady) {
-    //   if (DBG2) console.log("ChannelApi.#callApi: channel not ready (we will wait)")
-    //   await this.ready
-    // }
-    // const method = body ? 'POST' : 'GET'
-    const method = 'POST' // we're always providing userId, ergo always a POST
+  #callApi(path: string, apiPayload: any): Promise<any>
+  #callApi(path: string, apiPayload?: any): Promise<any> {
+    if (DBG) console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", apiPayload)
+    _sb_assert(this.channelId && path, "Internal Error (L2864)")
     return new Promise(async (resolve, reject) => {
-      if (DBG) console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", body)
       await this.channelReady
-      if (!this.channelId)
-        reject("ChannelApi.#callApi: no channel ID (?)")
-
-      let authString = '';
-      const token_data = (new TextEncoder).encode(new Date().getTime().toString())
-      // ToDo: this is outdated (and weak) auth; should sign with user key any api call
-      // authString = token_data + '.' + await sbCrypto.sign(this.channelSignKey, token_data)
-
-      if (DBG) console.log("will sign using:", this.privateKey, token_data)
-      authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.signKey, token_data))
-      if (DBG) console.log("finished signing, got authstring:", authString)
-
-      let init: RequestInit = {
-        method: method,
-        headers: {
-          'Content-Type': 'application/json',
-          'authorization': authString,
-        }
-      }
-      let fullBody = {
+      const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
+      const viewBuf = new ArrayBuffer(8);
+      const view = new DataView(viewBuf);
+      view.setFloat64(0, timestamp);
+      const pathAsArrayBuffer = new TextEncoder().encode(path).buffer
+      const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer)
+      const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload)! : undefined
+      // sign with userId key, covering timestamp + path + apiPayload
+      const sign = await sbCrypto.sign(this.privateKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf)
+      const apiBody: ChannelApiBody = {
+        channelId: this.channelId!,
+        path: path,
         userId: this.userId,
-        channelId: this.channelId,
-        ...body
+        userPublicKey: this.userPublicKey,
+        apiPayload: apiPayloadBuf,
+        timestamp: timestamp,
+        sign: sign
       }
-      init.body = JSON.stringify(fullBody)
-      // if (body) {
-      //   init.body = JSON.stringify(body);
-      // }
-      // await (this.ready)
-
-      if (DBG) console.log("ChannelApi.#callApi: calling fetch with init:", init)
+      const init: RequestInit = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream"',
+        },
+        body: assemblePayload(validate_ChannelApiBody(apiBody))
+      }
+      if (DBG) console.log("==== ChannelApi.#callApi: calling fetch with init:\n", init)
       SBFetch(this.channelServer + '/api/v2/channel/' + this.channelId! + path, init)
         .then(async (response: Response) => {
-          const retValue = await response.json()
+          var retValue: any
+          if (response.headers.get('content-type') === 'application/json; charset=utf-8') {
+            retValue = jsonParseWrapper(await response.json(), "L2928")
+          } else if (response.headers.get('content-type') === 'application/octet-stream') {
+            retValue = extractPayload(await response.arrayBuffer())
+          } else {
+            throw new Error("ChannelApi.#callApi: invalid content-type in response")
+          }
           if ((!response.ok) || (retValue.error)) {
             let apiErrorMsg = 'Network or Server error on Channel API call'
             if (response.status) apiErrorMsg += ' [' + response.status + ']'
             if (retValue.error) apiErrorMsg += ': ' + retValue.error
-            if (DBG) console.error("ChannelApi.#callApi error:", apiErrorMsg)
+            if (DBG) console.error("ChannelApi.#callApi error:\n", apiErrorMsg)
             reject(new Error(apiErrorMsg))
           } else {
-            if (DBG) console.log("ChannelApi.#callApi: success")
+            if (DBG) console.log("ChannelApi.#callApi: success\n", retValue)
             resolve(retValue)
           }
         })
         .catch((e: Error) => { reject("ChannelApi (SBFetch) Error [2]: " + WrapError(e)) })
     })
+
+    // let authString = '';
+    // const token_data = (new TextEncoder).encode(new Date().getTime().toString())
+    // // ToDo: this is outdated (and weak) auth; should sign with user key any api call
+    // // authString = token_data + '.' + await sbCrypto.sign(this.channelSignKey, token_data)
+
+    // if (DBG) console.log("will sign using:", this.privateKey, token_data)
+    // authString = token_data + '.' + arrayBufferToBase64(await sbCrypto.sign(this.signKey, token_data))
+    // if (DBG) console.log("finished signing, got authstring:", authString)
+
   }
 
   async deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<Message | undefined> {
@@ -3068,54 +3142,30 @@ class Channel extends SBChannelKeys {
    *
    */
   getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
-    // ToDo: convert to new API call model
     return new Promise(async (resolve, reject) => {
-      if (!this.channelId) {
-        reject("Channel.getOldMessages: no channel ID (?)")
-      }
-      // make sure channel is ready
-      if (!this.channelReady) {
-        if (DBG) console.log("Channel.getOldMessages: channel not ready (we will wait)")
-        await this.ready
-        // if (!this.keys) // ... this will now be caught by @Ready-getter
-        //   reject("Channel.getOldMessages: no channel keys (?) despite waiting")
-      }
+      _sb_assert(this.channelId, "Channel.getOldMessages: no channel ID (?)")
       // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)
-      let cursorOption = '';
-      if (paginate)
-        cursorOption = '&cursor=' + this.#cursor;
-      SBFetch(this.channelServer + '/' + this.channelId! + '/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption, {
-        method: 'GET',
-      }).then(async (response: Response) => {
-        if (!response.ok) reject(new Error('Network response was not OK'));
-        return response.json();
-      }).then((messages) => {
-        if (DBG) {
-          console.log("getOldMessages")
-          console.log(messages)
-        }
-        Promise.all(Object
-          .keys(messages)
-          .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-          .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
-          .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v): v is Message => Boolean(v)))
-          .then((decryptedMessageArray) => {
-            let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-            if (lastMessage)
-              this.#cursor = lastMessage._id || /* lastMessage.id || */ '';
-            if (DBG2) console.log(decryptedMessageArray)
-            resolve(decryptedMessageArray)
-          })
-          .catch((e) => {
-            const msg = `Channel.getOldMessages(): failed to decrypt messages: ${e}`
-            console.error(msg)
-            reject(msg)
-          })
-      }).catch((e: Error) => {
-        const msg = `Channel.getOldMessages(): SBFetch failed: ${e}`
-        console.error(msg)
-        reject(msg);
-      });
+      let cursorOption = paginate? '&cursor=' + this.#cursor : '';
+      const messages = await this.#callApi('/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption)
+      _sb_assert(messages, "Channel.getOldMessages: no messages (empty/null response)")
+      if (DBG) console.log("getOldMessages\n", messages)
+      Promise.all(Object
+        .keys(messages)
+        .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
+        .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
+        .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v): v is Message => Boolean(v)))
+        .then((decryptedMessageArray) => {
+          let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
+          if (lastMessage)
+            this.#cursor = lastMessage._id || /* lastMessage.id || */ '';
+          if (DBG2) console.log(decryptedMessageArray)
+          resolve(decryptedMessageArray)
+        })
+        .catch((e) => {
+          const msg = `Channel.getOldMessages(): failed to decrypt messages: ${e}`
+          console.error(msg)
+          reject(msg)
+        })
     });
   }
 
@@ -3155,15 +3205,15 @@ class Channel extends SBChannelKeys {
       resolve(this.locked!);
     }))
   }
-  /**
-   * Set message of the day
-   */
-  @Ready @Owner setMOTD(motd: string) { return this.#callApi('/motd', { motd: motd }) }
+  // /**
+  //  * Set message of the day
+  //  */
+  // @Ready @Owner setMOTD(motd: string) { return this.#callApi('/motd', { motd: motd }) }
 
-  /**
-   * Channel.getAdminData
-   */
-  @Ready @Owner getAdminData(): Promise<ChannelAdminData> { return this.#callApi('/getAdminData') }
+  // /**
+  //  * Channel.getAdminData
+  //  */
+  // @Ready @Owner getAdminData(): Promise<ChannelAdminData> { return this.#callApi('/getAdminData') }
 
   // /** Channel.downloadData - NEEDS REFACTORING
   //  */
@@ -3213,9 +3263,9 @@ class Channel extends SBChannelKeys {
   //   return this.#callApi('/uploadRoom', channelData)
   // }
 
-  @Ready @Owner authorize(ownerPublicKey: Dictionary<any>, serverSecret: string) {
-    return this.#callApi('/authorizeRoom', { roomId: this.channelId, SERVER_SECRET: serverSecret, ownerKey: ownerPublicKey })
-  }
+  // @Ready @Owner authorize(ownerPublicKey: Dictionary<any>, serverSecret: string) {
+  //   return this.#callApi('/authorizeRoom', { roomId: this.channelId, SERVER_SECRET: serverSecret, ownerKey: ownerPublicKey })
+  // }
 
   // // deprecated - this is now implicitly done on first connect
   // @Ready postPubKey(_exportable_pubKey: JsonWebKey): Promise<{ success: boolean }> {
@@ -3262,10 +3312,9 @@ class Channel extends SBChannelKeys {
   //   );
   // }
 
-  // ToDo: test this guy, i doubt if it's working post-re-factor
   @Ready @Owner acceptVisitor(userId: SBUserId) {
-    console.warn(`WARNING: acceptVisitor(${userId}) on channel api has not been tested/debugged fully ..`)
 
+    // Old code:
     // // todo: assert that you're owner
     // return new Promise(async (resolve, reject) => {
     //   // ... no longer possible
@@ -3287,7 +3336,14 @@ class Channel extends SBChannelKeys {
     //     }))
     // });
 
-    // older version:
+    // New code:
+    return this.#callApi('/acceptVisitor', { userId: userId })
+
+    // ... and ... we're done
+  }
+
+
+    // EVEN older version:
     // @Ready acceptVisitor(pubKey: string) {
     //   console.warn("WARNING: acceptVisitor() on channel api has not been tested/debugged fully ..")
     //   // todo: assert that you're owner
@@ -3306,8 +3362,6 @@ class Channel extends SBChannelKeys {
     //       }))
     //   });
     // }
-
-  }
 
 
   /**
@@ -3530,19 +3584,19 @@ class ChannelSocket extends Channel {
 
       if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2)
         // either it's new, or it's closed, or it's in the process of closing
-        this.#ws.websocket = new WebSocket(url)
+        this.#ws.websocket = new WebSocket(url);
+
+      this.#ws.websocket.addEventListener('message', this.#processMessage);
 
       this.#ws.websocket.addEventListener('open', async () => {
         this.#ws.closed = false
         // need to make sure parent is ready (and has keys)
         await this.ready
-        // TODO: send userId, and pubKey, and sign that
-        this.#ws.init = { userId: this.userId }
-        if (DBG) { console.log("++++++++ readyPromise() constructed init:"); console.log(this.#ws.init); }
-        this.#ws.websocket!.send(JSON.stringify(this.#ws.init)) // this should trigger a response with keys
-      })
-
-      this.#ws.websocket.addEventListener('message', this.#processMessage);
+        if (DBG) console.log("++++++++ readyPromise() sending init")
+        // auth is done on setup, it's not needed for the 'ready' signal;
+        // this will prompt server to send backlogged messages
+        this.#ws.websocket!.send(JSON.stringify({ ready: true }))
+      });
 
       this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
         this.#ws.closed = true
@@ -3555,16 +3609,15 @@ class ChannelSocket extends Channel {
           else console.log('ChannelSocket() was closed (cleanly): ', e.reason)
         }
         reject('wbSocket() closed before it was opened (?)')
-      })
+      });
 
       this.#ws.websocket.addEventListener('error', (e) => {
         this.#ws.closed = true
         console.log('ChannelSocket() error: ', e)
         reject('ChannelSocket creation error (see log)')
-      })
+      });
 
       // let us set a timeout to catch and make sure this thing resoles within 0.5 seconds
-      // todo: add as a decorator for ready-template style constructors
       setTimeout(() => {
         if (!(this as any)[ChannelSocket.ReadyFlag]) {
           const msg = "ChannelSocket() - this socket is not resolving (waited 10s) ..."
@@ -3572,9 +3625,8 @@ class ChannelSocket extends Channel {
         } else {
           if (DBG) console.log("ChannelSocket() - this socket resolved", this)
         }
-      }, 10000)
-
-        ; (this as any)[ChannelSocket.ReadyFlag] = true;
+      }, 10000);
+      (this as any)[ChannelSocket.ReadyFlag] = true;
       resolve(this)
     })
   }
@@ -4113,13 +4165,14 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
  */
 export class StorageApi {
   storageServer: string;
+  constructor(storageServer: string) {
+    _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)')
+    this.storageServer = storageServer
 
-  // channelServer: string;
-  // shardServer?: string;
-  // sbServer: SBServer;
-
-  // constructor(server: string, channelServer: string, shardServer?: string) {
-  constructor(sbServerOrStorageServer: /* SBServer | */ string) {
+    // channelServer: string;
+    // shardServer?: string;
+    // sbServer: SBServer;
+    // constructor(server: string, channelServer: string, shardServer?: string) {
     // if (typeof sbServerOrStorageServer === 'object') {
     //   this.storageServer = sbServerOrStorageServer.storage_server
     //   // const { storage_server, /* channel_server, */ shard_server } = sbServer
@@ -4128,12 +4181,6 @@ export class StorageApi {
     //   // // if (shard_server) this.shardServer = shard_server
     //   // this.sbServer = sbServer
     // } else
-
-    if (typeof sbServerOrStorageServer === 'string') {
-      this.storageServer = sbServerOrStorageServer as string
-    } else {
-      throw new Error('[StorageApi] Invalid parameter to constructor')
-    }
   }
 
   /**
@@ -4710,18 +4757,18 @@ class Snackabra {
         channelData.storageToken = _storageToken!
         if (DBG) console.log("Will try to create channel with channelData:", channelData)
 
-        const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
-        let resp: Dictionary<any> = await SBFetch(this.channelServer + '/api/v2/channel/' + channelData.channelId + '/create',
+        // const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
+        const data = assemblePayload(channelData)
+        const response = await SBFetch(this.channelServer + '/api/v2/channel/' + channelData.channelId + '/create',
           {
             method: 'POST',
+            headers: {'Content-Type': 'application/octet-stream"' },
             body: data
           });
-
-        resp = await resp.json();
-        if (!resp.success) {
+        const resp: any = extractPayload(await response.arrayBuffer())
+        if (!resp || !resp.success) {
           const msg = `Creating channel did not succeed (${JSON.stringify(resp)})`
-          console.error(msg)
-          reject(msg); return;
+          console.error(msg); reject(msg); return;
         }
         resolve({
           [SB_CHANNEL_HANDLE_SYMBOL]: true,
@@ -4732,9 +4779,7 @@ class Snackabra {
           channelData: channelData
         })
       } catch (e) {
-        const msg = `Creating channel did not succeed: ${e}`
-        console.error(msg);
-        reject(msg);
+        const msg = `Creating channel did not succeed: ${e}`; console.error(msg); reject(msg);
       }
     })
   }
