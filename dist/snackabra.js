@@ -32,7 +32,7 @@ export function validate_ChannelApiBody(body) {
         && body.userPublicKey && body.userPublicKey.length > 0
         && (!body.isOwner || typeof body.isOwner === 'boolean')
         && (!body.apiPayload || body.apiPayload instanceof ArrayBuffer)
-        && body.timestamp && typeof body.timestamp === 'number'
+        && body.timestamp && Number.isInteger(body.timestamp)
         && body.sign && body.sign instanceof ArrayBuffer) {
         return { ...body, [SB_CHANNEL_API_BODY_SYMBOL]: true };
     }
@@ -47,15 +47,16 @@ export function validate_ChannelMessage(body) {
         throw new Error(`invalid ChannelMessage (null or undefined)`);
     else if (body[SB_CHANNEL_MESSAGE_SYMBOL])
         return body;
-    else if ((!body._id || typeof body._id === 'string' && body._id.length === 86)
+    else if ((!body._id || (typeof body._id === 'string' && body._id.length === 86))
         && (!body.ready || typeof body.ready === 'boolean')
-        && (!body.tx || typeof body.tx === 'string' && body.tx.length === 26)
-        && (!body.i || typeof body.i === 'string' && body.i.length === 43)
-        && (!body.c || body.c instanceof ArrayBuffer)
+        && (!body.timestampPrefix || (typeof body.timestampPrefix === 'string' && body.timestampPrefix.length === 26))
+        && (!body.channelId || (typeof body.channelId === 'string' && body.channelId.length === 43))
+        && (!body.i2 || (typeof body.i2 === 'string' && /^[a-zA-Z0-9_]{4}$/.test(body.i2)))
+        && (!body.unencryptedContents || body.unencryptedContents instanceof ArrayBuffer)
         && (!body.f || typeof body.f === 'string' && body.f.length === 43)
-        && (!body.ec || body.ec instanceof ArrayBuffer)
-        && (!body.ts || typeof body.ts === 'number')
-        && (!body.ttl || typeof body.ttl === 'number')
+        && (!body.c || body.c instanceof ArrayBuffer)
+        && (!body.ts || Number.isInteger(body.ts))
+        && (!body.ttl || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
         && (!body.iv || body.iv instanceof ArrayBuffer)
         && (!body.s || body.s instanceof ArrayBuffer)) {
         return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true };
@@ -1007,8 +1008,8 @@ export class SBCrypto {
         const view = new DataView(new ArrayBuffer(8));
         view.setFloat64(0, timestamp);
         const message = {
-            c: payload,
-            ec: await sbCrypto.encrypt(payload, encryptionKey, { iv: iv, additionalData: view }),
+            unencryptedContents: body,
+            c: await sbCrypto.encrypt(payload, encryptionKey, { iv: iv, additionalData: view }),
             iv: iv,
             f: sender,
             s: await sbCrypto.sign(signingKey, payload),
@@ -1021,7 +1022,7 @@ export class SBCrypto {
             try {
                 if (!o.ts)
                     throw new Error(`unwrap() - no timestamp in encrypted message`);
-                const { ec: t, iv: iv } = o;
+                const { c: t, iv: iv } = o;
                 _sb_assert(t, "no contents in encrypted message");
                 const view = new DataView(new ArrayBuffer(8));
                 view.setFloat64(0, o.ts);

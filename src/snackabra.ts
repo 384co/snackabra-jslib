@@ -155,7 +155,7 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
     && body.userPublicKey && body.userPublicKey.length > 0
     && (!body.isOwner || typeof body.isOwner === 'boolean')
     && (!body.apiPayload || body.apiPayload instanceof ArrayBuffer)
-    && body.timestamp && typeof body.timestamp === 'number'
+    && body.timestamp && Number.isInteger(body.timestamp)
     && body.sign && body.sign instanceof ArrayBuffer
   ) {
     return { ...body, [SB_CHANNEL_API_BODY_SYMBOL]: true } as ChannelApiBody
@@ -193,30 +193,35 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
  * an oldMessages fetch can for example request '_4__' to get all messages
  * that were sent with TTL 4 (eg 1 hour).
  * 
- * Property names are kept short since this is frequently encoded as payload.
+ * Properties that are generally retained or communicated inside payload
+ * packaging have short names (apologies for lack of readability).
+ * 'unencryptedContents' has a long and cumbersome name for obvious reasons.
  * 
  */
 export interface ChannelMessage {
   [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean,
 
-  // strictly speaking, only these four are strictly necessary when *sending*
+  // strictly speaking, only these five are strictly necessary when *sending*
   f?: SBUserId, // 'from': public (hash) of sender, matches publicKey of sender, verified by channel server
-  ec?: ArrayBuffer, // encrypted contents
+  c?: ArrayBuffer, // encrypted contents
   iv?: ArrayBuffer, // nonce
   s?: ArrayBuffer, // signature
+  ts?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
 
   // the remainder are either optional (with default values), internally used,
   // server provided, or can be reconstructed
-  i?: SBChannelId, // channelId base62 x 43
-  tx?: string, // timestampPrefix '0'/'1'/'2'/'3' - 26 of them (note last four are '0000'), timestamp per server
+  channelId?: SBChannelId, // channelId base62 x 43
+  i2?: string, // subchannel; default is '____', can be any 4xbase62; only owner can read/write subchannels
+  timestampPrefix?: string, // timestampPrefix '0'/'1'/'2'/'3' - 26 of them (note last four are '0000'), timestamp per server
   _id?: string, // channelId + '_' + subChannel + '_' + timestampPrefix
 
-  i2?: string, // subchannel; default is '____', can be any 4xbase62; only owner can read/write subchannels
+  // whatever is being sent; should (must) be stripped when sent
+  // when encrypted, this is packaged as payload (and then encrypted)
+  // (signing is done on the payload version)
+  unencryptedContents?: any,
 
   ready?: boolean, // if present, signals other side is ready to receive messages (rest of message ignored)
-  c?: ArrayBuffer, // contents; if present means unencrypted (client side)
-  t?: SBUserId, // 'to': public (hash) of recipient; note that Owner sees all messages; default is broadcast
-  ts?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
+  t?: SBUserId, // 'to': public (hash) of recipient; note that Owner sees all messages; if omitted means broadcast
   ttl?: number, // Value 0-15; if it's missing it's 15/0xF (infinite); if it's 1-7 it's duplicated to subchannels
 }
 
@@ -224,18 +229,22 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
   if (!body) throw new Error(`invalid ChannelMessage (null or undefined)`)
   else if (body[SB_CHANNEL_MESSAGE_SYMBOL]) return body as ChannelMessage
   else if (
-    (!body._id || typeof body._id === 'string' && body._id.length === 86)
+    // todo: might as well add regexes to some of these
+    (!body._id || (typeof body._id === 'string' && body._id.length === 86))
     && (!body.ready || typeof body.ready === 'boolean')
-    && (!body.tx || typeof body.tx === 'string' && body.tx.length === 26)
-    && (!body.i || typeof body.i === 'string' && body.i.length === 43)
-    && (!body.c || body.c instanceof ArrayBuffer)
-    && (!body.f || typeof body.f === 'string' && body.f.length === 43)
-    && (!body.ec || body.ec instanceof ArrayBuffer)
-    && (!body.ts || typeof body.ts === 'number')
-    && (!body.ttl || typeof body.ttl === 'number')
-    && (!body.iv || body.iv instanceof ArrayBuffer)
-    && (!body.s || body.s instanceof ArrayBuffer)
-  ) {
+    && (!body.timestampPrefix    || (typeof body.timestampPrefix === 'string' && body.timestampPrefix.length === 26))
+    && (!body.channelId     || (typeof body.channelId === 'string' && body.channelId.length === 43))
+    // 'i2' is a bit more complicated, it must be 4xbase62 (plus '_'), so we regex against [a-zA-Z0-9_]
+    && (!body.i2    || (typeof body.i2 === 'string' && /^[a-zA-Z0-9_]{4}$/.test(body.i2)))
+    && (!body.unencryptedContents     || body.unencryptedContents instanceof ArrayBuffer)
+    && (!body.f     || typeof body.f === 'string' && body.f.length === 43)
+    && (!body.c    || body.c instanceof ArrayBuffer)
+    && (!body.ts    || Number.isInteger(body.ts))
+    // also check body.ttl is a whole integer (cannot be a fraction)
+    && (!body.ttl   || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
+    && (!body.iv    || body.iv instanceof ArrayBuffer)
+    && (!body.s     || body.s instanceof ArrayBuffer)
+     ) {
     return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true } as ChannelMessage
   } else {
     if (DBG) console.error('invalid ChannelMessage ... trying to ingest:\n', body)
@@ -1755,8 +1764,8 @@ export class SBCrypto {  /******************************************************
     const view = new DataView(new ArrayBuffer(8));
     view.setFloat64(0, timestamp);
     const message: ChannelMessage = {
-      c: payload!,
-      ec: await sbCrypto.encrypt(payload!, encryptionKey, { iv: iv, additionalData: view }),
+      unencryptedContents: body, // payload!,
+      c: await sbCrypto.encrypt(payload!, encryptionKey, { iv: iv, additionalData: view }),
       iv: iv,
       f: sender,
       s: await sbCrypto.sign(signingKey, payload!),
@@ -1774,7 +1783,7 @@ export class SBCrypto {  /******************************************************
     return new Promise(async (resolve, reject) => {
       try {
         if (!o.ts) throw new Error(`unwrap() - no timestamp in encrypted message`)
-        const { ec: t, iv: iv } = o // encryptedContentsMakeBinary(o)
+        const { c: t, iv: iv } = o // encryptedContentsMakeBinary(o)
         _sb_assert(t, "no contents in encrypted message")
         const view = new DataView(new ArrayBuffer(8));
         view.setFloat64(0, o.ts);

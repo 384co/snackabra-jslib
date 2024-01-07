@@ -42,17 +42,17 @@ export declare function validate_ChannelApiBody(body: any): ChannelApiBody;
 export interface ChannelMessage {
     [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean;
     f?: SBUserId;
-    ec?: ArrayBuffer;
+    c?: ArrayBuffer;
     iv?: ArrayBuffer;
     s?: ArrayBuffer;
-    i?: SBChannelId;
-    tx?: string;
-    _id?: string;
-    i2?: string;
-    ready?: boolean;
-    c?: ArrayBuffer;
-    t?: SBUserId;
     ts?: number;
+    channelId?: SBChannelId;
+    i2?: string;
+    timestampPrefix?: string;
+    _id?: string;
+    unencryptedContents?: any;
+    ready?: boolean;
+    t?: SBUserId;
     ttl?: number;
 }
 export declare function validate_ChannelMessage(body: ChannelMessage): ChannelMessage;
