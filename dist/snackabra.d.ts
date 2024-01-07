@@ -164,7 +164,7 @@ export declare class SBCrypto {
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer>;
     wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey): Promise<ChannelMessage>;
     unwrap(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
-    sign(secretKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
+    sign(signKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
     str2ab(string: string): Uint8Array;
     ab2str(buffer: Uint8Array): string;

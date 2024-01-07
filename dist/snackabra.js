@@ -133,7 +133,7 @@ function SBApiFetch(input, init) {
                 retValue = jsonParseWrapper(await response.json(), "L489");
             }
             else if (contentType.indexOf("application/octet-stream") !== -1) {
-                retValue = extractPayload(await response.arrayBuffer());
+                retValue = extractPayload(await response.arrayBuffer()).payload;
             }
             else {
                 reject("SBApiFetch] Server responded with unknown content-type header (?)");
@@ -1035,11 +1035,11 @@ export class SBCrypto {
             }
         });
     }
-    sign(secretKey, contents) {
-        return crypto.subtle.sign('HMAC', secretKey, contents);
+    sign(signKey, contents) {
+        return crypto.subtle.sign({ name: "ECDSA", hash: { name: "SHA-384" }, }, signKey, contents);
     }
     verify(verifyKey, sign, contents) {
-        return crypto.subtle.verify('HMAC', verifyKey, sign, contents);
+        return crypto.subtle.verify({ name: "ECDSA", hash: { name: "SHA-384" }, }, verifyKey, sign, contents);
     }
     str2ab(string) {
         return new TextEncoder().encode(string);
@@ -1224,16 +1224,24 @@ class SB384 {
                 if (this.#private)
                     this.#privateUserKey = await sbCrypto.importKey('jwk', this.jwkPrivate, 'ECDH', true, ['deriveKey']);
                 this.#publicUserKey = await sbCrypto.importKey('jwk', this.jwkPublic, 'ECDH', true, []);
-                if (this.#private)
-                    this.#signKey = await crypto.subtle.importKey("jwk", { ...(this.jwkPrivate), key_ops: ['sign', 'verify'] }, {
+                if (this.#private) {
+                    const newJwk = { ...this.jwkPrivate, key_ops: ['sign'] };
+                    if (DBG)
+                        console.log('starting jwk (private):\n', newJwk);
+                    this.#signKey = await crypto.subtle.importKey("jwk", newJwk, {
                         name: "ECDSA",
                         namedCurve: "P-384",
                     }, true, ['sign']);
-                else
-                    this.#signKey = await crypto.subtle.importKey("jwk", { ...(this.jwkPublic), key_ops: ['verify'] }, {
+                }
+                else {
+                    const newJwk = { ...this.jwkPublic, key_ops: ['verify'] };
+                    if (DBG)
+                        console.log('starting jwk (public):\n', newJwk);
+                    this.#signKey = await crypto.subtle.importKey("jwk", newJwk, {
                         name: "ECDSA",
                         namedCurve: "P-384",
                     }, true, ['verify']);
+                }
                 const channelBytes = _appendBuffer(base64ToArrayBuffer(this.#x), base64ToArrayBuffer(this.#y));
                 this.#hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', channelBytes));
                 if (DBG2)
@@ -1522,7 +1530,7 @@ class Channel extends SBChannelKeys {
             const pathAsArrayBuffer = new TextEncoder().encode(path).buffer;
             const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer);
             const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload) : undefined;
-            const sign = await sbCrypto.sign(this.privateKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf);
+            const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf);
             const apiBody = {
                 channelId: this.channelId,
                 path: path,
@@ -2127,7 +2135,7 @@ export class StorageApi {
             SBFetch(this.storageServer + '/api/v1' + "/storeRequest?name=" + arrayBufferToBase62(image_id) + "&type=" + type)
                 .then((r) => { return r.arrayBuffer(); })
                 .then((b) => {
-                const par = extractPayload(b);
+                const par = extractPayload(b).payload;
                 resolve({ salt: par.salt, iv: par.iv });
             })
                 .catch((e) => {
@@ -2239,7 +2247,7 @@ export class StorageApi {
             catch (e) {
             }
             finally {
-                const data = extractPayload(payload);
+                const data = extractPayload(payload).payload;
                 if (DBG) {
                     console.log("Payload (#processData) is:");
                     console.log(data);

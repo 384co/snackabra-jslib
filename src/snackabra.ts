@@ -502,7 +502,7 @@ function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any> 
         if (contentType && contentType.indexOf("application/json") !== -1) {
           retValue = jsonParseWrapper(await response.json(), "L489");
         } else if (contentType.indexOf("application/octet-stream") !== -1) {
-          retValue = extractPayload(await response.arrayBuffer())
+          retValue = extractPayload(await response.arrayBuffer()).payload
         } else {
           reject("SBApiFetch] Server responded with unknown content-type header (?)");
           return;
@@ -1791,15 +1791,17 @@ export class SBCrypto {  /******************************************************
   /**
    * SBCrypto.sign()
    */
-  sign(secretKey: CryptoKey, contents: ArrayBuffer) {
-    return crypto.subtle.sign('HMAC', secretKey, contents);
+  sign(signKey: CryptoKey, contents: ArrayBuffer) {
+    // return crypto.subtle.sign('HMAC', secretKey, contents);
+    return crypto.subtle.sign({ name: "ECDSA", hash: { name: "SHA-384" }, }, signKey, contents)
   }
 
   /**
    * SBCrypto.verify()
    */
   verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer) {
-    return crypto.subtle.verify('HMAC', verifyKey, sign, contents)
+    // return crypto.subtle.verify('HMAC', verifyKey, sign, contents)
+    return crypto.subtle.verify( { name: "ECDSA", hash: { name: "SHA-384" }, }, verifyKey, sign, contents)
   }
 
   /**
@@ -2138,22 +2140,29 @@ class SB384 {
         this.#publicUserKey = await sbCrypto.importKey('jwk', this.jwkPublic, 'ECDH', true, [])
 
         // we mostly use for sign/verify, occasionally encryption, so double use is ... hopefully ok
-        if (this.#private)
+        if (this.#private) {
+          const newJwk = { ...this.jwkPrivate, key_ops: ['sign'] }
+          if (DBG) console.log('starting jwk (private):\n', newJwk)
           this.#signKey = await crypto.subtle.importKey("jwk",
-            { ...(this.jwkPrivate), key_ops: ['sign', 'verify'] }, {
+          newJwk,
+          {
             name: "ECDSA",
             namedCurve: "P-384",
           },
             true,
             ['sign'])
-        else
+        } else {
+          const newJwk = { ...this.jwkPublic, key_ops: ['verify'] }
+          if (DBG) console.log('starting jwk (public):\n', newJwk)
           this.#signKey = await crypto.subtle.importKey("jwk",
-            { ...(this.jwkPublic), key_ops: ['verify'] }, {
-            name: "ECDSA",
-            namedCurve: "P-384",
-          },
+            newJwk,
+            {
+              name: "ECDSA",
+              namedCurve: "P-384",
+            },
             true,
             ['verify'])
+        }
 
         // this.#hash = await sbCrypto.sb384Hash(this.#jwk)
         // can't put in getter since it's async
@@ -2579,7 +2588,7 @@ class Channel extends SBChannelKeys {
       const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer)
       const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload)! : undefined
       // sign with userId key, covering timestamp + path + apiPayload
-      const sign = await sbCrypto.sign(this.privateKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf)
+      const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf)
       const apiBody: ChannelApiBody = {
         channelId: this.channelId!,
         path: path,
@@ -3771,7 +3780,7 @@ export class StorageApi {
       SBFetch(this.storageServer + '/api/v1' + "/storeRequest?name=" + arrayBufferToBase62(image_id) + "&type=" + type)
         .then((r) => { /* console.log('got storage reply:'); console.log(r); */ return r.arrayBuffer(); })
         .then((b) => {
-          const par = extractPayload(b)
+          const par = extractPayload(b).payload
           resolve({ salt: par.salt, iv: par.iv })
         })
         .catch((e) => {
@@ -3930,7 +3939,7 @@ export class StorageApi {
       } catch (e) {
         // do nothing - this is expected
       } finally {
-        const data = extractPayload(payload)
+        const data = extractPayload(payload).payload
         if (DBG) {
           console.log("Payload (#processData) is:")
           console.log(data)
