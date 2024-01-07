@@ -12,6 +12,7 @@ export interface SBChannelData {
     ownerPublicKey: SBUserPublicKey;
     storageToken?: SBStorageToken;
 }
+export declare function validate_SBChannelData(data: any): SBChannelData;
 export type SBStorageToken = string;
 export interface Dictionary<T> {
     [index: string]: T;
@@ -39,20 +40,22 @@ export interface ChannelApiBody {
 }
 export declare function validate_ChannelApiBody(body: any): ChannelApiBody;
 export interface ChannelMessage {
-    _id?: string;
-    ready?: boolean;
-    timestampPrefix?: string;
-    channelId?: SBChannelId;
-    contents?: ArrayBuffer;
-    sendTo?: SBUserId;
-    sender?: SBUserId;
-    encryptedContents?: ArrayBuffer;
-    timestamp?: number;
-    ttl?: number;
+    [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean;
+    f?: SBUserId;
+    ec?: ArrayBuffer;
     iv?: ArrayBuffer;
-    sign?: ArrayBuffer;
+    s?: ArrayBuffer;
+    i?: SBChannelId;
+    tx?: string;
+    _id?: string;
+    i2?: string;
+    ready?: boolean;
+    c?: ArrayBuffer;
+    t?: SBUserId;
+    ts?: number;
+    ttl?: number;
 }
-export declare function validate_ChannelMessage(body: any): ChannelMessage;
+export declare function validate_ChannelMessage(body: ChannelMessage): ChannelMessage;
 export interface ChannelAdminData {
     channelId: SBChannelId;
     channelData: SBChannelData;
@@ -167,6 +170,7 @@ export declare class SBCrypto {
     ab2str(buffer: Uint8Array): string;
     compareKeys(key1: Dictionary<any>, key2: Dictionary<any>): boolean;
 }
+declare const SB_CHANNEL_MESSAGE_SYMBOL: unique symbol;
 declare const SB_CHANNEL_API_BODY_SYMBOL: unique symbol;
 declare const SB_CHANNEL_HANDLE_SYMBOL: unique symbol;
 declare const SB_MESSAGE_SYMBOL: unique symbol;
@@ -184,6 +188,7 @@ declare class SB384 {
     get userId(): SB384Hash;
     get ownerChannelId(): string;
     get privateKey(): CryptoKey;
+    get signKey(): CryptoKey;
     get publicKey(): CryptoKey;
     get jwkPrivate(): JsonWebKey;
     get jwkPublic(): JsonWebKey;
@@ -201,6 +206,7 @@ export declare class SBChannelKeys extends SB384 {
     get channelData(): SBChannelData;
     get owner(): boolean | "" | undefined;
     get channelId(): string | undefined;
+    get handle(): SBChannelHandle;
 }
 declare class SBMessage {
     #private;
@@ -212,6 +218,15 @@ declare class SBMessage {
     get encryptionKey(): CryptoKey | undefined;
     send(): Promise<string>;
 }
+export interface SBProtocol {
+    key(): Promise<CryptoKey>;
+}
+export declare class BasicProtocol implements SBProtocol {
+    #private;
+    constructor(channel: Channel);
+    key(): Promise<CryptoKey>;
+    get channel(): Channel;
+}
 declare class Channel extends SBChannelKeys {
     #private;
     channelReady: Promise<Channel>;
@@ -219,11 +234,12 @@ declare class Channel extends SBChannelKeys {
     locked?: boolean;
     adminData?: Dictionary<any>;
     verifiedGuest: boolean;
-    constructor(handle: SBChannelHandle);
+    constructor(handle?: SBChannelHandle, protocol?: SBProtocol);
     get ready(): Promise<Channel>;
     get ChannelReadyFlag(): boolean;
+    get protocol(): SBProtocol;
     get api(): this;
-    get handle(): SBChannelHandle;
+    create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<SBChannelHandle>;
     deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<Message | undefined>;
     getLastMessageTimes(): void;
     getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
