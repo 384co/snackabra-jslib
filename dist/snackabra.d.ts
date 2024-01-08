@@ -233,7 +233,6 @@ declare class Channel extends SBChannelKeys {
     static ReadyFlag: symbol;
     locked?: boolean;
     adminData?: Dictionary<any>;
-    verifiedGuest: boolean;
     constructor(handle?: SBChannelHandle, protocol?: SBProtocol);
     get ready(): Promise<Channel>;
     get ChannelReadyFlag(): boolean;

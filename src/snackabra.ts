@@ -246,7 +246,7 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
     && (!body.ttl   || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
     && (!body.iv    || body.iv instanceof ArrayBuffer)
     && (!body.s     || body.s instanceof ArrayBuffer)
-     ) {
+  ) {
     return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true } as ChannelMessage
   } else {
     if (DBG) console.error('invalid ChannelMessage ... trying to ingest:\n', body)
@@ -525,7 +525,7 @@ function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any> 
           if (DBG) console.error("[SBApiFetch] error:\n", apiErrorMsg)
           reject(new Error(apiErrorMsg))
         } else {
-          if (DBG) console.log("ChannelApi.#callApi: success\n", retValue)
+          if (DBG) console.log("[SBApiFetch] Success\n", retValue)
           resolve(retValue)
         }
       }).catch((error) => {
@@ -1692,7 +1692,7 @@ export class SBCrypto {  /******************************************************
    * SBCrypto.deriveKey()
    *
    * Derive key. Takes a private and public key, and returns a Promise to a cryptoKey
-   * for 1:1 communication and/or sign/verify
+   * for 1:1 communication
    */
   deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey> {
     _sb_assert(privateKey && publicKey, "Either private or public key is null or undefined (L1836)")
@@ -2243,11 +2243,11 @@ class SB384 {
           const newJwk = { ...this.jwkPrivate, key_ops: ['sign'] }
           if (DBG) console.log('starting jwk (private):\n', newJwk)
           this.#signKey = await crypto.subtle.importKey("jwk",
-          newJwk,
-          {
-            name: "ECDSA",
-            namedCurve: "P-384",
-          },
+            newJwk,
+            {
+              name: "ECDSA",
+              namedCurve: "P-384",
+            },
             true,
             ['sign'])
         } else {
@@ -2447,6 +2447,7 @@ export class SBChannelKeys extends SB384 {
             // we need to get keys from the channel server, use SBFetch
             // (can't use channel api since ... we don't have channel yet)
             _sb_assert(this.channelServer, "SBChannelKeys() constructor: need either channelKeys or channelServer")
+
             if (DBG) console.log("++++ SBChannelKeys being initialized from server")
 
             // const response = await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys')
@@ -2455,9 +2456,11 @@ export class SBChannelKeys extends SB384 {
             // _sb_assert(resp && !resp.error, "SBChannelKeys(): failed to get channel keys (error in response)")
 
             // the 'getChannelKeys' endpoint allows us to get the keys with just the user id
-            var cpk: SBChannelData = await SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys',
-              { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
-                body: JSON.stringify({ userId: this.userId }) })
+            // var cpk: SBChannelData = await SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys',
+            //   { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            //     body: JSON.stringify({ userId: this.userId }) })
+            var cpk: SBChannelData = await this.#callApi('/getChannelKeys')
+
             cpk = validate_SBChannelData(cpk) // throws if there's an issue
             // we have the authoritative keys from the server, sanity check
             _sb_assert(cpk.channelId === this.#channelId && cpk.ownerPublicKey,
@@ -2507,6 +2510,75 @@ export class SBChannelKeys extends SB384 {
       channelServer: this.channelServer,
       channelData: this.channelData
     }
+  }
+
+  /*
+ * Implements Channel api calls.
+ * 
+ * Note that the API call details are also embedded in the ChannelMessage,
+ * and signed by the sender, completely separate from HTTP etc auth.
+ */
+  #callApi(path: string): Promise<any>
+  #callApi(path: string, apiPayload: any): Promise<any>
+  #callApi(path: string, apiPayload?: any): Promise<any> {
+    _sb_assert(this.channelServer, "[ChannelApi.#callApi] channelServer is unknown")
+    if (DBG) console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", apiPayload)
+    _sb_assert(this.channelId && path, "Internal Error (L2864)")
+    return new Promise(async (resolve, reject) => {
+      await this.sb384Ready // enough for signing
+      const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
+      const viewBuf = new ArrayBuffer(8);
+      const view = new DataView(viewBuf);
+      view.setFloat64(0, timestamp);
+      const pathAsArrayBuffer = new TextEncoder().encode(path).buffer
+      const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer)
+      const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload)! : undefined
+      // sign with userId key, covering timestamp + path + apiPayload
+      const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf)
+      const apiBody: ChannelApiBody = {
+        channelId: this.channelId!,
+        path: path,
+        userId: this.userId,
+        userPublicKey: this.userPublicKey,
+        apiPayload: apiPayloadBuf,
+        timestamp: timestamp,
+        sign: sign
+      }
+      const init: RequestInit = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream"',
+        },
+        body: assemblePayload(validate_ChannelApiBody(apiBody))
+      }
+      if (DBG) console.log("==== ChannelApi.#callApi: calling fetch with init:\n", init)
+      SBApiFetch(this.channelServer + '/api/v2/channel/' + this.channelId! + path, init)
+        .then((ret: any) => { resolve(ret) })
+        .catch((e: Error) => { reject("[Channel.#callApi] Error: " + WrapError(e)) })
+
+      // SBFetch(this.channelServer + '/api/v2/channel/' + this.channelId! + path, init)
+      //   .then(async (response: Response) => {
+      //     var retValue: any
+      //     if (response.headers.get('content-type') === 'application/json; charset=utf-8') {
+      //       retValue = jsonParseWrapper(await response.json(), "L2928")
+      //     } else if (response.headers.get('content-type') === 'application/octet-stream') {
+      //       retValue = extractPayload(await response.arrayBuffer())
+      //     } else {
+      //       throw new Error("ChannelApi.#callApi: invalid content-type in response")
+      //     }
+      //     if (!response.ok || retValue.error || (retValue.success && !retValue.success)) {
+      //       let apiErrorMsg = 'Network or Server error on Channel API call'
+      //       if (response.status) apiErrorMsg += ' [' + response.status + ']'
+      //       if (retValue.error) apiErrorMsg += ': ' + retValue.error
+      //       if (DBG) console.error("ChannelApi.#callApi error:\n", apiErrorMsg)
+      //       reject(new Error(apiErrorMsg))
+      //     } else {
+      //       if (DBG) console.log("ChannelApi.#callApi: success\n", retValue)
+      //       resolve(retValue)
+      //     }
+      //   })
+      //   .catch((e: Error) => { reject("ChannelApi (SBFetch) Error [2]: " + WrapError(e)) })
+    })
   }
 
 
@@ -2637,7 +2709,7 @@ class Channel extends SBChannelKeys {
   locked?: boolean = false // TODO: need to make sure we're tracking whenever this has changed
   // this is actually info for lock status, and is now available to Owner (no admin status anymore)
   adminData?: Dictionary<any> // todo: make into getter
-  verifiedGuest: boolean = false
+  // verifiedGuest: boolean = false
   #cursor: string = ''; // last (oldest) message key seen
 
   #protocol: SBProtocol
@@ -2678,7 +2750,8 @@ class Channel extends SBChannelKeys {
     if (DBG) console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", apiPayload)
     _sb_assert(this.channelId && path, "Internal Error (L2864)")
     return new Promise(async (resolve, reject) => {
-      await this.channelReady
+      if (apiPayload) await this.channelReady // if we need encryption
+      else await this.sb384Ready // enough for signing
       const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
       const viewBuf = new ArrayBuffer(8);
       const view = new DataView(viewBuf);

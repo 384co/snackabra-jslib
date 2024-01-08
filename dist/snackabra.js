@@ -152,7 +152,7 @@ function SBApiFetch(input, init) {
             }
             else {
                 if (DBG)
-                    console.log("ChannelApi.#callApi: success\n", retValue);
+                    console.log("[SBApiFetch] Success\n", retValue);
                 resolve(retValue);
             }
         }).catch((error) => {
@@ -1465,8 +1465,7 @@ export class SBChannelKeys extends SB384 {
                         _sb_assert(this.channelServer, "SBChannelKeys() constructor: need either channelKeys or channelServer");
                         if (DBG)
                             console.log("++++ SBChannelKeys being initialized from server");
-                        var cpk = await SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
-                            body: JSON.stringify({ userId: this.userId }) });
+                        var cpk = await this.#callApi('/getChannelKeys');
                         cpk = validate_SBChannelData(cpk);
                         _sb_assert(cpk.channelId === this.#channelId && cpk.ownerPublicKey, "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
                         this.#channelData = cpk;
@@ -1501,6 +1500,44 @@ export class SBChannelKeys extends SB384 {
             channelServer: this.channelServer,
             channelData: this.channelData
         };
+    }
+    #callApi(path, apiPayload) {
+        _sb_assert(this.channelServer, "[ChannelApi.#callApi] channelServer is unknown");
+        if (DBG)
+            console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", apiPayload);
+        _sb_assert(this.channelId && path, "Internal Error (L2864)");
+        return new Promise(async (resolve, reject) => {
+            await this.sb384Ready;
+            const timestamp = Math.round(Date.now() / 25) * 25;
+            const viewBuf = new ArrayBuffer(8);
+            const view = new DataView(viewBuf);
+            view.setFloat64(0, timestamp);
+            const pathAsArrayBuffer = new TextEncoder().encode(path).buffer;
+            const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer);
+            const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload) : undefined;
+            const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf);
+            const apiBody = {
+                channelId: this.channelId,
+                path: path,
+                userId: this.userId,
+                userPublicKey: this.userPublicKey,
+                apiPayload: apiPayloadBuf,
+                timestamp: timestamp,
+                sign: sign
+            };
+            const init = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/octet-stream"',
+                },
+                body: assemblePayload(validate_ChannelApiBody(apiBody))
+            };
+            if (DBG)
+                console.log("==== ChannelApi.#callApi: calling fetch with init:\n", init);
+            SBApiFetch(this.channelServer + '/api/v2/channel/' + this.channelId + path, init)
+                .then((ret) => { resolve(ret); })
+                .catch((e) => { reject("[Channel.#callApi] Error: " + WrapError(e)); });
+        });
     }
 }
 __decorate([
@@ -1578,7 +1615,6 @@ class Channel extends SBChannelKeys {
     static ReadyFlag = Symbol('ChannelReadyFlag');
     locked = false;
     adminData;
-    verifiedGuest = false;
     #cursor = '';
     #protocol;
     constructor(handle, protocol) {
@@ -1602,7 +1638,10 @@ class Channel extends SBChannelKeys {
             console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", apiPayload);
         _sb_assert(this.channelId && path, "Internal Error (L2864)");
         return new Promise(async (resolve, reject) => {
-            await this.channelReady;
+            if (apiPayload)
+                await this.channelReady;
+            else
+                await this.sb384Ready;
             const timestamp = Math.round(Date.now() / 25) * 25;
             const viewBuf = new ArrayBuffer(8);
             const view = new DataView(viewBuf);
