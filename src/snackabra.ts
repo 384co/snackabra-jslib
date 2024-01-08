@@ -189,9 +189,11 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
  * 
  * A core exception is that all messages with a TTL in the range 1-7
  * (eg range of 1 minute to 72 hours) are duplicated onto subchannels
- * matching the TTLs, namely '_1__', '_2__', '_3__', etc. Thus
- * an oldMessages fetch can for example request '_4__' to get all messages
- * that were sent with TTL 4 (eg 1 hour).
+ * matching the TTLs, namely '___1', '___2', '___3', etc. Thus
+ * an oldMessages fetch can for example request '___4' to get all messages
+ * that were sent with TTL 4 (eg 1 hour). Which also means that as
+ * Owner, if you set TTL on a message then you can't use the fourth character
+ * (if you try to while setting a TTL, channel server will reject it).
  * 
  * Properties that are generally retained or communicated inside payload
  * packaging have short names (apologies for lack of readability).
@@ -1784,7 +1786,7 @@ export class SBCrypto {  /******************************************************
       try {
         if (!o.ts) throw new Error(`unwrap() - no timestamp in encrypted message`)
         const { c: t, iv: iv } = o // encryptedContentsMakeBinary(o)
-        _sb_assert(t, "no contents in encrypted message")
+        _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
         const view = new DataView(new ArrayBuffer(8));
         view.setFloat64(0, o.ts);
         const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t!)
@@ -1988,8 +1990,95 @@ function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean 
 
 //#endregion - local decorators
 
+
 /******************************************************************************************************/
-//#region - SETUP and STARTUP stuff (in progress)
+//#region - IndexedDb caching
+
+const SB_CACHE_DB_NAME = "SBMessageCache"
+
+class SBMessageCache {
+  readyPromise: Promise<SBMessageCache>
+  db?: IDBDatabase
+  constructor(public dbName: string, dbVersion: number = 1) {
+    this.readyPromise = new Promise((resolve, reject) => {
+      if (!('indexedDB' in globalThis)) {
+        console.warn("IndexedDB is not supported in this environment. SBCache will not be functional.");
+        reject("IndexedDB not supported");
+        return;
+      }
+      const request = indexedDB.open(dbName, dbVersion);
+      request.onsuccess = () => { this.db = request.result; resolve(this); };
+      request.onerror = () => { reject(`Database error ('${dbName}): ` + request.error); };
+    });
+  }
+  getObjStore(name?: string, mode: IDBTransactionMode = "readonly"): IDBObjectStore {
+    if (!name) name = this.dbName
+    _sb_assert(this.db, "Internal Error [L2009]")
+    const transaction = this.db?.transaction(SB_CACHE_DB_NAME, mode);
+    const objectStore = transaction?.objectStore(SB_CACHE_DB_NAME);
+    _sb_assert(objectStore, "Internal Error [L2013]")
+    return objectStore!
+  }
+  // insert KV entry as { key: key, value: value }
+  async add(key: string, value: any): Promise<void> {
+    return new Promise(async (resolve, reject) => {
+      const objectStore = this.getObjStore("readwrite")
+      const request = objectStore.put({ key: key, value: value }); // overwrites if present
+      request.onsuccess = () => { resolve(); };
+      request.onerror = () => { reject('[add] Received error accessing keys'); };
+    });
+  }
+  // fetch an entry, returning the value
+  async get(key: string): Promise<ChannelMessage | undefined> {
+    return new Promise(async (resolve, reject) => {
+      await this.readyPromise
+      const objectStore = this.getObjStore()
+      const request = objectStore.get(key);
+      request.onsuccess = () => { resolve(request.result?.value); };
+      request.onerror = () => { reject('[get] Received error accessing keys'); };
+    });
+  }
+  getLowerUpper(channelId: SBChannelId, timestampPrefix: string, i2?: string): [string, string] {
+    const upperBound = timestampPrefix.padEnd(26, '3');
+    const sep = i2 ? `_${i2}_` : '______'
+    const lowerBound = channelId + sep + timestampPrefix;
+    return [lowerBound, upperBound]
+  }
+  async getKnownMessageKeys(channelId: SBChannelId, timestampPrefix: string, i2?: string): Promise<Set<ChannelMessage>> {
+    return new Promise(async (resolve, reject) => {
+      await this.readyPromise
+      const objectStore = this.getObjStore()
+      const [lower, upper] = this.getLowerUpper(channelId, timestampPrefix, i2)
+      const keyRange = IDBKeyRange.bound(lower, upper, false, false);
+      const getAllKeysRequest = objectStore?.getAllKeys(keyRange);
+      if (!getAllKeysRequest) resolve(new Set()); // unable to set up query
+      getAllKeysRequest!.onsuccess = () => { resolve(new Set(getAllKeysRequest!.result) as Set<ChannelMessage>); }; // IDBValidKey can be string
+      getAllKeysRequest!.onerror = () => { reject('[getKnownMessageKeys] Received error accessing keys'); };
+    });
+  }
+  async getKnownMessages(channelId: SBChannelId, timestampPrefix: string, i2?: string): Promise<Map<string, any>> {
+    return new Promise(async (resolve, reject) => {
+      await this.readyPromise
+      const objectStore = this.getObjStore()
+      const [lower, upper] = this.getLowerUpper(channelId, timestampPrefix, i2)
+      const keyRange = IDBKeyRange.bound(lower, upper, false, false);
+      const getAllRequest = objectStore?.getAll(keyRange);
+      if (!getAllRequest) resolve(new Map()); // unable to set up query
+      getAllRequest!.onsuccess = () => { resolve(new Map(getAllRequest!.result) as Map<string, any>); };
+      getAllRequest!.onerror = () => { reject('[getKnownMessages] Received error accessing keys'); };
+    });
+  }
+}
+
+if ('indexedDB' in globalThis)
+  (globalThis as any).sbMessageCache = new SBMessageCache(SB_CACHE_DB_NAME, 1)
+
+//#endregion - IndexedDb caching
+
+
+
+/******************************************************************************************************/
+//#region - SETUP and STARTUP
 
 /**
  * This is the GLOBAL SBCrypto object, which is instantiated
@@ -2002,6 +2091,7 @@ function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean 
 export const sbCrypto = new SBCrypto();
 
 //#endregion - SETUP and STARTUP stuff
+
 
 
 /**
@@ -2366,7 +2456,7 @@ export class SBChannelKeys extends SB384 {
 
             // the 'getChannelKeys' endpoint allows us to get the keys with just the user id
             var cpk: SBChannelData = await SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys',
-              { method: 'GET', headers: { 'Content-Type': 'application/json' },
+              { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
                 body: JSON.stringify({ userId: this.userId }) })
             cpk = validate_SBChannelData(cpk) // throws if there's an issue
             // we have the authoritative keys from the server, sanity check
@@ -2712,6 +2802,7 @@ class Channel extends SBChannelKeys {
    *
    */
   getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
+    // todo: add IndexedDB caching - see above
     return new Promise(async (resolve, reject) => {
       _sb_assert(this.channelId, "Channel.getOldMessages: no channel ID (?)")
       // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)

@@ -1023,7 +1023,7 @@ export class SBCrypto {
                 if (!o.ts)
                     throw new Error(`unwrap() - no timestamp in encrypted message`);
                 const { c: t, iv: iv } = o;
-                _sb_assert(t, "no contents in encrypted message");
+                _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)");
                 const view = new DataView(new ArrayBuffer(8));
                 view.setFloat64(0, o.ts);
                 const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t);
@@ -1145,6 +1145,85 @@ function SBValidateObject(obj, type) {
         default: return false;
     }
 }
+const SB_CACHE_DB_NAME = "SBMessageCache";
+class SBMessageCache {
+    dbName;
+    readyPromise;
+    db;
+    constructor(dbName, dbVersion = 1) {
+        this.dbName = dbName;
+        this.readyPromise = new Promise((resolve, reject) => {
+            if (!('indexedDB' in globalThis)) {
+                console.warn("IndexedDB is not supported in this environment. SBCache will not be functional.");
+                reject("IndexedDB not supported");
+                return;
+            }
+            const request = indexedDB.open(dbName, dbVersion);
+            request.onsuccess = () => { this.db = request.result; resolve(this); };
+            request.onerror = () => { reject(`Database error ('${dbName}): ` + request.error); };
+        });
+    }
+    getObjStore(name, mode = "readonly") {
+        if (!name)
+            name = this.dbName;
+        _sb_assert(this.db, "Internal Error [L2009]");
+        const transaction = this.db?.transaction(SB_CACHE_DB_NAME, mode);
+        const objectStore = transaction?.objectStore(SB_CACHE_DB_NAME);
+        _sb_assert(objectStore, "Internal Error [L2013]");
+        return objectStore;
+    }
+    async add(key, value) {
+        return new Promise(async (resolve, reject) => {
+            const objectStore = this.getObjStore("readwrite");
+            const request = objectStore.put({ key: key, value: value });
+            request.onsuccess = () => { resolve(); };
+            request.onerror = () => { reject('[add] Received error accessing keys'); };
+        });
+    }
+    async get(key) {
+        return new Promise(async (resolve, reject) => {
+            await this.readyPromise;
+            const objectStore = this.getObjStore();
+            const request = objectStore.get(key);
+            request.onsuccess = () => { resolve(request.result?.value); };
+            request.onerror = () => { reject('[get] Received error accessing keys'); };
+        });
+    }
+    getLowerUpper(channelId, timestampPrefix, i2) {
+        const upperBound = timestampPrefix.padEnd(26, '3');
+        const sep = i2 ? `_${i2}_` : '______';
+        const lowerBound = channelId + sep + timestampPrefix;
+        return [lowerBound, upperBound];
+    }
+    async getKnownMessageKeys(channelId, timestampPrefix, i2) {
+        return new Promise(async (resolve, reject) => {
+            await this.readyPromise;
+            const objectStore = this.getObjStore();
+            const [lower, upper] = this.getLowerUpper(channelId, timestampPrefix, i2);
+            const keyRange = IDBKeyRange.bound(lower, upper, false, false);
+            const getAllKeysRequest = objectStore?.getAllKeys(keyRange);
+            if (!getAllKeysRequest)
+                resolve(new Set());
+            getAllKeysRequest.onsuccess = () => { resolve(new Set(getAllKeysRequest.result)); };
+            getAllKeysRequest.onerror = () => { reject('[getKnownMessageKeys] Received error accessing keys'); };
+        });
+    }
+    async getKnownMessages(channelId, timestampPrefix, i2) {
+        return new Promise(async (resolve, reject) => {
+            await this.readyPromise;
+            const objectStore = this.getObjStore();
+            const [lower, upper] = this.getLowerUpper(channelId, timestampPrefix, i2);
+            const keyRange = IDBKeyRange.bound(lower, upper, false, false);
+            const getAllRequest = objectStore?.getAll(keyRange);
+            if (!getAllRequest)
+                resolve(new Map());
+            getAllRequest.onsuccess = () => { resolve(new Map(getAllRequest.result)); };
+            getAllRequest.onerror = () => { reject('[getKnownMessages] Received error accessing keys'); };
+        });
+    }
+}
+if ('indexedDB' in globalThis)
+    globalThis.sbMessageCache = new SBMessageCache(SB_CACHE_DB_NAME, 1);
 export const sbCrypto = new SBCrypto();
 class SB384 {
     sb384Ready;
@@ -1386,7 +1465,7 @@ export class SBChannelKeys extends SB384 {
                         _sb_assert(this.channelServer, "SBChannelKeys() constructor: need either channelKeys or channelServer");
                         if (DBG)
                             console.log("++++ SBChannelKeys being initialized from server");
-                        var cpk = await SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys', { method: 'GET', headers: { 'Content-Type': 'application/json' },
+                        var cpk = await SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
                             body: JSON.stringify({ userId: this.userId }) });
                         cpk = validate_SBChannelData(cpk);
                         _sb_assert(cpk.channelId === this.#channelId && cpk.ownerPublicKey, "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
