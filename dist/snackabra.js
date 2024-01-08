@@ -130,8 +130,11 @@ function SBApiFetch(input, init) {
                 reject("[SBApiFetch] Server response missing content-type header (?)");
                 return;
             }
-            if (contentType && contentType.indexOf("application/json") !== -1) {
-                retValue = jsonParseWrapper(await response.json(), "L489");
+            else if (contentType.indexOf("application/json") !== -1) {
+                const json = await response.json();
+                if (DBG2)
+                    console.log(`[SBApiFetch] json ('${json}'):\n`, json);
+                retValue = jsonParseWrapper(json, "L489");
             }
             else if (contentType.indexOf("application/octet-stream") !== -1) {
                 retValue = extractPayload(await response.arrayBuffer()).payload;
@@ -152,7 +155,7 @@ function SBApiFetch(input, init) {
             }
             else {
                 if (DBG)
-                    console.log("[SBApiFetch] Success\n", retValue);
+                    console.log("[SBApiFetch] Success:\n", SEP, input, '\n', SEP, retValue, '\n', SEP);
                 resolve(retValue);
             }
         }).catch((error) => {
@@ -1225,6 +1228,7 @@ class SBMessageCache {
 if ('indexedDB' in globalThis)
     globalThis.sbMessageCache = new SBMessageCache(SB_CACHE_DB_NAME, 1);
 export const sbCrypto = new SBCrypto();
+const SEP = "============================================================\n";
 class SB384 {
     sb384Ready;
     static ReadyFlag = Symbol('SB384ReadyFlag');
@@ -1505,7 +1509,7 @@ export class SBChannelKeys extends SB384 {
         _sb_assert(this.channelServer, "[ChannelApi.#callApi] channelServer is unknown");
         if (DBG)
             console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", apiPayload);
-        _sb_assert(this.channelId && path, "Internal Error (L2864)");
+        _sb_assert(this.#channelId && path, "Internal Error (L2528)");
         return new Promise(async (resolve, reject) => {
             await this.sb384Ready;
             const timestamp = Math.round(Date.now() / 25) * 25;
@@ -1517,7 +1521,7 @@ export class SBChannelKeys extends SB384 {
             const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload) : undefined;
             const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf);
             const apiBody = {
-                channelId: this.channelId,
+                channelId: this.#channelId,
                 path: path,
                 userId: this.userId,
                 userPublicKey: this.userPublicKey,
@@ -1534,7 +1538,7 @@ export class SBChannelKeys extends SB384 {
             };
             if (DBG)
                 console.log("==== ChannelApi.#callApi: calling fetch with init:\n", init);
-            SBApiFetch(this.channelServer + '/api/v2/channel/' + this.channelId + path, init)
+            SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + path, init)
                 .then((ret) => { resolve(ret); })
                 .catch((e) => { reject("[Channel.#callApi] Error: " + WrapError(e)); });
         });
@@ -1757,10 +1761,10 @@ class Channel extends SBChannelKeys {
     }
     async getStorageToken(size) {
         const storageTokenReq = await this.#callApi(`/storageRequest?size=${size}`);
-        _sb_assert(!storageTokenReq.hasOwnProperty('error'), `storage token request error (${storageTokenReq.error})`);
+        _sb_assert(storageTokenReq.hasOwnProperty('token'), `[getStorageToken] cannot parse response ('${JSON.stringify(storageTokenReq)}')`);
         if (DBG)
-            console.log("getStorageToken():", storageTokenReq);
-        return storageTokenReq;
+            console.log(`getStorageToken():\n`, storageTokenReq);
+        return storageTokenReq.token;
     }
     budd(options) {
         let { keys, storage, targetChannel } = options ?? {};

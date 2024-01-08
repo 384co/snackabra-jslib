@@ -29,8 +29,6 @@ const version = '2.0.0-alpha.5 (build 31)' // working on 2.0.0 release
 // minimum when creating a new channel
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024; // 8 MB
 
-
-
 /** 
  * Complete descriptor of a channel. The channel ID is a hash
  * of the public key of the channel owner. The channel key is
@@ -507,16 +505,15 @@ function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any> 
           reject("[SBApiFetch] Network response was not 'ok' (fatal)");
         const contentType = response.headers.get('content-type');
         if (!contentType) {
-          reject("[SBApiFetch] Server response missing content-type header (?)");
-          return;
-        }
-        if (contentType && contentType.indexOf("application/json") !== -1) {
-          retValue = jsonParseWrapper(await response.json(), "L489");
+          reject("[SBApiFetch] Server response missing content-type header (?)"); return;
+        } else if (contentType.indexOf("application/json") !== -1) {
+          const json = await response.json()
+          if (DBG2) console.log(`[SBApiFetch] json ('${json}'):\n`, json)
+          retValue = jsonParseWrapper(json, "L489");
         } else if (contentType.indexOf("application/octet-stream") !== -1) {
           retValue = extractPayload(await response.arrayBuffer()).payload
         } else {
-          reject("SBApiFetch] Server responded with unknown content-type header (?)");
-          return;
+          reject("SBApiFetch] Server responded with unknown content-type header (?)"); return;
         }
         if (!retValue || retValue.error || (retValue.success && !retValue.success)) {
           let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response'
@@ -525,7 +522,10 @@ function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any> 
           if (DBG) console.error("[SBApiFetch] error:\n", apiErrorMsg)
           reject(new Error(apiErrorMsg))
         } else {
-          if (DBG) console.log("[SBApiFetch] Success\n", retValue)
+          if (DBG) console.log(
+            "[SBApiFetch] Success:\n",
+            SEP, input, '\n',
+            SEP, retValue, '\n', SEP)
           resolve(retValue)
         }
       }).catch((error) => {
@@ -2090,6 +2090,8 @@ if ('indexedDB' in globalThis)
  */
 export const sbCrypto = new SBCrypto();
 
+const SEP = "============================================================\n";
+
 //#endregion - SETUP and STARTUP stuff
 
 
@@ -2512,18 +2514,18 @@ export class SBChannelKeys extends SB384 {
     }
   }
 
-  /*
- * Implements Channel api calls.
- * 
- * Note that the API call details are also embedded in the ChannelMessage,
- * and signed by the sender, completely separate from HTTP etc auth.
- */
+  /**
+    * Implements Channel api calls.
+    * 
+    * Note that the API call details are also embedded in the ChannelMessage,
+    * and signed by the sender, completely separate from HTTP etc auth.
+    */
   #callApi(path: string): Promise<any>
   #callApi(path: string, apiPayload: any): Promise<any>
   #callApi(path: string, apiPayload?: any): Promise<any> {
     _sb_assert(this.channelServer, "[ChannelApi.#callApi] channelServer is unknown")
     if (DBG) console.log("ChannelApi.#callApi: calling fetch with path:", path, "body:", apiPayload)
-    _sb_assert(this.channelId && path, "Internal Error (L2864)")
+    _sb_assert(this.#channelId && path, "Internal Error (L2528)")
     return new Promise(async (resolve, reject) => {
       await this.sb384Ready // enough for signing
       const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
@@ -2536,7 +2538,7 @@ export class SBChannelKeys extends SB384 {
       // sign with userId key, covering timestamp + path + apiPayload
       const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf)
       const apiBody: ChannelApiBody = {
-        channelId: this.channelId!,
+        channelId: this.#channelId!,
         path: path,
         userId: this.userId,
         userPublicKey: this.userPublicKey,
@@ -2552,7 +2554,7 @@ export class SBChannelKeys extends SB384 {
         body: assemblePayload(validate_ChannelApiBody(apiBody))
       }
       if (DBG) console.log("==== ChannelApi.#callApi: calling fetch with init:\n", init)
-      SBApiFetch(this.channelServer + '/api/v2/channel/' + this.channelId! + path, init)
+      SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId! + path, init)
         .then((ret: any) => { resolve(ret) })
         .catch((e: Error) => { reject("[Channel.#callApi] Error: " + WrapError(e)) })
 
@@ -3059,11 +3061,10 @@ class Channel extends SBChannelKeys {
    */
   @Ready async getStorageToken(size: number): Promise<string> {
     const storageTokenReq = await this.#callApi(`/storageRequest?size=${size}`)
-    _sb_assert(!storageTokenReq.hasOwnProperty('error'),
-      `storage token request error (${storageTokenReq.error})`)
+    _sb_assert(storageTokenReq.hasOwnProperty('token'), `[getStorageToken] cannot parse response ('${JSON.stringify(storageTokenReq)}')`)
     // return(JSON.stringify(storageTokenReq))
-    if (DBG) console.log("getStorageToken():", storageTokenReq)
-    return storageTokenReq
+    if (DBG) console.log(`getStorageToken():\n`, storageTokenReq)
+    return storageTokenReq.token
   }
 
   // ToDo: if both keys and storage are specified, should we check for server secret?
