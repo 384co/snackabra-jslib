@@ -5,14 +5,37 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a;
-const version = '2.0.0-alpha.5 (build 31)';
+const version = '2.0.0-alpha.5 (build 33)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
+function _checkChannelHandle(data) {
+    return (data.channelId && data.channelId.length === 43
+        && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
+        && (!data.channelServer || typeof data.channelServer === 'string')
+        && (!data.channelData || _checkChannelData(data.channelData)));
+}
+export function validate_SBChannelHandle(data) {
+    if (!data)
+        throw new Error(`invalid SBChannelHandle (null or undefined)`);
+    else if (data[SB_CHANNEL_HANDLE_SYMBOL])
+        return data;
+    else if (_checkChannelHandle(data)) {
+        return { ...data, [SB_CHANNEL_HANDLE_SYMBOL]: true };
+    }
+    else {
+        if (DBG)
+            console.error('invalid SBChannelHandle ... trying to ingest:\n', data);
+        throw new Error(`invalid SBChannelHandle`);
+    }
+}
+function _checkChannelData(data) {
+    return (data.channelId && data.channelId.length === 43
+        && data.ownerPublicKey && typeof data.ownerPublicKey === 'string' && data.ownerPublicKey.length > 0
+        && (!data.storageToken || data.storageToken.length > 0));
+}
 export function validate_SBChannelData(data) {
     if (!data)
         throw new Error(`invalid SBChannelData (null or undefined)`);
-    else if (data.channelId && data.channelId.length === 43
-        && data.ownerPublicKey && data.ownerPublicKey.length > 0
-        && (!data.storageToken || data.storageToken.length > 0)) {
+    else if (_checkChannelData(data)) {
         return data;
     }
     else {
@@ -1442,47 +1465,56 @@ export class SBChannelKeys extends SB384 {
     static ReadyFlag = Symbol('SBChannelKeysReadyFlag');
     #channelData;
     channelServer;
-    constructor(handle) {
-        if (handle) {
-            super(handle.userPrivateKey, true);
-            if (handle.channelServer) {
-                this.channelServer = handle.channelServer;
-                if (this.channelServer[this.channelServer.length - 1] === '/')
-                    this.channelServer = this.channelServer.slice(0, -1);
+    constructor(handleOrKey) {
+        if (handleOrKey === null)
+            throw new Error(`SBChannelKeys constructor: you cannot pass 'null'`);
+        if (handleOrKey) {
+            if (typeof handleOrKey === 'string') {
+                const ownerPrivateKey = handleOrKey;
+                super(ownerPrivateKey, true);
             }
-            this.#channelId = handle.channelId;
+            else if (_checkChannelHandle(handleOrKey)) {
+                const handle = validate_SBChannelHandle(handleOrKey);
+                super(handle.userPrivateKey, true);
+                if (handle.channelServer) {
+                    this.channelServer = handle.channelServer;
+                    if (this.channelServer[this.channelServer.length - 1] === '/')
+                        this.channelServer = this.channelServer.slice(0, -1);
+                }
+                this.#channelId = handle.channelId;
+                this.#channelData = handle.channelData;
+            }
+            else {
+                throw new Error(`SBChannelKeys() constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`);
+            }
         }
         else {
             super();
         }
         this[SBChannelKeys.ReadyFlag] = false;
         this.sbChannelKeysReady = new Promise(async (resolve, reject) => {
-            if (DBG)
-                console.log("SBChannelKeys() constructor.");
-            await this.sb384Ready;
             try {
-                if (handle) {
-                    if (handle.channelData) {
-                        this.#channelData = handle.channelData;
-                    }
-                    else {
-                        _sb_assert(this.channelServer, "SBChannelKeys() constructor: need either channelKeys or channelServer");
-                        if (DBG)
-                            console.log("++++ SBChannelKeys being initialized from server");
-                        var cpk = await this.#callApi('/getChannelKeys');
-                        cpk = validate_SBChannelData(cpk);
-                        _sb_assert(cpk.channelId === this.#channelId && cpk.ownerPublicKey, "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
-                        this.#channelData = cpk;
-                    }
-                }
-                else {
+                if (DBG)
+                    console.log("SBChannelKeys() constructor.");
+                await this.sb384Ready;
+                _sb_assert(this.private, "Internal Error (L2476)");
+                if (!this.#channelId) {
                     this.#channelId = this.ownerChannelId;
                     this.#channelData = {
                         channelId: this.#channelId,
                         ownerPublicKey: this.userPublicKey,
                     };
                 }
-                _sb_assert(this.SB384ReadyFlag, "SBChannelKeys(): parent SB384 object is not ready (?)");
+                else if (!this.#channelData) {
+                    if (!this.channelServer)
+                        throw new Error("SBChannelKeys() constructor: either key is owner key, or handle contains channelData, or channelServer is provided ...");
+                    if (DBG)
+                        console.log("++++ SBChannelKeys being initialized from server");
+                    var cpk = await this.#callApi('/getChannelKeys');
+                    cpk = validate_SBChannelData(cpk);
+                    _sb_assert(cpk.channelId === this.#channelId, "Internal Error (L2493)");
+                    this.#channelData = cpk;
+                }
                 this[SBChannelKeys.ReadyFlag] = true;
                 resolve(this);
             }
@@ -1621,8 +1653,11 @@ class Channel extends SBChannelKeys {
     adminData;
     #cursor = '';
     #protocol;
-    constructor(handle, protocol) {
-        super(handle);
+    constructor(handleOrKey, protocol) {
+        if (handleOrKey === null)
+            throw new Error(`Channel() constructor: you cannot pass 'null'`);
+        console.log("Channel() constructor called with handleOrKey:", handleOrKey);
+        super(handleOrKey);
         this.#protocol = protocol ? protocol : new BasicProtocol(this);
         this.channelReady =
             this.sbChannelKeysReady
@@ -1739,6 +1774,9 @@ class Channel extends SBChannelKeys {
     send(_msg) {
         return Promise.reject("Channel.send(): abstract method, must be implemented in subclass");
     }
+    getChannelKeys() {
+        return this.#callApi('/getChannelKeys');
+    }
     updateCapacity(capacity) { return this.#callApi('/updateRoomCapacity?capacity=' + capacity); }
     getCapacity() { return (this.#callApi('/getRoomCapacity')); }
     getStorageLimit() { return (this.#callApi('/getStorageLimit')); }
@@ -1813,6 +1851,9 @@ __decorate([
     Memoize,
     Ready
 ], Channel.prototype, "api", null);
+__decorate([
+    Ready
+], Channel.prototype, "getChannelKeys", null);
 __decorate([
     Ready,
     Owner
@@ -2538,6 +2579,8 @@ class Snackabra {
                 else if (budgetChannelOrToken instanceof Channel) {
                     const budget = budgetChannelOrToken;
                     await budget.ready;
+                    if (!budget.channelServer)
+                        budget.channelServer = this.channelServer;
                     _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET);
                 }
                 else {

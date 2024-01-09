@@ -21,7 +21,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 31)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 33)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -32,7 +32,11 @@ export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024; // 8 MB
 /** 
  * Complete descriptor of a channel. The channel ID is a hash
  * of the public key of the channel owner. The channel key is
- * the private key with which we are joining the channel. 
+ * the private key with which we are joining the channel.
+ * 
+ * Note: an owner's channel handle can be reconstructed from
+ * just having owner private key (SBUserPrivateKey) and channelServer
+ * (though channelServer an be ''pinged'' to find it's home).
  */
 export interface SBChannelHandle {
   [SB_CHANNEL_HANDLE_SYMBOL]?: boolean, // future use for internal validation
@@ -41,14 +45,30 @@ export interface SBChannelHandle {
   channelId: SBChannelId,
   userPrivateKey: SBUserPrivateKey,
 
-  // // if we're the owner, we will also need to track the private channel key
-  // channelPrivateKey?: SBUserPrivateKey,
-
   // channel server that hosts this channel
   channelServer?: string,
 
   // server-side channel data; if missing the server can provide it
   channelData?: SBChannelData,
+}
+
+function _checkChannelHandle(data: SBChannelHandle) {
+  return (
+    data.channelId && data.channelId.length === 43
+    && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
+    && (!data.channelServer || typeof data.channelServer === 'string')
+    && (!data.channelData || _checkChannelData(data.channelData))
+  )
+}
+export function validate_SBChannelHandle(data: SBChannelHandle): SBChannelHandle {
+  if (!data) throw new Error(`invalid SBChannelHandle (null or undefined)`)
+  else if (data[SB_CHANNEL_HANDLE_SYMBOL]) return data as SBChannelHandle
+  else if (_checkChannelHandle(data)) {
+    return { ...data, [SB_CHANNEL_HANDLE_SYMBOL]: true } as SBChannelHandle
+  } else {
+    if (DBG) console.error('invalid SBChannelHandle ... trying to ingest:\n', data)
+    throw new Error(`invalid SBChannelHandle`)
+  }
 }
 
 /**
@@ -60,18 +80,21 @@ export interface SBChannelHandle {
 export interface SBChannelData {
   channelId: SBChannelId,
   ownerPublicKey: SBUserPublicKey,
-  // used when creating/authorizing a channel from a handle, sometimes left behind,
-  // but strictly speaking only needing when calling Channel.create()
+  // used when creating/authorizing a channel
   storageToken?: SBStorageToken,
+}
+
+function _checkChannelData(data: SBChannelData) { 
+  return (
+    data.channelId && data.channelId.length === 43
+    && data.ownerPublicKey && typeof data.ownerPublicKey === 'string' && data.ownerPublicKey.length > 0
+    && (!data.storageToken || data.storageToken.length > 0)
+  )
 }
 
 export function validate_SBChannelData(data: any): SBChannelData {
   if (!data) throw new Error(`invalid SBChannelData (null or undefined)`)
-  else if (
-    data.channelId && data.channelId.length === 43
-    && data.ownerPublicKey && data.ownerPublicKey.length > 0
-    && (!data.storageToken || data.storageToken.length > 0)
-  ) {
+  else if (_checkChannelData(data)) {
     return data as SBChannelData
   } else {
     if (DBG) console.error('invalid SBChannelData ... trying to ingest:\n', data)
@@ -2287,7 +2310,6 @@ class SB384 {
   }
 
   get SB384ReadyFlag() { return (this as any)[SB384.ReadyFlag] }
-
   get ready() { return this.sb384Ready }
   // get readyFlag() { return this.#SB384ReadyFlag }
 
@@ -2421,77 +2443,62 @@ export class SBChannelKeys extends SB384 {
   #channelData?: SBChannelData
   channelServer?: string // can be read/written freely
 
-  constructor(handle?: SBChannelHandle) {
-    if (handle) {
-      super(handle.userPrivateKey, true);
-      if (handle.channelServer) {
-        this.channelServer = handle.channelServer;
-        // make sure there are no trailing '/' in channelServer
-        if (this.channelServer![this.channelServer!.length - 1] === '/')
-          this.channelServer = this.channelServer!.slice(0, -1);
+  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey) {
+    // handelOrKey as undefined is fine, but 'null' is NOT ok
+    if (handleOrKey === null) throw new Error(`SBChannelKeys constructor: you cannot pass 'null'`)
+    if (handleOrKey) {
+      if (typeof handleOrKey === 'string') {
+        const ownerPrivateKey = handleOrKey as SBUserPrivateKey
+        super(ownerPrivateKey, true)
+      } else if (_checkChannelHandle(handleOrKey)) {
+        const handle = validate_SBChannelHandle(handleOrKey)
+        super(handle.userPrivateKey, true);
+        if (handle.channelServer) {
+          this.channelServer = handle.channelServer;
+          // make sure there are no trailing '/' in channelServer
+          if (this.channelServer![this.channelServer!.length - 1] === '/')
+            this.channelServer = this.channelServer!.slice(0, -1);
+        }
+        this.#channelId = handle.channelId
+        this.#channelData = handle.channelData // which might not be there
+      } else {
+        throw new Error(`SBChannelKeys() constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`)
       }
-      this.#channelId = handle.channelId
     } else {
       // brand new, state will be derived from SB384 keys
       super()
     }
     (this as any)[SBChannelKeys.ReadyFlag] = false
     this.sbChannelKeysReady = new Promise<SBChannelKeys>(async (resolve, reject) => {
-      if (DBG) console.log("SBChannelKeys() constructor.")
-      // wait for parent keys (super)
-      await this.sb384Ready
-
       try {
-        if (handle) {
-          if (handle.channelData) {
-            this.#channelData = handle.channelData
-          } else {
-            // we need to get keys from the channel server, use SBFetch
-            // (can't use channel api since ... we don't have channel yet)
-            _sb_assert(this.channelServer, "SBChannelKeys() constructor: need either channelKeys or channelServer")
-
-            if (DBG) console.log("++++ SBChannelKeys being initialized from server")
-
-            // const response = await SBFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys')
-            // _sb_assert(response && !response.ok, "SBChannelKeys(): failed to get channel keys (network response not 'ok')")
-            // const resp: any = extractPayload(await response.arrayBuffer())
-            // _sb_assert(resp && !resp.error, "SBChannelKeys(): failed to get channel keys (error in response)")
-
-            // the 'getChannelKeys' endpoint allows us to get the keys with just the user id
-            // var cpk: SBChannelData = await SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + '/getChannelKeys',
-            //   { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
-            //     body: JSON.stringify({ userId: this.userId }) })
-            var cpk: SBChannelData = await this.#callApi('/getChannelKeys')
-
-            cpk = validate_SBChannelData(cpk) // throws if there's an issue
-            // we have the authoritative keys from the server, sanity check
-            _sb_assert(cpk.channelId === this.#channelId && cpk.ownerPublicKey,
-              "SBChannelKeys(): failed to get channel keys (invalid or incomplete response)");
-            this.#channelData = cpk
-          }
-        } else {
+        if (DBG) console.log("SBChannelKeys() constructor.")
+        // wait for parent keys (super)
+        await this.sb384Ready; _sb_assert(this.private, "Internal Error (L2476)")
+        if (!this.#channelId) {
+          // if channelId wasn't provided upon construction, then we're owner
           this.#channelId = this.ownerChannelId
           this.#channelData = {
-            channelId: this.#channelId!,
+            channelId: this.#channelId,
             ownerPublicKey: this.userPublicKey,
-            // channelPublicKey: ck.userPublicKey
           }
+        } else if (!this.#channelData) {
+          // we're not owner, and we haven't gotten the ownerPublicKey, so we need to ask the server
+          if (!this.channelServer)
+            throw new Error("SBChannelKeys() constructor: either key is owner key, or handle contains channelData, or channelServer is provided ...")
+          if (DBG) console.log("++++ SBChannelKeys being initialized from server")
+          var cpk: SBChannelData = await this.#callApi('/getChannelKeys')
+          cpk = validate_SBChannelData(cpk) // throws if there's an issue
+          // we have the authoritative keys from the server, sanity check
+          _sb_assert(cpk.channelId === this.#channelId, "Internal Error (L2493)")
+          this.#channelData = cpk
         }
-        _sb_assert(this.SB384ReadyFlag, "SBChannelKeys(): parent SB384 object is not ready (?)")
-
-          // // default is to both encrypt and sign against the channel public key
-          // this.#encryptionKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey!, 'AES-GCM', true, ['encrypt', 'decrypt'])
-          // this.#signKey = await sbCrypto.deriveKey(this.privateKey, this.#channelPublicKey!, 'HMAC', true, ['sign', 'verify'])
-
-          // this.SBChannelKeysReadyFlag = true
-          ; (this as any)[SBChannelKeys.ReadyFlag] = true;
+        // should be all done at this point
+        (this as any)[SBChannelKeys.ReadyFlag] = true;
         resolve(this)
-
       } catch (e) {
         reject('[SBChannelKeys] constructor failed. ' + WrapError(e))
       }
     })
-    // this.sbChannelKeysReady = this.ready
   }
 
   get ready() { return this.sbChannelKeysReady }
@@ -2719,15 +2726,17 @@ class Channel extends SBChannelKeys {
   /**
    * Channel
    */
-  constructor(handle?: SBChannelHandle, protocol?: SBProtocol) {
-    // if (!handle.channelServer)
-    //   throw new Error("Channel(): no channel server provided")
-    super(handle);
+  constructor()
+  constructor(key: SBUserPrivateKey, protocol?: SBProtocol)
+  constructor(handle: SBChannelHandle, protocol?: SBProtocol)
+  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey, protocol?: SBProtocol) {
+    if (handleOrKey === null) throw new Error(`Channel() constructor: you cannot pass 'null'`)
+    console.log("Channel() constructor called with handleOrKey:", handleOrKey)
+    super(handleOrKey);
     this.#protocol = protocol ? protocol : new BasicProtocol(this)
     this.channelReady =
       this.sbChannelKeysReady
         .then(() => {
-          // this.#ChannelReadyFlag = true;
           (this as any)[Channel.ReadyFlag] = true;
           return this;
         })
@@ -2907,6 +2916,11 @@ class Channel extends SBChannelKeys {
 
   send(_msg: SBMessage | string): Promise<string> {
     return Promise.reject("Channel.send(): abstract method, must be implemented in subclass")
+  }
+
+  // this is mostly used for 'are you there?' calls
+  @Ready getChannelKeys(): Promise<SBChannelData> {
+    return this.#callApi('/getChannelKeys')
   }
 
   /**
@@ -4422,8 +4436,8 @@ class Snackabra {
           _storageToken = budgetChannelOrToken as SBStorageToken
         } else if (budgetChannelOrToken instanceof Channel) {
           const budget = budgetChannelOrToken as Channel
-          // get a token to spend
-          await budget.ready
+          await budget.ready // make sure it's ready
+          if (!budget.channelServer) budget.channelServer = this.channelServer
           _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET)
         } else {
           reject('Invalid parameter to create() - need a token or a budget channel')

@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 31)";
+declare const version = "2.0.0-alpha.5 (build 33)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
@@ -7,6 +7,7 @@ export interface SBChannelHandle {
     channelServer?: string;
     channelData?: SBChannelData;
 }
+export declare function validate_SBChannelHandle(data: SBChannelHandle): SBChannelHandle;
 export interface SBChannelData {
     channelId: SBChannelId;
     ownerPublicKey: SBUserPublicKey;
@@ -200,7 +201,7 @@ export declare class SBChannelKeys extends SB384 {
     sbChannelKeysReady: Promise<SBChannelKeys>;
     static ReadyFlag: symbol;
     channelServer?: string;
-    constructor(handle?: SBChannelHandle);
+    constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey);
     get ready(): Promise<SBChannelKeys>;
     get SBChannelKeysReadyFlag(): any;
     get channelData(): SBChannelData;
@@ -233,7 +234,9 @@ declare class Channel extends SBChannelKeys {
     static ReadyFlag: symbol;
     locked?: boolean;
     adminData?: Dictionary<any>;
-    constructor(handle?: SBChannelHandle, protocol?: SBProtocol);
+    constructor();
+    constructor(key: SBUserPrivateKey, protocol?: SBProtocol);
+    constructor(handle: SBChannelHandle, protocol?: SBProtocol);
     get ready(): Promise<Channel>;
     get ChannelReadyFlag(): boolean;
     get protocol(): SBProtocol;
@@ -243,6 +246,7 @@ declare class Channel extends SBChannelKeys {
     getLastMessageTimes(): void;
     getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
     send(_msg: SBMessage | string): Promise<string>;
+    getChannelKeys(): Promise<SBChannelData>;
     updateCapacity(capacity: number): Promise<any>;
     getCapacity(): Promise<any>;
     getStorageLimit(): Promise<any>;
