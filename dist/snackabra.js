@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a;
-const version = '2.0.0-alpha.5 (build 33)';
+const version = '2.0.0-alpha.5 (build 37)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 function _checkChannelHandle(data) {
     return (data.channelId && data.channelId.length === 43
@@ -126,6 +126,53 @@ export class MessageBus {
         }
     }
 }
+export function jsonParseWrapper(str, loc, reviver) {
+    while (str && typeof str === 'string') {
+        try {
+            str = JSON.parse(str, reviver);
+        }
+        catch (e) {
+            throw new Error(`JSON.parse() error${loc ? ` at ${loc}` : ''}: ${e}\nString (possibly nested) was: ${str}`);
+        }
+    }
+    return str;
+}
+export function compareBuffers(a, b) {
+    if (typeof a != typeof b)
+        return false;
+    if ((a == null) || (b == null))
+        return false;
+    const av = bs2dv(a);
+    const bv = bs2dv(b);
+    if (av.byteLength !== bv.byteLength)
+        return false;
+    for (let i = 0; i < av.byteLength; i++)
+        if (av.getUint8(i) !== bv.getUint8(i))
+            return false;
+    return true;
+}
+export function getRandomValues(buffer) {
+    if (buffer.byteLength < (4096)) {
+        return crypto.getRandomValues(buffer);
+    }
+    else {
+        _sb_assert(!(buffer.byteLength % 1024), 'getRandomValues(): large requested blocks must be multiple of 1024 in size');
+        let i = 0;
+        try {
+            for (i = 0; i < buffer.byteLength; i += 1024) {
+                let t = new Uint8Array(1024);
+                crypto.getRandomValues(t);
+                buffer.set(t, i);
+            }
+        }
+        catch (e) {
+            console.log(`got an error on index i=${i}`);
+            console.log(e);
+            console.trace();
+        }
+        return buffer;
+    }
+}
 function SBFetch(input, init) {
     return new Promise((resolve, reject) => {
         try {
@@ -208,71 +255,13 @@ function _sb_assert(val, msg) {
         throw new Error(m);
     }
 }
-function parseSB384string(input) {
-    try {
-        if (input.length <= 4)
-            return undefined;
-        const prefix = input.slice(0, 4);
-        const data = input.slice(4);
-        switch (prefix) {
-            case KeyPrefix.SBPublicKey: {
-                const combined = base62ToArrayBuffer(data);
-                if (combined.byteLength !== (48 * 2))
-                    return undefined;
-                return {
-                    prefix: KeyPrefix.SBPublicKey,
-                    x: arrayBufferToBase64(combined.slice(0, 48)),
-                    y: arrayBufferToBase64(combined.slice(48, 96))
-                };
-            }
-            case KeyPrefix.SBPrivateKey: {
-                const combined = base62ToArrayBuffer(data);
-                if (combined.byteLength !== (48 * 3))
-                    return undefined;
-                return {
-                    prefix: KeyPrefix.SBPrivateKey,
-                    x: arrayBufferToBase64(combined.slice(0, 48)),
-                    y: arrayBufferToBase64(combined.slice(48, 96)),
-                    d: arrayBufferToBase64(combined.slice(96, 144))
-                };
-            }
-            default: {
-                return undefined;
-            }
-        }
-    }
-    catch (e) {
-        console.error("parseSB384string() - malformed input, exception: ", e);
-        return undefined;
-    }
+function _appendBuffer(buffer1, buffer2) {
+    const tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
+    tmp.set(new Uint8Array(buffer1), 0);
+    tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
+    return tmp.buffer;
 }
-export function getRandomValues(buffer) {
-    if (buffer.byteLength < (4096)) {
-        return crypto.getRandomValues(buffer);
-    }
-    else {
-        _sb_assert(!(buffer.byteLength % 1024), 'getRandomValues(): large requested blocks must be multiple of 1024 in size');
-        let i = 0;
-        try {
-            for (i = 0; i < buffer.byteLength; i += 1024) {
-                let t = new Uint8Array(1024);
-                crypto.getRandomValues(t);
-                buffer.set(t, i);
-            }
-        }
-        catch (e) {
-            console.log(`got an error on index i=${i}`);
-            console.log(e);
-            console.trace();
-        }
-        return buffer;
-    }
-}
-const b64_regex = /^([A-Za-z0-9+/_\-=]*)$/;
-function _assertBase64(base64) {
-    return b64_regex.test(base64);
-}
-const isBase64Encoded = _assertBase64;
+const b64Regex = /^([A-Za-z0-9+/_\-=]*)$/;
 const b64lookup = [];
 const urlLookup = [];
 const revLookup = [];
@@ -299,8 +288,8 @@ function getLens(b64) {
 function _byteLength(validLen, placeHoldersLen) {
     return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen;
 }
-export function base64ToArrayBuffer(str) {
-    if (!_assertBase64(str))
+function base64ToArrayBuffer(str) {
+    if (!b64Regex.test(str))
         throw new Error(`invalid character in string '${str}'`);
     let tmp;
     switch (str.length % 4) {
@@ -363,20 +352,6 @@ function encodeChunk(lookup, view, start, end) {
 const bs2dv = (bs) => bs instanceof ArrayBuffer
     ? new DataView(bs)
     : new DataView(bs.buffer, bs.byteOffset, bs.byteLength);
-export function compareBuffers(a, b) {
-    if (typeof a != typeof b)
-        return false;
-    if ((a == null) || (b == null))
-        return false;
-    const av = bs2dv(a);
-    const bv = bs2dv(b);
-    if (av.byteLength !== bv.byteLength)
-        return false;
-    for (let i = 0; i < av.byteLength; i++)
-        if (av.getUint8(i) !== bv.getUint8(i))
-            return false;
-    return true;
-}
 function arrayBufferToBase64(buffer, variant = 'url') {
     if (buffer == null) {
         _sb_exception('L893', 'arrayBufferToBase64() -> null paramater');
@@ -410,157 +385,90 @@ function arrayBufferToBase64(buffer, variant = 'url') {
         return parts.join('');
     }
 }
-const base62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-const array32regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
-const b62regex = /^[0-9a-zA-Z]*$/;
-const intervals = new Map([
-    [32, 43],
-    [16, 22],
-    [8, 11],
-    [4, 6],
-]);
-const inverseIntervals = new Map(Array.from(intervals, ([key, value]) => [value, key]));
-const inverseKeys = Array.from(inverseIntervals.keys()).sort((a, b) => a - b);
-function _arrayBufferToBase62(buffer, c) {
-    if (buffer.byteLength !== c || !intervals.has(c))
-        throw new Error("[arrayBufferToBase62] Decoding error");
-    let result = '';
-    for (let n = BigInt('0x' + Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('')); n > 0n; n = n / 62n)
-        result = base62[Number(n % 62n)] + result;
-    return result.padStart(intervals.get(c), '0');
+export function encodeB64Url(input) {
+    return input.replaceAll('+', '-').replaceAll('/', '_');
 }
-export function arrayBufferToBase62(buffer) {
-    let l = buffer.byteLength;
-    if (l % 4 !== 0)
-        throw new Error("[arrayBufferToBase62] Must be multiple of 4 bytes (32 bits).");
-    let i = 0;
+export function decodeB64Url(input) {
+    input = input.replaceAll('-', '+').replaceAll('_', '/');
+    const pad = input.length % 4;
+    if (pad) {
+        _sb_assert(pad !== 1, 'InvalidLengthError: Input base64url string is the wrong length to determine padding');
+        input += new Array(5 - pad).join('=');
+    }
+    return input;
+}
+export const base62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const base62zero = base62[0];
+export const b62regex = /^[A-Za-z0-9]*$/;
+export const base62regex = b62regex;
+export function isBase62Encoded(value) {
+    return b62regex.test(value);
+}
+const N = 32;
+const M = new Map(), invM = new Map();
+for (let X = 1; X <= N; X++) {
+    const Y = Math.ceil((X * 8) / Math.log2(62));
+    M.set(X, Y);
+    invM.set(Y, X);
+}
+const maxChunk = M.get(N);
+function arrayBufferToBase62(buffer) {
+    function _arrayBufferToBase62(buffer, c) {
+        let result = '', n = 0n;
+        for (const byte of buffer)
+            n = (n << 8n) | BigInt(byte);
+        for (; n > 0n; n = n / 62n)
+            result = base62[Number(n % 62n)] + result;
+        return result.padStart(M.get(c), base62zero);
+    }
+    const buf = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
     let result = '';
-    while (l > 0) {
-        let c = 2 ** Math.min(Math.floor(Math.log2(l)), 5);
-        let chunk = buffer.slice(i, i + c);
-        result += _arrayBufferToBase62(chunk, c);
-        i += c;
-        l -= c;
+    for (let l = buf.byteLength, i = 0, c; l > 0; i += c, l -= c) {
+        c = l >= N ? N : l;
+        result += _arrayBufferToBase62(buf.slice(i, i + c), c);
     }
     return result;
 }
-function _base62ToArrayBuffer(s, t) {
-    let n = 0n;
-    try {
-        for (let i = 0; i < s.length; i++) {
-            const digit = BigInt(base62.indexOf(s[i]));
-            n = n * 62n + digit;
-        }
-        if (n > 2n ** BigInt(t * 8) - 1n)
-            throw new Error(`base62ToArrayBuffer: value exceeds ${t * 8} bits.`);
-        const buffer = new ArrayBuffer(t);
-        const view = new DataView(buffer);
-        for (let i = 0; i < (t / 4); i++) {
-            const uint32 = Number(BigInt.asUintN(32, n));
-            view.setUint32(((t / 4) - i - 1) * 4, uint32);
-            n = n >> 32n;
-        }
-        return buffer;
-    }
-    catch (e) {
-        console.error("[_base62ToArrayBuffer] Error: ", e);
-        throw (e);
-    }
-}
-export function base62ToArrayBuffer(s) {
+function base62ToArrayBuffer(s) {
     if (!b62regex.test(s))
         throw new Error('base62ToArrayBuffer32: must be alphanumeric (0-9A-Za-z).');
-    let i = 0, j = 0, c, oldC = 43;
-    let result = new Uint8Array(s.length);
+    function _base62ToArrayBuffer(s, t) {
+        try {
+            let n = 0n, buffer = new Uint8Array(t);
+            for (let i = 0; i < s.length; i++)
+                n = n * 62n + BigInt(base62.indexOf(s[i]));
+            if (n > 2n ** BigInt(t * 8) - 1n)
+                throw new Error('base62ToArrayBuffer: Invalid Base62 string.');
+            for (let i = t - 1; i >= 0; i--, n >>= 8n)
+                buffer[i] = Number(n & 0xffn);
+            return buffer;
+        }
+        catch (e) {
+            throw new Error('base62ToArrayBuffer: Invalid Base62 string.');
+        }
+    }
     try {
-        while (i < s.length) {
-            c = inverseKeys.filter(num => num <= (s.length - i)).pop();
-            if (oldC < 43 && c >= oldC)
-                throw new Error('cannot decypher b62 string (incorrect length)');
-            oldC = c;
-            let chunk = s.slice(i, i + c);
-            const newBuf = new Uint8Array(_base62ToArrayBuffer(chunk, inverseIntervals.get(c)));
+        let j = 0, result = new Uint8Array(s.length * 6 / 8);
+        for (let i = 0, c, newBuf; i < s.length; i += c, j += newBuf.byteLength) {
+            c = Math.min(s.length - i, maxChunk);
+            newBuf = _base62ToArrayBuffer(s.slice(i, i + c), invM.get(c));
             result.set(newBuf, j);
-            i += c;
-            j += newBuf.byteLength;
         }
         return result.buffer.slice(0, j);
     }
     catch (e) {
-        console.error("[base62ToArrayBuffer] Error:", e);
-        throw (e);
+        throw e;
     }
 }
-export function base62ToArrayBuffer32(s) {
-    if (!array32regex.test(s))
-        throw new Error(`base62ToArrayBuffer32: string must match: ${array32regex}, value provided was ${s}`);
-    return base62ToArrayBuffer(s);
-}
-export function arrayBuffer32ToBase62(buffer) {
-    if (buffer.byteLength !== 32)
-        throw new Error('arrayBufferToBase62: buffer must be exactly 32 bytes (256 bits).');
-    return arrayBufferToBase62(buffer);
-}
 export function base62ToBase64(s) {
-    return arrayBufferToBase64(base62ToArrayBuffer32(s));
+    return arrayBufferToBase64(base62ToArrayBuffer(s));
 }
 export function base64ToBase62(s) {
     return arrayBufferToBase62(base64ToArrayBuffer(s));
 }
-export function isBase62Encoded(value) {
-    return array32regex.test(value);
-}
-function _appendBuffer(buffer1, buffer2) {
-    const tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
-    tmp.set(new Uint8Array(buffer1), 0);
-    tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
-    return tmp.buffer;
-}
-export function partition(str, n) {
-    throw (`partition() not tested on TS yet - (${str}, ${n})`);
-}
-export function jsonParseWrapper(str, loc, reviver) {
-    while (str && typeof str === 'string') {
-        try {
-            str = JSON.parse(str, reviver);
-        }
-        catch (e) {
-            throw new Error(`JSON.parse() error${loc ? ` at ${loc}` : ''}: ${e}\nString (possibly nested) was: ${str}`);
-        }
-    }
-    return str;
-}
-export function assemblePayload2(data) {
-    try {
-        const metadata = {};
-        metadata['version'] = '002';
-        let keyCount = 0;
-        let startIndex = 0;
-        for (const key in data) {
-            keyCount++;
-            metadata[keyCount.toString()] = { name: key, start: startIndex, size: data[key].byteLength };
-            startIndex += data[key].byteLength;
-        }
-        const encoder = new TextEncoder();
-        const metadataBuffer = encoder.encode(JSON.stringify(metadata));
-        const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
-        let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
-        for (const key in data)
-            payload = _appendBuffer(new Uint8Array(payload), data[key]);
-        return payload;
-    }
-    catch (e) {
-        console.error(e);
-        return null;
-    }
-}
 function is32BitSignedInteger(number) {
-    const MIN_32_INT = -2147483648;
-    const MAX_32_INT = 2147483647;
-    return (typeof number === 'number' &&
-        number >= MIN_32_INT &&
-        number <= MAX_32_INT &&
-        number % 1 === 0);
+    const MIN32 = -2147483648, MAX32 = 2147483647;
+    return (typeof number === 'number' && number >= MIN32 && number <= MAX32 && number % 1 === 0);
 }
 function getType(value) {
     if (value === null)
@@ -571,6 +479,8 @@ function getType(value) {
         return 'a';
     if (value instanceof ArrayBuffer)
         return 'x';
+    if (value instanceof Uint8Array)
+        return '8';
     if (typeof value === 'boolean')
         return 'b';
     if (value instanceof DataView)
@@ -579,26 +489,16 @@ function getType(value) {
         return 'd';
     if (value instanceof Map)
         return 'm';
-    if (typeof value === 'number') {
-        if (is32BitSignedInteger(value))
-            return 'i';
-        else
-            return 'n';
-    }
+    if (typeof value === 'number')
+        return is32BitSignedInteger(value) ? 'i' : 'n';
     if (value !== null && typeof value === 'object' && value.constructor === Object)
         return 'o';
     if (value instanceof Set)
         return 't';
     if (typeof value === 'string')
         return 's';
-    if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
-        if (value.constructor.name === 'Uint8Array')
-            return '8';
-        console.error("[getType] Unsupported typed array:", value.constructor.name);
-        return '<unsupported>';
-    }
     console.error('[getType] Unsupported for object:', value);
-    return '<unsupported>';
+    throw new Error('Unsupported type');
 }
 function _assemblePayload(data) {
     try {
@@ -684,7 +584,6 @@ function _assemblePayload(data) {
                         BufferList.push(new ArrayBuffer(0));
                         break;
                     case 'v':
-                    case '<unsupported>':
                     default:
                         console.error(`[assemblePayload] Unsupported type: ${type}`);
                         throw new Error(`Unsupported type: ${type}`);
@@ -710,43 +609,6 @@ function _assemblePayload(data) {
 }
 export function assemblePayload(data) {
     return _assemblePayload({ ver003: true, payload: data });
-}
-export function extractPayload2(payload) {
-    try {
-        const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
-        const decoder = new TextDecoder();
-        const _metadata = jsonParseWrapper(decoder.decode(payload.slice(4, 4 + metadataSize)), 'L533');
-        const startIndex = 4 + metadataSize;
-        if (!_metadata.version)
-            _metadata['version'] = '001';
-        switch (_metadata['version']) {
-            case '001': {
-                throw new Error('extractPayload() exception: version 001 is no longer supported');
-            }
-            case '002': {
-                const data = [];
-                for (let i = 1; i < Object.keys(_metadata).length; i++) {
-                    const _index = i.toString();
-                    if (_metadata[_index]) {
-                        const propertyStartIndex = _metadata[_index]['start'];
-                        const size = _metadata[_index]['size'];
-                        const entry = _metadata[_index];
-                        data[entry['name']] = payload.slice(startIndex + propertyStartIndex, startIndex + propertyStartIndex + size);
-                    }
-                    else {
-                        console.log(`found nothing for index ${i}`);
-                    }
-                }
-                return data;
-            }
-            default: {
-                throw new Error('Unsupported payload version (' + _metadata['version'] + ') - fatal');
-            }
-        }
-    }
-    catch (e) {
-        throw new Error('extractPayload() exception (' + e + ')');
-    }
 }
 function deserializeValue(buffer, type) {
     switch (type) {
@@ -830,23 +692,49 @@ function _extractPayload(payload) {
 export function extractPayload(value) {
     return _extractPayload(value);
 }
-export function encodeB64Url(input) {
-    return input.replaceAll('+', '-').replaceAll('/', '_');
-}
-export function decodeB64Url(input) {
-    input = input.replaceAll('-', '+').replaceAll('_', '/');
-    const pad = input.length % 4;
-    if (pad) {
-        _sb_assert(pad !== 1, 'InvalidLengthError: Input base64url string is the wrong length to determine padding');
-        input += new Array(5 - pad).join('=');
-    }
-    return input;
-}
 export var KeyPrefix;
 (function (KeyPrefix) {
     KeyPrefix["SBPublicKey"] = "PNk2";
     KeyPrefix["SBPrivateKey"] = "Xj3p";
 })(KeyPrefix || (KeyPrefix = {}));
+function parseSB384string(input) {
+    try {
+        if (input.length <= 4)
+            return undefined;
+        const prefix = input.slice(0, 4);
+        const data = input.slice(4);
+        switch (prefix) {
+            case KeyPrefix.SBPublicKey: {
+                const combined = base62ToArrayBuffer(data);
+                if (combined.byteLength !== (48 * 2))
+                    return undefined;
+                return {
+                    prefix: KeyPrefix.SBPublicKey,
+                    x: arrayBufferToBase64(combined.slice(0, 48)),
+                    y: arrayBufferToBase64(combined.slice(48, 96))
+                };
+            }
+            case KeyPrefix.SBPrivateKey: {
+                const combined = base62ToArrayBuffer(data);
+                if (combined.byteLength !== (48 * 3))
+                    return undefined;
+                return {
+                    prefix: KeyPrefix.SBPrivateKey,
+                    x: arrayBufferToBase64(combined.slice(0, 48)),
+                    y: arrayBufferToBase64(combined.slice(48, 96)),
+                    d: arrayBufferToBase64(combined.slice(96, 144))
+                };
+            }
+            default: {
+                return undefined;
+            }
+        }
+    }
+    catch (e) {
+        console.error("parseSB384string() - malformed input, exception: ", e);
+        return undefined;
+    }
+}
 export class SBCrypto {
     generateIdKey(buf) {
         return new Promise((resolve, reject) => {
@@ -1268,7 +1156,7 @@ class SB384 {
         this.sb384Ready = new Promise(async (resolve, reject) => {
             try {
                 if (!key) {
-                    if (DBG)
+                    if (DBG2)
                         console.log("SB384() - generating new key pair");
                     const keyPair = await sbCrypto.generateKeys();
                     const _jwk = await sbCrypto.exportKey('jwk', keyPair.privateKey);
@@ -1333,7 +1221,7 @@ class SB384 {
                 this.#publicUserKey = await sbCrypto.importKey('jwk', this.jwkPublic, 'ECDH', true, []);
                 if (this.#private) {
                     const newJwk = { ...this.jwkPrivate, key_ops: ['sign'] };
-                    if (DBG)
+                    if (DBG2)
                         console.log('starting jwk (private):\n', newJwk);
                     this.#signKey = await crypto.subtle.importKey("jwk", newJwk, {
                         name: "ECDSA",
@@ -1342,7 +1230,7 @@ class SB384 {
                 }
                 else {
                     const newJwk = { ...this.jwkPublic, key_ops: ['verify'] };
-                    if (DBG)
+                    if (DBG2)
                         console.log('starting jwk (public):\n', newJwk);
                     this.#signKey = await crypto.subtle.importKey("jwk", newJwk, {
                         name: "ECDSA",
@@ -1353,7 +1241,7 @@ class SB384 {
                 this.#hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', channelBytes));
                 if (DBG2)
                     console.log("SB384() constructor; hash:\n", this.#hash);
-                if (DBG)
+                if (DBG2)
                     console.log("SB384() - constructor wrapping up", this);
                 this[SB384.ReadyFlag] = true;
                 resolve(this);
@@ -2079,7 +1967,7 @@ class SBObjectHandle {
                 if (isBase62Encoded(key) && isBase62Encoded(id)) {
                     this.version = '2';
                 }
-                else if (isBase64Encoded(key) && isBase64Encoded(id)) {
+                else if (b64Regex.test(key) && b64Regex.test(id)) {
                     this.version = '1';
                 }
                 else {
@@ -2150,7 +2038,7 @@ class SBObjectHandle {
     set id(value) {
         if (typeof value === 'string') {
             if (this.version === '1') {
-                if (isBase64Encoded(value)) {
+                if (b64Regex.test(value)) {
                     this.id_binary = base64ToArrayBuffer(value);
                 }
                 else {
@@ -2159,7 +2047,7 @@ class SBObjectHandle {
             }
             else if (this.version === '2') {
                 if (isBase62Encoded(value)) {
-                    this.id_binary = base62ToArrayBuffer32(value);
+                    this.id_binary = base62ToArrayBuffer(value);
                 }
                 else {
                     throw new Error('Requested version 2, but id is not b62');
@@ -2178,7 +2066,7 @@ class SBObjectHandle {
     set key(value) {
         if (typeof value === 'string') {
             if (this.version === '1') {
-                if (isBase64Encoded(value)) {
+                if (b64Regex.test(value)) {
                     this.#key_binary = base64ToArrayBuffer(value);
                 }
                 else {
@@ -2187,7 +2075,7 @@ class SBObjectHandle {
             }
             else if (this.version === '2') {
                 if (isBase62Encoded(value)) {
-                    this.#key_binary = base62ToArrayBuffer32(value);
+                    this.#key_binary = base62ToArrayBuffer(value);
                 }
                 else {
                     throw new Error('Requested version 2, but key is not b62');
@@ -2457,7 +2345,7 @@ export class StorageApi {
                     h_key_material = base64ToArrayBuffer(h.key);
                 }
                 else if (h.version === '2') {
-                    h_key_material = base62ToArrayBuffer32(h.key);
+                    h_key_material = base62ToArrayBuffer(h.key);
                 }
                 else {
                     throw new Error('Invalid or missing version (internal error, should not happen)');
@@ -2624,7 +2512,7 @@ class Snackabra {
         return this.#version;
     }
 }
-export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, version, };
+export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, };
 export var SB = {
     Snackabra: Snackabra,
     SBMessage: SBMessage,
@@ -2632,6 +2520,9 @@ export var SB = {
     SBCrypto: SBCrypto,
     SB384: SB384,
     arrayBufferToBase64: arrayBufferToBase64,
+    base64ToArrayBuffer: base64ToArrayBuffer,
+    arrayBufferToBase62: arrayBufferToBase62,
+    base62ToArrayBuffer: base62ToArrayBuffer,
     sbCrypto: sbCrypto,
     version: version
 };

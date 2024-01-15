@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 33)";
+declare const version = "2.0.0-alpha.5 (build 37)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
@@ -119,32 +119,27 @@ export declare class MessageBus {
     unsubscribe(event: string, handler: CallableFunction): void;
     publish(event: string, ...args: unknown[]): void;
 }
-declare function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
-export declare function base64ToArrayBuffer(str: string): Uint8Array;
+export declare function jsonParseWrapper(str: string | null, loc?: string, reviver?: (this: any, key: string, value: any) => any): any;
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
+export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
+declare function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+declare function base64ToArrayBuffer(str: string): Uint8Array;
 declare function arrayBufferToBase64(buffer: BufferSource | ArrayBuffer | Uint8Array | null, variant?: 'b64' | 'url'): string;
-export declare function arrayBufferToBase62(buffer: ArrayBuffer): string;
-export declare function base62ToArrayBuffer(s: string): ArrayBuffer;
+export declare function encodeB64Url(input: string): string;
+export declare function decodeB64Url(input: string): string;
 export type Base62Encoded = string & {
     _brand?: 'Base62Encoded';
 };
-export declare function base62ToArrayBuffer32(s: Base62Encoded): ArrayBuffer;
-export declare function arrayBuffer32ToBase62(buffer: ArrayBuffer): Base62Encoded;
+export declare const base62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+export declare const b62regex: RegExp;
+export declare const base62regex: RegExp;
+export declare function isBase62Encoded(value: string | Base62Encoded): value is Base62Encoded;
+declare function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string;
+declare function base62ToArrayBuffer(s: string): ArrayBuffer;
 export declare function base62ToBase64(s: Base62Encoded): string;
 export declare function base64ToBase62(s: string): Base62Encoded;
-export declare function isBase62Encoded(value: string | Base62Encoded): value is Base62Encoded;
-export declare function partition(str: string, n: number): void;
-export declare function jsonParseWrapper(str: string | null, loc?: string, reviver?: (this: any, key: string, value: any) => any): any;
-export interface SBPayload {
-    [index: string]: ArrayBuffer;
-}
-export declare function assemblePayload2(data: SBPayload): ArrayBuffer | null;
 export declare function assemblePayload(data: any): ArrayBuffer | null;
-export declare function extractPayload2(payload: ArrayBuffer): SBPayload;
 export declare function extractPayload(value: ArrayBuffer): any;
-export declare function encodeB64Url(input: string): string;
-export declare function decodeB64Url(input: string): string;
 export declare enum KeyPrefix {
     SBPublicKey = "PNk2",
     SBPrivateKey = "Xj3p"
@@ -330,7 +325,7 @@ declare class Snackabra {
     get crypto(): SBCrypto;
     get version(): string;
 }
-export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, version, };
+export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, };
 export declare var SB: {
     Snackabra: typeof Snackabra;
     SBMessage: typeof SBMessage;
@@ -338,6 +333,9 @@ export declare var SB: {
     SBCrypto: typeof SBCrypto;
     SB384: typeof SB384;
     arrayBufferToBase64: typeof arrayBufferToBase64;
+    base64ToArrayBuffer: typeof base64ToArrayBuffer;
+    arrayBufferToBase62: typeof arrayBufferToBase62;
+    base62ToArrayBuffer: typeof base62ToArrayBuffer;
     sbCrypto: SBCrypto;
     version: string;
 };
