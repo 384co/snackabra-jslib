@@ -21,7 +21,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 33)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 37)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -489,16 +489,71 @@ export class MessageBus {
 //#endregion - MessageBus
 
 /******************************************************************************************************/
-//#region - SB internal utility functions
+//#region - Utility functions (exported)
 
 /**
- * SBFetch()
- *
- * A "safe" fetch() that over time integrates with SB mesh.
- *
- * @param input - the URL to fetch
- * @param init - the options for the request
+ * Adding a more resilient wrapper around JSON.parse. The 'loc' parameter is typically (file) line number.
  */
+export function jsonParseWrapper(str: string | null, loc?: string, reviver?: (this: any, key: string, value: any) => any) {
+  while (str && typeof str === 'string') {
+    try {
+      str = JSON.parse(str, reviver) // handle nesting
+    } catch (e) {
+      throw new Error(`JSON.parse() error${loc ? ` at ${loc}` : ''}: ${e}\nString (possibly nested) was: ${str}`)
+    }
+  }
+  return str as any
+}
+
+/**
+ * Simple comparison of buffers
+ */
+export function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean {
+  if (typeof a != typeof b) return false
+  if ((a == null) || (b == null)) return false
+  const av = bs2dv(a)
+  const bv = bs2dv(b)
+  if (av.byteLength !== bv.byteLength) return false
+  for (let i = 0; i < av.byteLength; i++)  if (av.getUint8(i) !== bv.getUint8(i)) return false
+  return true
+}
+
+/**
+ * Fills buffer with random data
+ */
+export function getRandomValues(buffer: Uint8Array) {
+  if (buffer.byteLength < (4096)) {
+    return crypto.getRandomValues(buffer)
+  } else {
+    // larger blocks should really only be used for testing
+    _sb_assert(!(buffer.byteLength % 1024), 'getRandomValues(): large requested blocks must be multiple of 1024 in size')
+    // console.log(`will set ${buffer.byteLength} random bytes`)
+    // const t0 = Date.now()
+    let i = 0
+    try {
+      for (i = 0; i < buffer.byteLength; i += 1024) {
+        let t = new Uint8Array(1024)
+        // this doesn't actually have enough entropy, we should just hash here anyweay
+        crypto.getRandomValues(t)
+        // console.log(`offset is ${i}`)
+        buffer.set(t, i)
+      }
+    } catch (e: any) {
+      console.log(`got an error on index i=${i}`)
+      console.log(e)
+      console.trace()
+    }
+    // console.log(`created ${buffer.byteLength} random byte buffer in ${Date.now() - t0} millisends`)
+    return buffer
+  }
+}
+
+//#endregion
+
+/******************************************************************************************************/
+//#region - Internal utility functions
+
+// Centralized path for fetch()
 function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
     try {
@@ -514,10 +569,7 @@ function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response
   });
 }
 
-/**
- * Wraps SBFetch, using SB conventions on API calls.
- * If there's an issue, throws.
- */
+// Applies SB api calling conventions to SBFetch
 function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any> {
   // sorry about all this code ... but everything that can go wrong here eventually does
   return new Promise((resolve, reject) => {
@@ -557,8 +609,6 @@ function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any> 
   });
 }
 
-
-/** @private */
 // variation on solving this issue:
 // https://kentcdodds.com/blog/get-a-catch-block-error-message-with-typescript
 function WrapError(e: any) {
@@ -571,7 +621,6 @@ function WrapError(e: any) {
   else return new Error(pre + String(e) + post);
 }
 
-/** @private */
 function _sb_exception(loc: string, msg: string) {
   const m = '[_sb_exception] << SB lib error (' + loc + ': ' + msg + ') >>';
   // for now disabling this to keep node testing less noisy
@@ -579,8 +628,6 @@ function _sb_exception(loc: string, msg: string) {
   throw new Error(m);
 }
 
-// internal - handle assertions
-/** @private */
 function _sb_assert(val: unknown, msg: string) {
   if (!(val)) {
     const m = ` <<<<[_sb_assert] assertion failed: '${msg}'>>>> `;
@@ -590,98 +637,23 @@ function _sb_assert(val: unknown, msg: string) {
   }
 }
 
-function parseSB384string(input: string): jwkStruct | undefined {
-  try {
-    if (input.length <= 4) return undefined;
-    const prefix = input.slice(0, 4);
-    const data = input.slice(4);
-    switch (prefix) {
-      case KeyPrefix.SBPublicKey: {
-        const combined = base62ToArrayBuffer(data)
-        if (combined.byteLength !== (48 * 2)) return undefined;
-        return {
-          prefix: KeyPrefix.SBPublicKey,
-          x: arrayBufferToBase64(combined.slice(0, 48)),
-          y: arrayBufferToBase64(combined.slice(48, 96))
-        };
-      }
-      case KeyPrefix.SBPrivateKey: {
-        const combined = base62ToArrayBuffer(data)
-        if (combined.byteLength !== (48 * 3)) return undefined;
-        return {
-          prefix: KeyPrefix.SBPrivateKey,
-          x: arrayBufferToBase64(combined.slice(0, 48)),
-          y: arrayBufferToBase64(combined.slice(48, 96)),
-          d: arrayBufferToBase64(combined.slice(96, 144))
-        };
-      }
-      default: {
-        return undefined;
-      }
-    }
-  } catch (e) {
-    console.error("parseSB384string() - malformed input, exception: ", e);
-    return undefined;
-  }
+/**
+ * Appends two buffers and returns a new buffer
+ */
+function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | ArrayBuffer): ArrayBuffer {
+  const tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
+  tmp.set(new Uint8Array(buffer1), 0);
+  tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
+  return tmp.buffer;
 }
-
 
 //#endregion - SB internal utility functions
 
 /******************************************************************************************************/
-//#region - SBCryptoUtils - crypto and translation stuff used by SBCrypto etc
+//#region Base64
 
-/**
- * Fills buffer with random data
- */
-export function getRandomValues(buffer: Uint8Array) {
-  if (buffer.byteLength < (4096)) {
-    return crypto.getRandomValues(buffer)
-  } else {
-    // larger blocks should really only be used for testing
-    _sb_assert(!(buffer.byteLength % 1024), 'getRandomValues(): large requested blocks must be multiple of 1024 in size')
-    // console.log(`will set ${buffer.byteLength} random bytes`)
-    // const t0 = Date.now()
-    let i = 0
-    try {
-      for (i = 0; i < buffer.byteLength; i += 1024) {
-        let t = new Uint8Array(1024)
-        // this doesn't actually have enough entropy, we should just hash here anyweay
-        crypto.getRandomValues(t)
-        // console.log(`offset is ${i}`)
-        buffer.set(t, i)
-      }
-    } catch (e: any) {
-      console.log(`got an error on index i=${i}`)
-      console.log(e)
-      console.trace()
-    }
-    // console.log(`created ${buffer.byteLength} random byte buffer in ${Date.now() - t0} millisends`)
-    return buffer
-  }
-}
-
-// // for later use - message ID formats
-// const messageIdRegex = /([A-Za-z0-9+/_\-=]{64})([01]{42})/
-
-// Strict b64 check:
-// const b64_regex = new RegExp('^(?:[A-Za-z0-9+/_\-]{4})*(?:[A-Za-z0-9+/_\-]{2}==|[A-Za-z0-9+/_\-]{3}=)?$')
-// But we will go (very) lenient:
-const b64_regex = /^([A-Za-z0-9+/_\-=]*)$/
-// stricter - only accepts URI friendly:
-// const url_regex = /^([A-Za-z0-9_\-=]*)$/
-
-/**
- * Returns 'true' if (and only if) string is well-formed base64.
- * Works same on browsers and nodejs.
- */
-function _assertBase64(base64: string) {
-  return b64_regex.test(base64)
-  // // return (b64_regex.exec(base64)?.[0] === base64);
-  // const z = b64_regex.exec(base64)
-  // if (z) return (z[0] === base64); else return false;
-}
-const isBase64Encoded = _assertBase64 // alias
+// lenient base64 regex
+const b64Regex = /^([A-Za-z0-9+/_\-=]*)$/
 
 /*
   we use URI/URL 'safe' characters in our b64 encoding to avoid having
@@ -730,7 +702,6 @@ function getLens(b64: string) {
   return [validLen, placeHoldersLen]
 }
 
-/** @private */
 function _byteLength(validLen: number, placeHoldersLen: number) {
   return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen;
 }
@@ -740,12 +711,9 @@ function _byteLength(validLen: number, placeHoldersLen: number) {
  * input and decodes it. Note: always returns Uint8Array.
  * Accepts both regular Base64 and the URL-friendly variant,
  * where `+` => `-`, `/` => `_`, and the padding character is omitted.
- *
- * @param str - string in either regular or URL-friendly representation.
- * @return - returns decoded binary result
  */
-export function base64ToArrayBuffer(str: string): Uint8Array {
-  if (!_assertBase64(str)) throw new Error(`invalid character in string '${str}'`)
+function base64ToArrayBuffer(str: string): Uint8Array {
+  if (!b64Regex.test(str)) throw new Error(`invalid character in string '${str}'`)
   let tmp: number
   switch (str.length % 4) {
     case 2: str += '=='; break;
@@ -810,27 +778,10 @@ const bs2dv = (bs: BufferSource) => bs instanceof ArrayBuffer
   : new DataView(bs.buffer, bs.byteOffset, bs.byteLength)
 
 /**
- * Compare buffers
- */
-export function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean {
-  if (typeof a != typeof b) return false
-  if ((a == null) || (b == null)) return false
-  const av = bs2dv(a)
-  const bv = bs2dv(b)
-  if (av.byteLength !== bv.byteLength) return false
-  for (let i = 0; i < av.byteLength; i++)  if (av.getUint8(i) !== bv.getUint8(i)) return false
-  return true
-}
-
-/**
  * Standardized 'btoa()'-like function, e.g., takes a binary string
  * ('b') and returns a Base64 encoded version ('a' used to be short
  * for 'ascii'). Defaults to URL safe ('url') but can be overriden
  * to use standardized Base64 ('b64').
- *
- * @param buffer - binary string
- * @param variant - 'b64' or 'url'
- * @return - returns Base64 encoded string
  */
 function arrayBufferToBase64(buffer: BufferSource | ArrayBuffer | Uint8Array | null, variant: 'b64' | 'url' = 'url'): string {
   if (buffer == null) {
@@ -875,250 +826,134 @@ function arrayBufferToBase64(buffer: BufferSource | ArrayBuffer | Uint8Array | n
   }
 }
 
-// Define the base62 dictionary (alphanumeric)
-// We want the same sorting order as ASCII, so we go with 0-9A-Za-z
-const base62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-// const base62Regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
-const array32regex = /^(a32\.)?[0-9A-Za-z]{43}$/;
-const b62regex = /^[0-9a-zA-Z]*$/; // kinder and gentler (any b62)
-
-const intervals = new Map<number, number>([
-  [32, 43],
-  [16, 22],
-  [8, 11],
-  [4, 6],
-]);
-const inverseIntervals = new Map(Array.from(intervals, ([key, value]) => [value, key]));
-const inverseKeys = Array.from(inverseIntervals.keys()).sort((a, b) => a - b);
-
-function _arrayBufferToBase62(buffer: ArrayBuffer, c: number): string {
-  if (buffer.byteLength !== c || !intervals.has(c)) throw new Error("[arrayBufferToBase62] Decoding error")
-  let result = '';
-  for (let n = BigInt('0x' + Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join(''));
-    n > 0n;
-    n = n / 62n)
-    result = base62[Number(n % 62n)] + result;
-  return result.padStart(intervals.get(c)!, '0');
-}
-
 /**
- * Converts any array buffer to base62.
- * Restriction: ArrayBuffer must be size multiple of 4 bytes (32 bits).
+ * Make sure base64 encoding is URL version
  */
-export function arrayBufferToBase62(buffer: ArrayBuffer): string {
-  let l = buffer.byteLength;
-  if (l % 4 !== 0) throw new Error("[arrayBufferToBase62] Must be multiple of 4 bytes (32 bits).")
-  let i = 0;
-  let result = '';
-  while (l > 0) {
-    let c = 2 ** Math.min(Math.floor(Math.log2(l)), 5); // next chunk
-    let chunk = buffer.slice(i, i + c);
-    result += _arrayBufferToBase62(chunk, c);
-    i += c;
-    l -= c;
-  }
-  return result
-}
-
-// t is 32, 16, 8, or 4
-function _base62ToArrayBuffer(s: string, t: number): ArrayBuffer {
-  let n = 0n;
-  try {
-    for (let i = 0; i < s.length; i++) {
-      const digit = BigInt(base62.indexOf(s[i]));
-      n = n * 62n + digit;
-    }
-    if (n > 2n ** BigInt(t * 8) - 1n) // check overflow
-      throw new Error(`base62ToArrayBuffer: value exceeds ${t * 8} bits.`);
-    const buffer = new ArrayBuffer(t);
-    const view = new DataView(buffer);
-    for (let i = 0; i < (t / 4); i++) {
-      const uint32 = Number(BigInt.asUintN(32, n));
-      view.setUint32(((t / 4) - i - 1) * 4, uint32);
-      n = n >> 32n;
-    }
-    return buffer;
-  } catch (e) {
-    console.error("[_base62ToArrayBuffer] Error: ", e)
-    throw (e)
-  }
+export function encodeB64Url(input: string) {
+  return input.replaceAll('+', '-').replaceAll('/', '_');
 }
 
 /**
- * base62ToArrayBuffer
+ * Convert base64 URL encoding to standard base64
+ */
+export function decodeB64Url(input: string) {
+  input = input.replaceAll('-', '+').replaceAll('_', '/');
+  // Pad out with standard base64 required padding characters
+  const pad: number = input.length % 4;
+  if (pad) {
+    _sb_assert(pad !== 1, 'InvalidLengthError: Input base64url string is the wrong length to determine padding');
+    input += new Array(5 - pad).join('=');
+  }
+  return input;
+}
+
+//#endregion
+
+/******************************************************************************************************/
+//#region Base62
+
+/*
+ * 'base62' encodes binary data in (pure) alphanumeric format.
+ * We use a dictionary of (A-Za-z0-9) and chunks of 32 bytes.
  * 
- * Converts a base62 string to matchin ArrayBuffer.
- * Restriction: the original array buffer size must have
- * been a multiple of 4 bytes (32 bits), eg. this
- * function will always return such an ArrayBuffer.
+ * We use this for all 'external' encodings of keys, ids, etc.
  */
-export function base62ToArrayBuffer(s: string): ArrayBuffer {
-  if (!b62regex.test(s)) throw new Error('base62ToArrayBuffer32: must be alphanumeric (0-9A-Za-z).');
-  let i = 0, j = 0, c, oldC = 43
-  let result = new Uint8Array(s.length); // more than we need
-  try {
-    while (i < s.length) {
-      c = inverseKeys.filter(num => num <= (s.length - i)).pop()!;
-      if (oldC < 43 && c >= oldC) throw new Error('cannot decypher b62 string (incorrect length)')
-      oldC = c // decoding check: other than with 43, should be decreasing
-      let chunk = s.slice(i, i + c);
-      const newBuf = new Uint8Array(_base62ToArrayBuffer(chunk, inverseIntervals.get(c)!))
-      result.set(newBuf, j);
-      i += c;
-      j += newBuf.byteLength
-    }
-    return result.buffer.slice(0, j);
-  } catch (e) {
-    console.error("[base62ToArrayBuffer] Error:", e)
-    throw (e)
-  }
-}
 
-
-/**
-   A 'branded' string type for base62 encoded strings.
-   This is used to ensure that the string is a valid base62
-   encoded string.
-   
-   "ArrayBuffer32" is a 256-bit array buffer. We use this
-    as the ASCII representation of binary objects that are
-    designed to be multiples of 256 bits. This has a number
-    of advantages, and leverages the facts that 43 characters
-    of base62 is slightly more than 256 bits (99.99% efficient).
-
-    Note that this approach was not practical prior to es2020,
-    when BigInt was added to JavaScript. BigInt allows us to
-    work natively with 256-bit integers.
-
-    */
 export type Base62Encoded = string & { _brand?: 'Base62Encoded' };
 
-/**
- * Convenience wrapper, enforces array32 format
- */
-export function base62ToArrayBuffer32(s: Base62Encoded): ArrayBuffer {
-  if (!array32regex.test(s)) throw new Error(`base62ToArrayBuffer32: string must match: ${array32regex}, value provided was ${s}`);
-  return base62ToArrayBuffer(s)
+export const base62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const base62zero = base62[0]; // our padding value
+
+export const b62regex = /^[A-Za-z0-9]*$/;
+export const base62regex = b62regex; // alias
+export function isBase62Encoded(value: string | Base62Encoded): value is Base62Encoded {
+  return b62regex.test(value); // type guard
 }
 
-/**
- * Convenience wrapper.
- */
-export function arrayBuffer32ToBase62(buffer: ArrayBuffer): Base62Encoded {
-  if (buffer.byteLength !== 32)
-    throw new Error('arrayBufferToBase62: buffer must be exactly 32 bytes (256 bits).');
-  return arrayBufferToBase62(buffer)
+const N = 32; // max chunk size, design point. 
+
+const M = new Map<number, number>(), invM = new Map<number, number>();
+for (let X = 1; X <= N; X++) {
+  const Y = Math.ceil((X * 8) / Math.log2(62));
+  M.set(X, Y);
+  invM.set(Y, X);
+}
+const maxChunk = M.get(N)!; // max encoded (string) chunk implied by 'N'
+
+/** Converts any array buffer to base62. */
+function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string {
+  function _arrayBufferToBase62(buffer: Uint8Array, c: number): string {
+    let result = '', n = 0n;
+    for (const byte of buffer)
+      n = (n << 8n) | BigInt(byte);
+    for (; n > 0n; n = n / 62n)
+      result = base62[Number(n % 62n)] + result;
+    return result.padStart(M.get(c)!, base62zero);
+  }
+  const buf = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer
+  let result = '';
+  for (let l = buf.byteLength, i = 0, c; l > 0; i += c, l -= c) {
+    c = l >= N ? N : l; // chunks are size 'N' (32)
+    result += _arrayBufferToBase62(buf.slice(i, i + c), c);
+  }
+  return result;
 }
 
+/** Converts a base62 string to matching ArrayBuffer. */
+function base62ToArrayBuffer(s: string): ArrayBuffer {
+  if (!b62regex.test(s)) throw new Error('base62ToArrayBuffer32: must be alphanumeric (0-9A-Za-z).');
+  function _base62ToArrayBuffer(s: string, t: number): Uint8Array {
+    try {
+      let n = 0n, buffer = new Uint8Array(t);
+      for (let i = 0; i < s.length; i++)
+        n = n * 62n + BigInt(base62.indexOf(s[i]));
+      if (n > 2n ** BigInt(t * 8) - 1n)
+        throw new Error('base62ToArrayBuffer: Invalid Base62 string.'); // exceeds (t * 8) bits
+      for (let i = t - 1; i >= 0; i--, n >>= 8n)
+        buffer[i] = Number(n & 0xFFn);
+      return buffer;
+    } catch (e) {
+      throw new Error('base62ToArrayBuffer: Invalid Base62 string.'); // 'NaN' popped up
+    }
+  }
+  try {
+    let j = 0, result = new Uint8Array(s.length * 6 / 8); // we know we're less than 6
+    for (let i = 0, c, newBuf; i < s.length; i += c, j += newBuf.byteLength) {
+      c = Math.min(s.length - i, maxChunk);
+      newBuf = _base62ToArrayBuffer(s.slice(i, i + c), invM.get(c)!)
+      result.set(newBuf, j);
+    }
+    return result.buffer.slice(0, j);
+  } catch (e) { throw e; }
+}
 
-/**
- * base62ToBase64 converts a base62 encoded string to a base64 encoded string.
- * 
- * @param s base62 encoded string
- * @returns base64 encoded string
- * 
- * @throws Error if the string is not a valid base62 encoded string
- */
+/** Convenience: direct conversion from Base62 to Base64. */
 export function base62ToBase64(s: Base62Encoded): string {
-  return arrayBufferToBase64(base62ToArrayBuffer32(s));
+  return arrayBufferToBase64(base62ToArrayBuffer(s));
 }
 
-/**
- * Convenience function.
- * 
- * base64ToBase62 converts a base64 encoded string to a base62 encoded string.
- * 
- * @param s base64 encoded string
- * @returns base62 encoded string
- * 
- * @throws Error if the string is not a valid base64 encoded string
- */
+/** Convenience: direct conversion from Base64 to Base62. */
 export function base64ToBase62(s: string): Base62Encoded {
   return arrayBufferToBase62(base64ToArrayBuffer(s));
 }
 
-// and a type guard
-export function isBase62Encoded(value: string | Base62Encoded): value is Base62Encoded {
-  return array32regex.test(value);
-}
+//#endregion Base62
+
+/******************************************************************************************************/
+//#region Payloads
 
 /**
- * Appends two buffers and returns a new buffer
+ * Payloads
  * 
- * @param {Uint8Array | ArrayBuffer} buffer1
- * @param {Uint8Array | ArrayBuffer} buffer2
- * @return {ArrayBuffer} new buffer
- *
+ * To serialize/deserialize various javascript (data) structures into
+ * binary and back, we define a 'payload' format. This is 'v003', for
+ * the next version we should consider aligning with CBOR (RFC 8949).
  */
-function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | ArrayBuffer): ArrayBuffer {
-  const tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
-  tmp.set(new Uint8Array(buffer1), 0);
-  tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
-  return tmp.buffer;
-}
 
-/**
- * Partition
- */
-export function partition(str: string, n: number) {
-  throw (`partition() not tested on TS yet - (${str}, ${n})`)
-}
-
-/**
- * There are many problems with JSON parsing, adding a resilient wrapper to capture more info.
- * The 'loc' parameter should be a (unique) string that allows you to find the usage
- * in the code; one approach is the line number in the file.
- */
-export function jsonParseWrapper(str: string | null, loc?: string, reviver?: (this: any, key: string, value: any) => any) {
-  while (str && typeof str === 'string') {
-    try {
-      str = JSON.parse(str, reviver) // handle nesting
-    } catch (e) {
-      throw new Error(`JSON.parse() error${loc ? ` at ${loc}` : ''}: ${e}\nString (possibly nested) was: ${str}`)
-    }
-  }
-  return str as any
-}
-
-
-/** Essentially a dictionary where each entry is an arraybuffer. */
-export interface SBPayload {
-  [index: string]: ArrayBuffer;
-}
-
-export function assemblePayload2(data: SBPayload): ArrayBuffer | null {
-  try {
-    const metadata: Dictionary<any> = {};
-    metadata['version'] = '002';
-    let keyCount = 0;
-    let startIndex = 0;
-    for (const key in data) {
-      keyCount++;
-      metadata[keyCount.toString()] = { name: key, start: startIndex, size: data[key].byteLength };
-      startIndex += data[key].byteLength;
-    }
-    const encoder = new TextEncoder();
-    const metadataBuffer: ArrayBuffer = encoder.encode(JSON.stringify(metadata));
-    const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
-    let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
-    for (const key in data)
-      payload = _appendBuffer(new Uint8Array(payload), data[key]);
-    return payload;
-  } catch (e) {
-    console.error(e);
-    return null;
-  }
-}
-
+// support for our internal type 'i' (32 bit signed integer)
 function is32BitSignedInteger(number: number) {
-  const MIN_32_INT = -2147483648;
-  const MAX_32_INT = 2147483647;
-  return (
-    typeof number === 'number' &&
-    number >= MIN_32_INT &&
-    number <= MAX_32_INT &&
-    number % 1 === 0
-  );
+  const MIN32 = -2147483648, MAX32 = 2147483647;
+  return (typeof number === 'number' && number >= MIN32 && number <= MAX32 && number % 1 === 0);
 }
 
 /**
@@ -1145,25 +980,23 @@ function getType(value: any) {
   if (value === undefined) return 'u';
   if (Array.isArray(value)) return 'a';
   if (value instanceof ArrayBuffer) return 'x';
+  if (value instanceof Uint8Array) return '8';
   if (typeof value === 'boolean') return 'b';
   if (value instanceof DataView) return 'v';
   if (value instanceof Date) return 'd';
   if (value instanceof Map) return 'm';
-  if (typeof value === 'number') {
-    if (is32BitSignedInteger(value)) return 'i'; // tiny optimization
-    else return 'n';
-  }
+  if (typeof value === 'number') return is32BitSignedInteger(value) ? 'i' : 'n';
   if (value !== null && typeof value === 'object' && value.constructor === Object) return 'o';
   if (value instanceof Set) return 't';
   if (typeof value === 'string') return 's';
-  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
-    // it's a typed array; currently we're only supporting Uint8Array
-    if (value.constructor.name === 'Uint8Array') return '8';
-    console.error("[getType] Unsupported typed array:", value.constructor.name)
-    return '<unsupported>';
-  }
-  console.error('[getType] Unsupported for object:', value)
-  return '<unsupported>';
+  // if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+  //   // it's a typed array; currently we're only supporting Uint8Array
+  //   if (value.constructor.name === 'Uint8Array') return '8';
+  //   console.error(`[getType] Only supported typed array is Uint8Array (got '${value.constructor.name}')`);
+  //   return '<unsupported>';
+  // }
+  console.error('[getType] Unsupported for object:', value);
+  throw new Error('Unsupported type');
 }
 
 function _assemblePayload(data: any): ArrayBuffer | null {
@@ -1247,7 +1080,6 @@ function _assemblePayload(data: any): ArrayBuffer | null {
             BufferList.push(new ArrayBuffer(0));
             break;
           case 'v': // Dataview, not supporting for now
-          case '<unsupported>':
           default:
             console.error(`[assemblePayload] Unsupported type: ${type}`);
             throw new Error(`Unsupported type: ${type}`);
@@ -1280,47 +1112,6 @@ function _assemblePayload(data: any): ArrayBuffer | null {
  */
 export function assemblePayload(data: any): ArrayBuffer | null {
   return _assemblePayload({ ver003: true, payload: data })
-}
-
-export function extractPayload2(payload: ArrayBuffer): SBPayload {
-  try {
-    // number of bytes of meta data (encoded as a 32-bit Uint)
-    const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
-    const decoder = new TextDecoder();
-    // extracts the string of meta data and parses
-    const _metadata: Dictionary<any> = jsonParseWrapper(decoder.decode(payload.slice(4, 4 + metadataSize)), 'L533');
-    // calculate start of actual contents
-    const startIndex: number = 4 + metadataSize;
-    if (!_metadata.version) _metadata['version'] = '001' // backwards compat
-    switch (_metadata['version']) {
-      case '001': {
-        throw new Error('extractPayload() exception: version 001 is no longer supported');
-      }
-      case '002': {
-        const data: Dictionary<any> = [];
-        for (let i = 1; i < Object.keys(_metadata).length; i++) {
-          const _index = i.toString();
-          if (_metadata[_index]) {
-            const propertyStartIndex: number = _metadata[_index]['start'];
-            // start (in bytes) of contents
-            const size: number = _metadata[_index]['size'];
-            // where to put it
-            const entry: Dictionary<any> = _metadata[_index]
-            // extracts contents - this supports raw data
-            data[entry['name']] = payload.slice(startIndex + propertyStartIndex, startIndex + propertyStartIndex + size);
-          } else {
-            console.log(`found nothing for index ${i}`)
-          }
-        }
-        return data;
-      }
-      default: {
-        throw new Error('Unsupported payload version (' + _metadata['version'] + ') - fatal');
-      }
-    }
-  } catch (e) {
-    throw new Error('extractPayload() exception (' + e + ')');
-  }
 }
 
 function deserializeValue(buffer: ArrayBuffer, type: string): any {
@@ -1409,105 +1200,66 @@ export function extractPayload(value: ArrayBuffer): any {
   return _extractPayload(value);
 }
 
-/**
- * Make sure base64 encoding is URL version
- */
-export function encodeB64Url(input: string) {
-  return input.replaceAll('+', '-').replaceAll('/', '_');
-}
-
-/**
- * Convert base64 URL encoding to standard base64
- */
-export function decodeB64Url(input: string) {
-  input = input.replaceAll('-', '+').replaceAll('_', '/');
-  // Pad out with standard base64 required padding characters
-  const pad: number = input.length % 4;
-  if (pad) {
-    _sb_assert(pad !== 1, 'InvalidLengthError: Input base64url string is the wrong length to determine padding');
-    input += new Array(5 - pad).join('=');
-  }
-  return input;
-}
-
-//#endregion - SBCryptoUtils
+//#endregion
 
 /******************************************************************************************************/
-//#region - SBCrypto Class - this is instantiated into 'sbCrypto' global
+//#region SBCrypto
 
-// /**
-//  * Mostly internal. Used to cache in an sbCrypto object
-//  * all the keys it has "seen".
-//  */
-// export type knownKeysInfo = {
-//   hash: SB384Hash, // also the map hash
-//   jwk?: JsonWebKey, // if we only have crypto key and it's not extractable, this will be undefined
-//   key?: CryptoKey, // exists if and only if it's a private key
-// }
-
-// /**
-//  * SBCrypto
-//  *
-//  * SBCrypto contains all the SB specific crypto functions,
-//  * as well as some general utility functions.
-//  *
-//  * @class
-//  * @constructor
-//  * @public
-//  */
-
-// /**
-//  * 
-//   * Typically a public jsonwebkey (JWK) will look something like this in json string format:
-//   *
-//   *                        "{\"crv\":\"P-384\",\"ext\":true,\"key_ops\":[],\"kty\":\"EC\",
-//   *                        \"x\":\"9s17B4i0Cuf_w9XN_uAq2DFePOr6S3sMFMA95KjLN8akBUWEhPAcuMEMwNUlrrkN\",
-//   *                        \"y\":\"6dAtcyMbtsO5ufKvlhxRsvjTmkABGlTYG1BrEjTpwrAgtmn6k25GR7akklz9klBr\"}"
-//   * 
-//   * A private key will look something like this:
-//   * 
-//   *                       "{\"crv\":\"P-384\",
-//   *                       \"d\":\"KCJHDZ34XgVFsS9-sU09HFzXZhnGCvnDgJ5a8GTSfjuJQaq-1N2acvchPRhknk8B\",
-//   *                       \"ext\":true,\"key_ops\":[\"deriveKey\"],\"kty\":\"EC\",
-//   *                       \"x\":\"rdsyBle0DD1hvp2OE2mINyyI87Cyg7FS3tCQUIeVkfPiNOACtFxi6iP8oeYt-Dge\",
-//   *                       \"y\":\"qW9VP72uf9rgUU117G7AfTkCMncJbT5scIaIRwBXfqET6FYcq20fwSP7R911J2_t\"}"
-//   * 
-//   * These are elliptic curve keys. 
-//   * 
-//   * The main RFC is 7518 (https://datatracker.ietf.org/doc/html/rfc7518#section-6.2),
-//   * supervised by IESG except for a tiny addition of one parameter ("ext") that is 
-//   * supervised by the W3C Crypto WG (https://w3c.github.io/webcrypto/#ecdsa).
-//   * 
-//   * We internally encode these in internal (base62) formats.
-//   * 
-//   * EC in JWK has a number of parameters, but for us the only required ones are:
-//   * 
-//   *  crv: the curve (P-384 in this case)
-//   *  x: the x coordinate of the public key
-//   *  y: the y coordinate of the public key
-//   *  d: the private key (if it's a private key)
-//   *  kty: the key type (EC in this case)
-//   *  ext: the 'extractable' flag
-//   *  key_ops: (optional) permitted the key operations
-//   * 
-//   * Our SBKey formats have a four-character prefix to distinguish types, currently:
-//   * 
-//   *  "PNk2": public key; only x and y are present, the rest implied [KeyPrefix.SBPublicKey]
-//   *  "Xj3p": private key: x, y, d are present, the rest implied [KeyPrefix.SBPrivateKey]
-//   * 
-//   * For the AES key, we don't have an internal format; properties would include:
-//   * 
-//   *  "k": the key itself, encoded as base64
-//   *  "alg": "A256GCM"
-//   *  "key_ops": ["encrypt", "decrypt"]
-//   *  "kty": "oct"
-//   * 
-//   * Only the "k" property is required, the rest are implied, so it's trivial to track.
-//   * 
-//   * In JWK, x, y, and d are all encoded as base64 characters (or 384 bits), d is omitted
-//   * for public keys. We don't use base62 for internal encoding of these.
-//   *
-// */
+/**
+  * class 'SBCrypto', below, provides a class with wrappers for subtle crypto, as well as
+  * some SB-specific utility functions.
+  * 
+  * Typically a public jsonwebkey (JWK) will look something like this in json string format:
+  *
+  *                        "{\"crv\":\"P-384\",\"ext\":true,\"key_ops\":[],\"kty\":\"EC\",
+  *                        \"x\":\"9s17B4i0Cuf_w9XN_uAq2DFePOr6S3sMFMA95KjLN8akBUWEhPAcuMEMwNUlrrkN\",
+  *                        \"y\":\"6dAtcyMbtsO5ufKvlhxRsvjTmkABGlTYG1BrEjTpwrAgtmn6k25GR7akklz9klBr\"}"
+  * 
+  * A private key will look something like this:
+  * 
+  *                       "{\"crv\":\"P-384\",
+  *                       \"d\":\"KCJHDZ34XgVFsS9-sU09HFzXZhnGCvnDgJ5a8GTSfjuJQaq-1N2acvchPRhknk8B\",
+  *                       \"ext\":true,\"key_ops\":[\"deriveKey\"],\"kty\":\"EC\",
+  *                       \"x\":\"rdsyBle0DD1hvp2OE2mINyyI87Cyg7FS3tCQUIeVkfPiNOACtFxi6iP8oeYt-Dge\",
+  *                       \"y\":\"qW9VP72uf9rgUU117G7AfTkCMncJbT5scIaIRwBXfqET6FYcq20fwSP7R911J2_t\"}"
+  * 
+  * These are elliptic curve keys. 
+  * 
+  * The main RFC is 7518 (https://datatracker.ietf.org/doc/html/rfc7518#section-6.2),
+  * supervised by IESG except for a tiny addition of one parameter ("ext") that is 
+  * supervised by the W3C Crypto WG (https://w3c.github.io/webcrypto/#ecdsa).
+  * 
+  * Internally encode these in internal (base62) formats, but web crypto import/export
+  * obviously works in JWK standard eg base64.
+  * 
+  * EC in JWK has a number of parameters, but for us the only required ones are:
+  * 
+  *  crv: the curve (P-384 in this case)
+  *  x: the x coordinate of the public key
+  *  y: the y coordinate of the public key
+  *  d: the private key (if it's a private key)
+  *  kty: the key type (EC in this case)
+  *  ext: the 'extractable' flag
+  *  key_ops: (optional) permitted the key operations
+  * 
+  * Our SBKey formats have a four-character prefix to distinguish types, currently:
+  * 
+  *  "PNk2": public key; only x and y are present, the rest implied [KeyPrefix.SBPublicKey]
+  *  "Xj3p": private key: x, y, d are present, the rest implied [KeyPrefix.SBPrivateKey]
+  * 
+  * For the AES key, we don't have an internal format; properties would include:
+  * 
+  *  "k": the key itself, encoded as base64
+  *  "alg": "A256GCM"
+  *  "key_ops": ["encrypt", "decrypt"]
+  *  "kty": "oct"
+  * 
+  * Only the "k" property is required, the rest are implied, so it's trivial to track.
+  * 
+  * In JWK, x, y, and d are all encoded as base64 characters (or 384 bits), d is omitted
+  * for public keys. We don't use base62 for internal encoding of these.
+  *
+  */
 
 export enum KeyPrefix {
   // prefixes are random except that:
@@ -1517,10 +1269,44 @@ export enum KeyPrefix {
   SBPrivateKey = "Xj3p"
 }
 
+// Takes a public or private key string
+function parseSB384string(input: string): jwkStruct | undefined {
+  try {
+    if (input.length <= 4) return undefined;
+    const prefix = input.slice(0, 4);
+    const data = input.slice(4);
+    switch (prefix) {
+      case KeyPrefix.SBPublicKey: {
+        const combined = base62ToArrayBuffer(data)
+        if (combined.byteLength !== (48 * 2)) return undefined;
+        return {
+          prefix: KeyPrefix.SBPublicKey,
+          x: arrayBufferToBase64(combined.slice(0, 48)),
+          y: arrayBufferToBase64(combined.slice(48, 96))
+        };
+      }
+      case KeyPrefix.SBPrivateKey: {
+        const combined = base62ToArrayBuffer(data)
+        if (combined.byteLength !== (48 * 3)) return undefined;
+        return {
+          prefix: KeyPrefix.SBPrivateKey,
+          x: arrayBufferToBase64(combined.slice(0, 48)),
+          y: arrayBufferToBase64(combined.slice(48, 96)),
+          d: arrayBufferToBase64(combined.slice(96, 144))
+        };
+      }
+      default: {
+        return undefined;
+      }
+    }
+  } catch (e) {
+    console.error("parseSB384string() - malformed input, exception: ", e);
+    return undefined;
+  }
+}
+
 /**
- * SBCrypto
- * 
- * Utility class for SB crypto functions. Note we use an object instantiation
+ * Utility class for SB crypto functions. Generally we use an object instantiation
  * of this (typically ''sbCrypto'') as a global variable.
  */
 export class SBCrypto {  /************************************************************************************/
@@ -1528,11 +1314,6 @@ export class SBCrypto {  /******************************************************
    * Hashes and splits into two (h1 and h1) signature of data, h1
    * is used to request (salt, iv) pair and then h2 is used for
    * encryption (h2, salt, iv).
-   * 
-   * Transitioning to internal binary format
-   *
-   * @param buf blob of data to be stored
-   *
    */
   generateIdKey(buf: ArrayBuffer): Promise<{ id_binary: ArrayBuffer, key_material: ArrayBuffer }> {
     return new Promise((resolve, reject) => {
@@ -1544,11 +1325,6 @@ export class SBCrypto {  /******************************************************
             id_binary: _id,
             key_material: _key
           })
-
-          // resolve({
-          //   id32: stripA32(arrayBuffer32ToBase62(_id)),
-          //   key32: stripA32(arrayBuffer32ToBase62(_key))
-          // })
         })
       } catch (e) {
         reject(e)
@@ -1576,7 +1352,6 @@ export class SBCrypto {  /******************************************************
   }
 
   // nota bene this does, and should, permanently be backwards compatible.
-  /** @private */
   async #testHash(channelBytes: ArrayBuffer, channel_id: SBChannelId): Promise<boolean> {
     const MAX_REHASH_ITERATIONS = 160
     let count = 0
@@ -1632,7 +1407,6 @@ export class SBCrypto {  /******************************************************
       return await this.#testHash(channelBytes, hash)
   }
 
-
   /**
    * 'Compare' two channel IDs. Note that this is not constant time.
    */
@@ -1654,8 +1428,6 @@ export class SBCrypto {  /******************************************************
   }
 
   /**
-   * SBCrypto.importKey()
-   *
    * Import keys
    */
   async importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]) {
@@ -1696,8 +1468,6 @@ export class SBCrypto {  /******************************************************
   }
 
   /**
-   * SBCrypto.exportKey()
-   * 
    * Export key; note that if there's an issue, this will return undefined.
    * That can happen normally if for example the key is restricted (and
    * not extractable).
@@ -1711,12 +1481,7 @@ export class SBCrypto {  /******************************************************
       })
   }
 
-  /**
-   * SBCrypto.deriveKey()
-   *
-   * Derive key. Takes a private and public key, and returns a Promise to a cryptoKey
-   * for 1:1 communication
-   */
+  /** Takes a private and public key, and returns a Promise to a cryptoKey */
   deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey> {
     _sb_assert(privateKey && publicKey, "Either private or public key is null or undefined (L1836)")
     return new Promise(async (resolve, reject) => {
@@ -1768,16 +1533,7 @@ export class SBCrypto {  /******************************************************
     return crypto.subtle.encrypt(params as AesGcmParams, key, data);
   }
 
-
-  /**
-   * Basic (core) method to construct a ChannelMessage
-   * 
-   * @param body can be almost any JS object
-   * @param sender SBUserId of sender
-   * @param encryptionKey CryptoKey for encrypting message
-   * @param signingKey CryptoKey for signing message
-   * @returns 
-   */
+  /** Basic (core) method to construct a ChannelMessage */
   async wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey): Promise<ChannelMessage> {
     _sb_assert(body && sender && encryptionKey && signingKey, "wrapMessage(): missing required parameter(2)")
     const payload = assemblePayload(body);
@@ -1799,11 +1555,7 @@ export class SBCrypto {  /******************************************************
     return message
   }
 
-  /**
-   * SBCrypto.unwrap
-   *
-   * Decrypts a 'wrapped' message, eg decrypts
-   */
+  /** Decrypts a 'wrapped' message, eg decrypts */
   unwrap(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
     return new Promise(async (resolve, reject) => {
       try {
@@ -1822,47 +1574,29 @@ export class SBCrypto {  /******************************************************
     });
   }
 
-  /**
-   * SBCrypto.sign()
-   */
+  /** Basic signing */
   sign(signKey: CryptoKey, contents: ArrayBuffer) {
     // return crypto.subtle.sign('HMAC', secretKey, contents);
     return crypto.subtle.sign({ name: "ECDSA", hash: { name: "SHA-384" }, }, signKey, contents)
   }
 
-  /**
-   * SBCrypto.verify()
-   */
+  /** Basic verifcation */
   verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer) {
     // return crypto.subtle.verify('HMAC', verifyKey, sign, contents)
     return crypto.subtle.verify( { name: "ECDSA", hash: { name: "SHA-384" }, }, verifyKey, sign, contents)
   }
 
-  /**
-   * Standardized 'str2ab()' function, string to array buffer.
-   * This assumes on byte per character.
-   *
-   * @param {string} string
-   * @return {Uint8Array} buffer
-   */
+  /** Standardized 'str2ab()' function, string to array buffer. */
   str2ab(string: string): Uint8Array {
     return new TextEncoder().encode(string);
   }
 
-  /**
-   * Standardized 'ab2str()' function, array buffer to string.
-   * This assumes one byte per character.
-   *
-   * @param {Uint8Array} buffer
-   * @return {string} string
-   */
+  /** Standardized 'ab2str()' function, array buffer to string. */
   ab2str(buffer: Uint8Array): string {
     return new TextDecoder('utf-8').decode(buffer);
   }
 
   /**
-   * SBCrypto.compareKeys()
-   *
    * Compare JSON keys, true if the 'same', false if different. We consider
    * them "equal" if both have 'x' and 'y' properties and they are the same.
    * (Which means it doesn't care about which or either being public or private)
@@ -1874,16 +1608,15 @@ export class SBCrypto {  /******************************************************
   }
 
 
-
 } /* SBCrypto */
-//#endregion - SBCrypto Class
+
+//#endregion
 
 /******************************************************************************************************/
 //#region Decorators
 
 // Decorator
 // caches resulting value (after any verifications eg ready pattern)
-/** @private */
 function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
     let get = descriptor.get
@@ -1903,7 +1636,6 @@ function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext
 
 // Decorator
 // asserts that corresponding object is 'ready'; also asserts non-null getter return value
-/** @private */
 function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
     let get = descriptor.get
@@ -1916,21 +1648,12 @@ function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext *
       const retValue = get.call(this);
       _sb_assert(retValue != null, `'${obj}.${propertyKey}' getter accessed but return value will be NULL (fatal)`);
       return retValue;
-
-      // const obj = target.constructor.name
-      // const rf = `${obj}ReadyFlag` as keyof PropertyDescriptor
-      // _sb_assert(rf in this, `'${rf} missing yet getter accessed with @Ready pattern (fatal)`)
-      // _sb_assert(this[rf], `'${obj}.${propertyKey}' getter accessed but object not 'ready' (fatal)`)
-      // const retValue = get.call(this)
-      // _sb_assert(retValue != null, `'${obj}.${propertyKey}' getter accessed but return value will be NULL (fatal)`)
-      // return retValue
     }
   }
 }
 
 // Decorator
 // asserts caller is an owner of the channel for which an api is called
-/** @private */
 function Owner(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
     let get = descriptor.get
@@ -1949,7 +1672,6 @@ function Owner(target: any, propertyKey: string /* ClassGetterDecoratorContext *
 // asserts any types that are SB classes are valid
 // we're not quite doing this yet. interfaces would be more important to handle in this manner,
 // however even with new (upcoming) additional type metadata for decorators, can't yet be done.
-/** @private */
 function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecoratorContext */, descriptor?: PropertyDescriptor): any {
   if ((descriptor) && (descriptor.value)) {
     const operation = descriptor.value
@@ -1965,7 +1687,6 @@ function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecor
 
 // Decorator
 // turns any exception into a reject
-/** @private */
 function ExceptionReject(target: any, _propertyKey: string /* ClassMethodDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.value)) {
     const operation = descriptor.value
@@ -2010,9 +1731,7 @@ function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean 
   }
 }
 
-
-//#endregion - local decorators
-
+//#endregion
 
 /******************************************************************************************************/
 //#region - IndexedDb caching
@@ -2098,8 +1817,6 @@ if ('indexedDB' in globalThis)
 
 //#endregion - IndexedDb caching
 
-
-
 /******************************************************************************************************/
 //#region - SETUP and STARTUP
 
@@ -2117,7 +1834,8 @@ const SEP = "============================================================\n";
 
 //#endregion - SETUP and STARTUP stuff
 
-
+/******************************************************************************************************/
+//#region - SB384
 
 /**
   * Basic (core) capability object in SB.
@@ -2179,7 +1897,7 @@ class SB384 {
       try {
         if (!key) {
           // generate a fresh ID
-          if (DBG) console.log("SB384() - generating new key pair")
+          if (DBG2) console.log("SB384() - generating new key pair")
           const keyPair = await sbCrypto.generateKeys()
           const _jwk = await sbCrypto.exportKey('jwk', keyPair.privateKey);
           _sb_assert(_jwk && _jwk.x && _jwk.y && _jwk.d, 'INTERNAL');
@@ -2266,7 +1984,7 @@ class SB384 {
         // we mostly use for sign/verify, occasionally encryption, so double use is ... hopefully ok
         if (this.#private) {
           const newJwk = { ...this.jwkPrivate, key_ops: ['sign'] }
-          if (DBG) console.log('starting jwk (private):\n', newJwk)
+          if (DBG2) console.log('starting jwk (private):\n', newJwk)
           this.#signKey = await crypto.subtle.importKey("jwk",
             newJwk,
             {
@@ -2277,7 +1995,7 @@ class SB384 {
             ['sign'])
         } else {
           const newJwk = { ...this.jwkPublic, key_ops: ['verify'] }
-          if (DBG) console.log('starting jwk (public):\n', newJwk)
+          if (DBG2) console.log('starting jwk (public):\n', newJwk)
           this.#signKey = await crypto.subtle.importKey("jwk",
             newJwk,
             {
@@ -2297,7 +2015,7 @@ class SB384 {
         // this.#exportable_privateKey = await sbCrypto.exportKey('jwk', keyPair.privateKey)
         // this.#exportable_privateKey = await sbCrypto.exportKey('jwk', this.#privateKey)
 
-        if (DBG) console.log("SB384() - constructor wrapping up", this)
+        if (DBG2) console.log("SB384() - constructor wrapping up", this)
           // sbCrypto.addKnownKey(this)
           ; (this as any)[SB384.ReadyFlag] = true
         resolve(this)
@@ -2421,20 +2139,14 @@ class SB384 {
   }
 
 } /* class SB384 */
+//#endregion
+
+/******************************************************************************************************/
+//#region Channel, ChannelSocket, SBMessage
 
 /**
  * The minimum state of a Channel is the "user" keys, eg
  * how we identify when connecting to the channel.
- * 
- * 'handle' means we're initializing off a channel handle.
- * that means we are not owner, and that the channel exists.
- * (eg the provided user ID is public keys, eg SBUserId)
- * channel keys are fetched from channel server
- * 
- * 'jwk' and 'new' both mean it's a "new" channel, in the
- * former case we're given private key for user, in the
- * latter case (convenience) we create a fresh ID. the
- * callee needs to create or budd channel.
  */
 export class SBChannelKeys extends SB384 {
   #channelId?: SBChannelId
@@ -2444,7 +2156,7 @@ export class SBChannelKeys extends SB384 {
   channelServer?: string // can be read/written freely
 
   constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey) {
-    // handelOrKey as undefined is fine, but 'null' is NOT ok
+    // undefined (missing) is fine, but 'null' is not
     if (handleOrKey === null) throw new Error(`SBChannelKeys constructor: you cannot pass 'null'`)
     if (handleOrKey) {
       if (typeof handleOrKey === 'string') {
@@ -2595,9 +2307,6 @@ export class SBChannelKeys extends SB384 {
 
 const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5 // allow for base64 overhead plus extra
 
-/**
- * SBMessage
- */
 class SBMessage {
   [SB_MESSAGE_SYMBOL] = true
   ready
@@ -3602,8 +3311,12 @@ class ChannelSocket extends Channel {
 
 } /* class ChannelSocket */
 
+//#endregion
+
+/******************************************************************************************************/
+//#region STORAGE: SBObjectHandle, StorageApi
 /**
- * SBObjecdtHandle
+ * SBObjectHandle
  */
 class SBObjectHandle implements Interfaces.SBObjectHandle_base {
   version: SBObjectHandleVersions = currentSBOHVersion;
@@ -3688,7 +3401,7 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
       if ((key) && (id)) {
         if (isBase62Encoded(key) && isBase62Encoded(id)) {
           this.version = '2'
-        } else if (isBase64Encoded(key) && isBase64Encoded(id)) {
+        } else if (b64Regex.test(key) && b64Regex.test(id)) {
           this.version = '1'
         } else {
           throw new Error('Unable to determine version from key and id')
@@ -3766,14 +3479,14 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
   set id(value: ArrayBuffer | string | Base62Encoded) {
     if (typeof value === 'string') {
       if (this.version === '1') {
-        if (isBase64Encoded(value)) {
+        if (b64Regex.test(value)) {
           this.id_binary = base64ToArrayBuffer(value);
         } else {
           throw new Error('Requested version 1, but id is not b64');
         }
       } else if (this.version === '2') {
         if (isBase62Encoded(value)) {
-          this.id_binary = base62ToArrayBuffer32(value);
+          this.id_binary = base62ToArrayBuffer(value);
         } else {
           throw new Error('Requested version 2, but id is not b62');
         }
@@ -3791,14 +3504,14 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
   set key(value: ArrayBuffer | string | Base62Encoded) {
     if (typeof value === 'string') {
       if (this.version === '1') {
-        if (isBase64Encoded(value)) {
+        if (b64Regex.test(value)) {
           this.#key_binary = base64ToArrayBuffer(value);
         } else {
           throw new Error('Requested version 1, but key is not b64');
         }
       } else if (this.version === '2') {
         if (isBase62Encoded(value)) {
-          this.#key_binary = base62ToArrayBuffer32(value);
+          this.#key_binary = base62ToArrayBuffer(value);
         } else {
           throw new Error('Requested version 2, but key is not b62');
         }
@@ -4113,11 +3826,6 @@ export class StorageApi {
     })
   }
 
-  // for future reference:
-  //   StorageApi().storeRequest
-  // is now internal-only (#_allocateObject)
-
-  /** @private */
   #processData(payload: ArrayBuffer, h: SBObjectHandle): Promise<ArrayBuffer> {
     return new Promise((resolve, reject) => {
       try {
@@ -4174,7 +3882,7 @@ export class StorageApi {
         if (h.version === '1') {
           h_key_material = base64ToArrayBuffer(h.key)
         } else if (h.version === '2') {
-          h_key_material = base62ToArrayBuffer32(h.key)
+          h_key_material = base62ToArrayBuffer(h.key)
         } else {
           throw new Error('Invalid or missing version (internal error, should not happen)');
         }
@@ -4337,6 +4045,11 @@ export class StorageApi {
    */
 
 } /* class StorageApi */
+
+//#endregion
+
+/******************************************************************************************************/
+//#region Snackabra and exports
 
 /**
   * Main class. It corresponds to a single channel server. Most apps
@@ -4557,24 +4270,17 @@ class Snackabra {
 
 } /* class Snackabra */
 
-/******************************************************************************************************/
-//#region - exporting stuff
-
-// export type {
-//   ChannelData,
-//   // ChannelKeyStrings,
-//   // ImageMetaData
-// }
-
 export {
   SB384,
   SBMessage,
   Channel,
   ChannelSocket,
-  // ChannelEndpoint,
   SBObjectHandle,
   Snackabra,
   arrayBufferToBase64,
+  base64ToArrayBuffer,
+  arrayBufferToBase62,
+  base62ToArrayBuffer,
   version,
 };
 
@@ -4585,6 +4291,9 @@ export var SB = {
   SBCrypto: SBCrypto,
   SB384: SB384,
   arrayBufferToBase64: arrayBufferToBase64,
+  base64ToArrayBuffer: base64ToArrayBuffer,
+  arrayBufferToBase62: arrayBufferToBase62,
+  base62ToArrayBuffer: base62ToArrayBuffer,
   sbCrypto: sbCrypto,
   version: version
 };
@@ -4592,4 +4301,5 @@ export var SB = {
 if (!(globalThis as any).SB)
   (globalThis as any).SB = SB;
 console.warn(`==== SNACKABRA jslib loaded ${(globalThis as any).SB.version} ====`); // we warn for benefit of Deno and visibility
-//#endregion - exporting stuff
+
+//#endregion
