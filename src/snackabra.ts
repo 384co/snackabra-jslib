@@ -327,7 +327,7 @@ var DBG2 = false; // note, if this is true then DBG will be true too
 // 7	    259200	72 hours
 // 8	   1036800	12 days
 // 9	   4147200	48 days
-// 10   31622400	One year (366 days)
+// 10             <reserved>
 // 11		          <reserved>
 // 12		          <reserved>
 // 13		          <reserved>
