@@ -141,7 +141,9 @@ export declare function base64ToBase62(s: string): Base62Encoded;
 export declare function assemblePayload(data: any): ArrayBuffer | null;
 export declare function extractPayload(value: ArrayBuffer): any;
 export declare enum KeyPrefix {
-    SBPublicKey = "PNk2",
+    SBPublicKey_uncompressed = "PNk2",
+    SBPublicKey_compressed_even = "PyE2",
+    SBPublicKey_compressed_odd = "PzE3",
     SBPrivateKey = "Xj3p"
 }
 export declare class SBCrypto {
@@ -188,6 +190,7 @@ declare class SB384 {
     get publicKey(): CryptoKey;
     get jwkPrivate(): JsonWebKey;
     get jwkPublic(): JsonWebKey;
+    get userPublicKey_uncompressed(): SBUserPublicKey;
     get userPublicKey(): SBUserPublicKey;
     get userPrivateKey(): SBUserPrivateKey;
 }

@@ -1263,9 +1263,13 @@ export function extractPayload(value: ArrayBuffer): any {
 
 export enum KeyPrefix {
   // prefixes are random except that:
+
   // anything starting with 'P' is public key or identifier
-  SBPublicKey = "PNk2",
-  // anything starting with 'X' is private key
+  SBPublicKey_uncompressed = "PNk2",    // older format
+  SBPublicKey_compressed_even = "PyE2", // compressed .. either even or odd 'y' coordinate
+  SBPublicKey_compressed_odd = "PzE3",
+
+  // anything starting with 'X' is private key; ToDo: compress
   SBPrivateKey = "Xj3p"
 }
 
@@ -1276,11 +1280,11 @@ function parseSB384string(input: string): jwkStruct | undefined {
     const prefix = input.slice(0, 4);
     const data = input.slice(4);
     switch (prefix) {
-      case KeyPrefix.SBPublicKey: {
+      case KeyPrefix.SBPublicKey_uncompressed: {
         const combined = base62ToArrayBuffer(data)
         if (combined.byteLength !== (48 * 2)) return undefined;
         return {
-          prefix: KeyPrefix.SBPublicKey,
+          prefix: KeyPrefix.SBPublicKey_uncompressed,
           x: arrayBufferToBase64(combined.slice(0, 48)),
           y: arrayBufferToBase64(combined.slice(48, 96))
         };
@@ -1294,6 +1298,18 @@ function parseSB384string(input: string): jwkStruct | undefined {
           y: arrayBufferToBase64(combined.slice(48, 96)),
           d: arrayBufferToBase64(combined.slice(96, 144))
         };
+      }
+      case KeyPrefix.SBPublicKey_compressed_even:
+      case KeyPrefix.SBPublicKey_compressed_odd: {
+        const ySign = prefix === KeyPrefix.SBPublicKey_compressed_even ? 0 : 1;
+        const xBuf = base62ToArrayBuffer(data);
+        const { x: xBase64, y: yBase64 } = decompressP384(arrayBufferToBase64(xBuf), ySign);
+        return {
+          prefix: KeyPrefix.SBPublicKey_uncompressed,
+          x: xBase64,
+          y: yBase64
+        };
+
       }
       default: {
         return undefined;
@@ -1837,6 +1853,47 @@ const SEP = "============================================================\n";
 /******************************************************************************************************/
 //#region - SB384
 
+function compressP384(xBase64: string, yBase64:string): SBUserPublicKey {
+  // Determine prefix based on the parity of the last byte of y-coordinate
+  const yBytes = new Uint8Array(base64ToArrayBuffer(yBase64));
+  const prefix = (yBytes[yBytes.length - 1] & 1) === 1
+    ? KeyPrefix.SBPublicKey_compressed_odd 
+    : KeyPrefix.SBPublicKey_compressed_even;
+  return prefix + base64ToBase62(xBase64);
+}
+
+function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
+  if (modulus === 1n) return 0n;
+  let result = 1n;
+  base = base % modulus;
+  while (exponent > 0n) {
+      if (exponent % 2n === 1n)
+          result = (result * base) % modulus;
+      exponent = exponent >> 1n;
+      base = (base * base) % modulus;
+  }
+  return result;
+}
+
+// signY is 0 or 1 (even or odd)
+function decompressP384(xBase64: string, signY: number) {
+  // Consts for secp384r1 curve
+  const prime = BigInt('0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff'),
+        b = BigInt('0xb3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef'),
+        pIdent = (prime + 1n) / 4n;
+  const xBytes = new Uint8Array(base64ToArrayBuffer(xBase64));
+  const xHex = '0x' + Array.from(xBytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  var x = BigInt(xHex);
+  var y = modPow(x * x * x - 3n * x + b, pIdent, prime);
+  if (y % 2n !== BigInt(signY))
+      y = prime - y;
+  // we now need to convert 'y' to a base64 string
+  const yHex = y.toString(16).padStart(96, '0');
+  const yBytes = new Uint8Array(yHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+  const yBase64 = arrayBufferToBase64(yBytes);
+  return { x: xBase64, y: yBase64 };
+}
+
 /**
   * Basic (core) capability object in SB.
   *
@@ -2116,12 +2173,17 @@ class SB384 {
    * Wire format of full (decodable) public key
    * @type {SBUserPublicKey}
    */
-  @Memoize get userPublicKey(): SBUserPublicKey {
+  @Memoize get userPublicKey_uncompressed(): SBUserPublicKey {
     _sb_assert(this.#x && this.#y, "userPublicKey() - sufficient key info is not available (fatal)")
     const combined = new Uint8Array(48 * 2);
     combined.set(base64ToArrayBuffer(this.#x!), 0);
     combined.set(base64ToArrayBuffer(this.#y!), 48);
-    return (KeyPrefix.SBPublicKey + arrayBufferToBase62(combined)) as SBUserPublicKey
+    return (KeyPrefix.SBPublicKey_uncompressed + arrayBufferToBase62(combined)) as SBUserPublicKey
+  }
+
+  @Memoize get userPublicKey(): SBUserPublicKey {
+    _sb_assert(this.#x && this.#y, "userPublicKey() - sufficient key info is not available (fatal)")
+    return compressP384(this.#x!, this.#y!);
   }
 
   /**
