@@ -317,24 +317,23 @@ var DBG2 = false; // note, if this is true then DBG will be true too
 
 // index/number of seconds/string description of TTL values (0-15)
 // (it's valid to encode it as four bits):
-// 0	         0	Ephemeral (not stored)
-// 1	        60	One minute (minimum)
-// 2	       300	Five minutes
-// 3	      1200	Twenty minutes
-// 4	      3600	One hour
-// 5	     14400	4 hours
-// 6	     64800	18 hours
-// 7	    259200	72 hours
-// 8	   1036800	12 days
-// 9	   4147200	48 days
+// 0	         0  Ephemeral (not stored)
+// 1              <reserved>
+// 2		          <reserved>
+// 3	        60  One minute (current minimum)
+// 4	       300  Five minutes
+// 5	      1800  Thirty minutes
+// 6	      7200  Two hours
+// 7	     86400  24 hours
+// 8      604800	Seven days (one week)
 // 10             <reserved>
 // 11		          <reserved>
 // 12		          <reserved>
 // 13		          <reserved>
 // 14		          <reserved>
 // 15	  Infinity	Infinity
-export const msgTtlToSeconds = [0, 60, 300, 1200, 3600, 14400, 64800, 259200, 1036800, 4147200, 31622400, 0, 0, 0, 0, Infinity]
-export const msgTtlToString = ['Ephemeral', 'One minute', 'Five minutes', 'Twenty minutes', 'One hour', '4 hours', '18 hours', '72 hours', '12 days', '48 days', 'One year', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no limit)']
+export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 7200, 86400, 604800, -1, -1, -1, -1, -1, Infinity]
+export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>',  'One minute', 'Five minutes', 'Thirty minutes', 'Two hours', '24 hours', '7 days (one week)', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)']
 
 /**
  * SBObjectType
@@ -426,9 +425,9 @@ export type SBUserPublicKey = string // public key encoding
 export type SBUserPrivateKey = string // private key encoding
 
 type jwkStruct = {
-  prefix: KeyPrefix;
   x: string;
   y: string;
+  ySign: 0 | 1;
   d?: string
 }
 
@@ -1223,14 +1222,12 @@ export function extractPayload(value: ArrayBuffer): any {
   *                       \"x\":\"rdsyBle0DD1hvp2OE2mINyyI87Cyg7FS3tCQUIeVkfPiNOACtFxi6iP8oeYt-Dge\",
   *                       \"y\":\"qW9VP72uf9rgUU117G7AfTkCMncJbT5scIaIRwBXfqET6FYcq20fwSP7R911J2_t\"}"
   * 
-  * These are elliptic curve keys. 
+  * These are elliptic curve keys, we use P-384 (secp384r1). Mostly you will just
+  * be using the 'class SB384' object, and all the details are handled.
   * 
-  * The main RFC is 7518 (https://datatracker.ietf.org/doc/html/rfc7518#section-6.2),
+  * The main (EC) RFC is 7518 (https://datatracker.ietf.org/doc/html/rfc7518#section-6.2),
   * supervised by IESG except for a tiny addition of one parameter ("ext") that is 
   * supervised by the W3C Crypto WG (https://w3c.github.io/webcrypto/#ecdsa).
-  * 
-  * Internally encode these in internal (base62) formats, but web crypto import/export
-  * obviously works in JWK standard eg base64.
   * 
   * EC in JWK has a number of parameters, but for us the only required ones are:
   * 
@@ -1242,10 +1239,26 @@ export function extractPayload(value: ArrayBuffer): any {
   *  ext: the 'extractable' flag
   *  key_ops: (optional) permitted the key operations
   * 
-  * Our SBKey formats have a four-character prefix to distinguish types, currently:
+  * All these components are implied except for x, y, and d. Various ways of encoding
+  * (eg either just 'd', or just 'x', or 'x,y', or 'd,x', or 'd,x,y') are handled
+  * using a prefix system on the keys when represented as a single (base62) string.
   * 
-  *  "PNk2": public key; only x and y are present, the rest implied [KeyPrefix.SBPublicKey]
-  *  "Xj3p": private key: x, y, d are present, the rest implied [KeyPrefix.SBPrivateKey]
+  * Starting with 'P' means public, 'X' means private.
+  * 
+  *  "PNk4": public key; x and y are present, the rest implied [KeyPrefix.SBPublicK+ey]
+  *  "PNk2": public key, compressed, y is even
+  *  "PNK3": public key, compressed, y is odd
+  * 
+  *  "Xj34": private key: x, y, d are present, the rest implied [KeyPrefix.SBPrivateKey]
+  *  "Xj32": private key, compressed, has x and d, y is even
+  *  "Xj33": private key, compressed, has x and d, y is odd
+  * 
+  *  "XjZx": private key, "dehydrated"; only d is present, x needed from other source (and y is even)
+  * 
+  * The fourth character encoded in enum KeySubPrefix below. Note that we encode using
+  * base62 'externally', but 'x', 'y', and 'd' internally are in base64.
+  * 
+  * Keys default to being compressed.
   * 
   * For the AES key, we don't have an internal format; properties would include:
   * 
@@ -1255,66 +1268,133 @@ export function extractPayload(value: ArrayBuffer): any {
   *  "kty": "oct"
   * 
   * Only the "k" property is required, the rest are implied, so it's trivial to track.
+  * Whenever on the wire A256GCM would just require base62 encoding (into 43 characters).
   * 
-  * In JWK, x, y, and d are all encoded as base64 characters (or 384 bits), d is omitted
-  * for public keys. We don't use base62 for internal encoding of these.
+  * The above (3-letter) prefixes we've generated randomly to hopefully avoid
+  * collisions with other formats. For 2/3/4 we follow common (wire) formats.
+  * There aren't conventions for what we're calling 'dehydrated' keys (they sort of
+  * appear in crypto currency wallets).
+  * 
+  * The above in combination with Channels:
+  *    
+  * - private key: always d, x, ySign
+  * - public key: always x, ySign
+  * - channel key: same as public key
   *
+  * channelId: can be derived from (channel) public key (from x,y)
+  * 
+  * when you join a channel, you can join w public key of channel, or channelId;
+  * if you join just with channelId, you need channel server (to fetch public key)
+  *
+  * special format: dehydrated private key: just d (x through some other means)
+  * 
+  * 
   */
 
 export enum KeyPrefix {
-  // prefixes are random except that:
-
-  // anything starting with 'P' is public key or identifier
-  SBPublicKey_uncompressed = "PNk2",    // older format
-  SBPublicKey_compressed_even = "PyE2", // compressed .. either even or odd 'y' coordinate
-  SBPublicKey_compressed_odd = "PzE3",
-
-  // anything starting with 'X' is private key; ToDo: compress
-  SBPrivateKey = "Xj3p"
+  SBPublicKey = "PNk",
+  SBPrivateKey = "Xj3",
+  SBDehydratedKey = "XjZ", 
 }
 
-// Takes a public or private key string
-function parseSB384string(input: string): jwkStruct | undefined {
+enum KeySubPrefix {
+  CompressedEven = "2",
+  CompressedOdd = "3",
+  Uncompressed = "4",
+  Dehydrated = "x",
+}
+
+// for key compression/decompression; extract sign of y-coordinate (0 is even)
+function ySign(y: string | ArrayBuffer): 0 | 1 {
+  if (typeof y === 'string')
+    y = base64ToArrayBuffer(y);
+  const yBytes = new Uint8Array(y);
+  return (yBytes[yBytes.length - 1] & 1) === 1 ? 1 : 0;
+}
+
+// Takes a public or private key string, populates jwkStruct
+// If a key is dehydrated (missing x), x must be provided (base64, eg jwk.x)
+function parseSB384string(input: string, x?: jwkStruct): jwkStruct | undefined {
   try {
     if (input.length <= 4) return undefined;
     const prefix = input.slice(0, 4);
     const data = input.slice(4);
-    switch (prefix) {
-      case KeyPrefix.SBPublicKey_uncompressed: {
-        const combined = base62ToArrayBuffer(data)
-        if (combined.byteLength !== (48 * 2)) return undefined;
-        return {
-          prefix: KeyPrefix.SBPublicKey_uncompressed,
-          x: arrayBufferToBase64(combined.slice(0, 48)),
-          y: arrayBufferToBase64(combined.slice(48, 96))
-        };
-      }
+    switch (prefix.slice(0, 3)) {
+      case KeyPrefix.SBPublicKey: {
+        switch (prefix[3]) {
+          case KeySubPrefix.Uncompressed: {
+            const combined = base62ToArrayBuffer(data)
+            if (combined.byteLength !== (48 * 2)) return undefined;
+            const yBytes = combined.slice(48, 96);
+            return {
+              x: arrayBufferToBase64(combined.slice(0, 48)),
+              y: arrayBufferToBase64(yBytes),
+              ySign: ySign(yBytes)
+            };
+          }
+          case KeySubPrefix.CompressedEven:
+          case KeySubPrefix.CompressedOdd: {
+            const ySign = prefix[3] === KeySubPrefix.CompressedEven ? 0 : 1;
+            const xBuf = base62ToArrayBuffer(data);
+            if (xBuf.byteLength !== 48) return undefined;
+            const { x: xBase64, y: yBase64 } = decompressP384(arrayBufferToBase64(xBuf), ySign);
+            return {
+              x: xBase64,
+              y: yBase64,
+              ySign: ySign,
+            };
+          }
+          default: { console.error("KeySubPrefix not recognized"); }
+        }
+      } break;
       case KeyPrefix.SBPrivateKey: {
-        const combined = base62ToArrayBuffer(data)
-        if (combined.byteLength !== (48 * 3)) return undefined;
-        return {
-          prefix: KeyPrefix.SBPrivateKey,
-          x: arrayBufferToBase64(combined.slice(0, 48)),
-          y: arrayBufferToBase64(combined.slice(48, 96)),
-          d: arrayBufferToBase64(combined.slice(96, 144))
-        };
-      }
-      case KeyPrefix.SBPublicKey_compressed_even:
-      case KeyPrefix.SBPublicKey_compressed_odd: {
-        const ySign = prefix === KeyPrefix.SBPublicKey_compressed_even ? 0 : 1;
-        const xBuf = base62ToArrayBuffer(data);
-        const { x: xBase64, y: yBase64 } = decompressP384(arrayBufferToBase64(xBuf), ySign);
-        return {
-          prefix: KeyPrefix.SBPublicKey_uncompressed,
-          x: xBase64,
-          y: yBase64
-        };
-
-      }
+        switch (prefix[3]) {
+          case KeySubPrefix.Uncompressed: {
+            const combined = base62ToArrayBuffer(data)
+            if (combined.byteLength !== (48 * 3)) return undefined;
+            const yBytes = combined.slice(48, 96);
+            return {
+              x: arrayBufferToBase64(combined.slice(0, 48)),
+              y: arrayBufferToBase64(yBytes),
+              ySign: ySign(yBytes),
+              d: arrayBufferToBase64(combined.slice(96, 144))
+            };
+          }
+          case KeySubPrefix.CompressedEven:
+          case KeySubPrefix.CompressedOdd: {
+            const ySign = prefix[3] === KeySubPrefix.CompressedEven ? 0 : 1;
+            const combined = base62ToArrayBuffer(data)
+            if (combined.byteLength !== (48 * 2)) return undefined;
+            const xBuf = combined.slice(0, 48);
+            const { x: xBase64, y: yBase64 } = decompressP384(arrayBufferToBase64(xBuf), ySign);
+            return {
+              x: xBase64,
+              y: yBase64,
+              ySign: ySign,
+              d: arrayBufferToBase64(combined.slice(48, 96))
+            };
+          }
+          case KeySubPrefix.Dehydrated: {
+            if (!x) {
+              console.error("parseSB384string() - x is missing or invalid, needed for rehydration");
+              return undefined;
+            }
+            return {
+              x: x.x,
+              y: x.y,
+              ySign: x.ySign,
+              d: base64ToBase62(data)
+            };
+          }
+          default: { console.error("KeySubPrefix not recognized"); }
+        }
+      } break;
       default: {
-        return undefined;
+        console.error("KeyPrefix not recognized");
       }
     }
+    // all paths to this point are failures to parse
+    return undefined
   } catch (e) {
     console.error("parseSB384string() - malformed input, exception: ", e);
     return undefined;
@@ -1853,14 +1933,14 @@ const SEP = "============================================================\n";
 /******************************************************************************************************/
 //#region - SB384
 
-function compressP384(xBase64: string, yBase64:string): SBUserPublicKey {
-  // Determine prefix based on the parity of the last byte of y-coordinate
-  const yBytes = new Uint8Array(base64ToArrayBuffer(yBase64));
-  const prefix = (yBytes[yBytes.length - 1] & 1) === 1
-    ? KeyPrefix.SBPublicKey_compressed_odd 
-    : KeyPrefix.SBPublicKey_compressed_even;
-  return prefix + base64ToBase62(xBase64);
-}
+// function compressP384(xBase64: string, yBase64:string): SBUserPublicKey {
+//   // Determine prefix based on the parity of the last byte of y-coordinate
+//   const yBytes = new Uint8Array(base64ToArrayBuffer(yBase64));
+//   const prefix = (yBytes[yBytes.length - 1] & 1) === 1
+//     ? KeyPrefix.SBPublicKey_compressed_odd 
+//     : KeyPrefix.SBPublicKey_compressed_even;
+//   return prefix + base64ToBase62(xBase64);
+// }
 
 function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
   if (modulus === 1n) return 0n;
@@ -1939,6 +2019,7 @@ class SB384 {
 
   #x?: string // all these are base64 encoded
   #y?: string
+  #ySign?: 0 | 1 // 0 = even, 1 = odd
   #d?: string
 
   #privateUserKey?: CryptoKey // if present always private
@@ -1962,12 +2043,7 @@ class SB384 {
           this.#x = _jwk!.x!
           this.#y = _jwk!.y!
           this.#d = _jwk!.d!
-
-          // this.#userKey = keyPair.privateKey
-          // this.#jwk = await sbCrypto.exportKey('jwk', this.#userKey)
-          // // this.#userKey = sbCrypto.JWKToSBKey(this.#jwk!, true)
-          // // _sb_assert(this.#sbUserKey, `ERROR creating SB384 object: failed to convert JWK to SBKey (should not happen)`)
-
+          console.log("#### FROM SCRATCH", this.#private)
         } else if (key instanceof CryptoKey) {
           const _jwk = await sbCrypto.exportKey('jwk', key);
           _sb_assert(_jwk && _jwk.x && _jwk.y, 'INTERNAL');
@@ -2002,42 +2078,28 @@ class SB384 {
           // we're given a string encoding
 
           const tryParse = parseSB384string(key)
+          console.log("########### TRYPARSE:", tryParse)
           if (!tryParse) throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey | SBUserPublicKey | SBUserPrivateKey, or omitted)')
           const { x, y, d } = tryParse as jwkStruct
           if (d) {
             this.#private = true
             this.#d = d
+            console.log("Private, and we have d:", d)
           } else {
             this.#private = false
+            console.log("Not private, and we have d:")
             _sb_assert(!forcePrivate, `ERROR creating SB384 object: key provided is not the requested private`)
           }
           _sb_assert(x && y, 'INTERNAL');
           this.#x = x
           this.#y = y
-
-          // // this.#sbUserKey = sbCrypto.StringToSBKey(key)
-          // const _sbUserKey = sbCrypto.StringToSBKey(key)
-          // if (!_sbUserKey)
-          //   throw new Error(`ERROR creating SB384 object: failed to import SBUserId`)
-          // if (_sbUserKey.prefix === KeyPrefix.SBPublicKey) {
-          //   this.#private = false
-          //   if (forcePrivate)
-          //     throw new Error(`ERROR creating SB384 object: key provided is not the requested private`)
-          // } else if (_sbUserKey.prefix === KeyPrefix.SBPrivateKey) {
-          //   this.#private = true
-          // } else throw new Error(`ERROR creating SB384 object: invalid key (neither public nor private)`)
-          // this.#jwk = sbCrypto.SBKeyToJWK(_sbUserKey!)
-
         } else {
           throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey, SBUserId, or omitted)')
         }
-
         if (DBG2) console.log("SB384() constructor; x/y/d:\n", this.#x, "\n", this.#y, "\n", this.#d)
-
         if (this.#private)
           this.#privateUserKey = await sbCrypto.importKey('jwk', this.jwkPrivate, 'ECDH', true, ['deriveKey'])
         this.#publicUserKey = await sbCrypto.importKey('jwk', this.jwkPublic, 'ECDH', true, [])
-
         // we mostly use for sign/verify, occasionally encryption, so double use is ... hopefully ok
         if (this.#private) {
           const newJwk = { ...this.jwkPrivate, key_ops: ['sign'] }
@@ -2063,14 +2125,12 @@ class SB384 {
             ['verify'])
         }
 
-        // this.#hash = await sbCrypto.sb384Hash(this.#jwk)
         // can't put in getter since it's async
         const channelBytes = _appendBuffer(base64ToArrayBuffer(this.#x!), base64ToArrayBuffer(this.#y!))
         this.#hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', channelBytes))
         if (DBG2) console.log("SB384() constructor; hash:\n", this.#hash)
 
-        // this.#exportable_privateKey = await sbCrypto.exportKey('jwk', keyPair.privateKey)
-        // this.#exportable_privateKey = await sbCrypto.exportKey('jwk', this.#privateKey)
+        this.#ySign = ySign(this.#y!);
 
         if (DBG2) console.log("SB384() - constructor wrapping up", this)
           // sbCrypto.addKnownKey(this)
@@ -2169,36 +2229,55 @@ class SB384 {
     }
   }
 
+  @Memoize get ySign(): 0 | 1 {
+    _sb_assert(this.#ySign !== null, "ySign() - ySign is not available (fatal)")
+    return this.#ySign!
+  }
+
+
   /**
    * Wire format of full (decodable) public key
    * @type {SBUserPublicKey}
    */
-  @Memoize get userPublicKey_uncompressed(): SBUserPublicKey {
-    _sb_assert(this.#x && this.#y, "userPublicKey() - sufficient key info is not available (fatal)")
-    const combined = new Uint8Array(48 * 2);
-    combined.set(base64ToArrayBuffer(this.#x!), 0);
-    combined.set(base64ToArrayBuffer(this.#y!), 48);
-    return (KeyPrefix.SBPublicKey_uncompressed + arrayBufferToBase62(combined)) as SBUserPublicKey
+  @Memoize get userPublicKey(): SBUserPublicKey {
+    _sb_assert(this.#x && (this.#ySign !== null), "userPublicKey() - sufficient key info is not available (fatal)")
+    return KeyPrefix.SBPublicKey + (this.#ySign! === 0 ? KeySubPrefix.CompressedEven : KeySubPrefix.CompressedOdd) + base64ToBase62(this.#x!)
   }
 
-  @Memoize get userPublicKey(): SBUserPublicKey {
-    _sb_assert(this.#x && this.#y, "userPublicKey() - sufficient key info is not available (fatal)")
-    return compressP384(this.#x!, this.#y!);
-  }
+  // @Memoize get userPublicKey(): SBUserPublicKey {
+  //   _sb_assert(this.#x && this.#y, "userPublicKey() - sufficient key info is not available (fatal)")
+  //   return compressP384(this.#x!, this.#y!);
+  // }
+
+  // @Memoize get userPublicKey_uncompressed(): SBUserPublicKey {
+  //   _sb_assert(this.#x && this.#y, "userPublicKey() - sufficient key info is not available (fatal)")
+  //   const combined = new Uint8Array(48 * 2);
+  //   combined.set(base64ToArrayBuffer(this.#x!), 0);
+  //   combined.set(base64ToArrayBuffer(this.#y!), 48);
+  //   return (KeyPrefix.SBPublicKey_uncompressed + arrayBufferToBase62(combined)) as SBUserPublicKey
+  // }
 
   /**
-   * Wire format of full info of key (eg private key).
-   * @type {SBUserPrivateKey}
+   * Wire format of full info of key (eg private key). Compressed.
    */
   @Memoize get userPrivateKey(): SBUserPrivateKey {
     _sb_assert(this.#private, 'userPrivateKey() - not a private key, there is no userPrivateKey')
-    _sb_assert(this.#x && this.#y && this.#d, "userPrivateKey() - sufficient key info is not available (fatal)")
-    const combined = new Uint8Array(3 * 48);
+    _sb_assert(this.#x && (this.#ySign !== null) && this.#d, "userPrivateKey() - sufficient key info is not available (fatal)")
+    const combined = new Uint8Array(2 * 48);
     combined.set(base64ToArrayBuffer(this.#x!), 0);
-    combined.set(base64ToArrayBuffer(this.#y!), 48);
-    combined.set(base64ToArrayBuffer(this.#d!), 96);
-    return (KeyPrefix.SBPrivateKey + arrayBufferToBase62(combined)) as SBUserPrivateKey
+    combined.set(base64ToArrayBuffer(this.#d!), 48);
+    return KeyPrefix.SBPrivateKey + (this.#ySign! === 0 ? KeySubPrefix.CompressedEven : KeySubPrefix.CompressedOdd) + arrayBufferToBase62(combined)
   }
+
+  /**
+   * Compressed and dehydrated, meaning, 'x' needs to come from another source.
+   * (If lost it can be reconstructed from 'd')
+   */
+  @Memoize get userPrivateKeyDehydrated(): SBUserPrivateKey {
+    _sb_assert(this.#private && this.#d, "userPrivateKey() - not a private key, and/or 'd' is missing, there is no userPrivateKey")
+    return (KeyPrefix.SBPrivateKey + KeySubPrefix.Dehydrated + base64ToBase62(this.#d!)) as SBUserPrivateKey
+  }
+
 
 } /* class SB384 */
 //#endregion
