@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a;
-const version = '2.0.0-alpha.5 (build 37)';
+const version = '2.0.0-alpha.5 (build 41)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 function _checkChannelHandle(data) {
     return (data.channelId && data.channelId.length === 43
@@ -90,8 +90,18 @@ export function validate_ChannelMessage(body) {
         throw new Error(`invalid ChannelMessage`);
     }
 }
-var DBG = true;
+var DBG = false;
 var DBG2 = false;
+if (globalThis.configuration && globalThis.configuration.DEBUG === true) {
+    DBG = true;
+    if (DBG)
+        console.warn("++++ Setting DBG to TRUE based on 'configuration.DEBUG' ++++");
+    if (globalThis.configuration.DEBUG2 === true) {
+        DBG2 = true;
+        if (DBG)
+            console.warn("++++ ALSO setting DBG2 (verbose) ++++");
+    }
+}
 export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 7200, 86400, 604800, -1, -1, -1, -1, -1, Infinity];
 export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One minute', 'Five minutes', 'Thirty minutes', 'Two hours', '24 hours', '7 days (one week)', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)'];
 const currentSBOHVersion = '2';
@@ -711,7 +721,7 @@ function ySign(y) {
     const yBytes = new Uint8Array(y);
     return (yBytes[yBytes.length - 1] & 1) === 1 ? 1 : 0;
 }
-function parseSB384string(input, x) {
+function parseSB384string(input) {
     try {
         if (input.length <= 4)
             return undefined;
@@ -782,16 +792,8 @@ function parseSB384string(input, x) {
                             };
                         }
                         case KeySubPrefix.Dehydrated: {
-                            if (!x) {
-                                console.error("parseSB384string() - x is missing or invalid, needed for rehydration");
-                                return undefined;
-                            }
-                            return {
-                                x: x.x,
-                                y: x.y,
-                                ySign: x.ySign,
-                                d: base64ToBase62(data)
-                            };
+                            console.error("parseSB384string() - you need to rehydrate first ('hydrateKey()')");
+                            return undefined;
                         }
                         default: {
                             console.error("KeySubPrefix not recognized");
@@ -810,8 +812,60 @@ function parseSB384string(input, x) {
         return undefined;
     }
 }
+function xdySignToPrivateKey(x, d, ySign) {
+    if (!x || x.length !== 64 || !d || d.length !== 64 || ySign === undefined)
+        return undefined;
+    const combined = new Uint8Array(2 * 48);
+    combined.set(base64ToArrayBuffer(x), 0);
+    combined.set(base64ToArrayBuffer(d), 48);
+    return KeyPrefix.SBPrivateKey + (ySign === 0 ? KeySubPrefix.CompressedEven : KeySubPrefix.CompressedOdd) + arrayBufferToBase62(combined);
+}
+export function hydrateKey(privKey, pubKey) {
+    if (privKey.length <= 4)
+        return undefined;
+    const prefix = privKey.slice(0, 4);
+    switch (prefix.slice(0, 3)) {
+        case KeyPrefix.SBPublicKey:
+            return privKey;
+        case KeyPrefix.SBPrivateKey:
+            {
+                switch (prefix[3]) {
+                    case KeySubPrefix.Uncompressed:
+                    case KeySubPrefix.CompressedEven:
+                    case KeySubPrefix.CompressedOdd:
+                        return privKey;
+                    case KeySubPrefix.Dehydrated: {
+                        if (!pubKey) {
+                            console.error("hydrateKey() - you need to provide pubKey to hydrate");
+                            return undefined;
+                        }
+                        const privKeyData = privKey.slice(4);
+                        const combined = base62ToArrayBuffer(privKeyData);
+                        const dBytes = combined.slice(0, 48);
+                        const d = arrayBufferToBase64(dBytes);
+                        const jwk = parseSB384string(pubKey);
+                        if (!jwk || !jwk.x || jwk.ySign === undefined) {
+                            console.error("hydrateKey() - failed to parse public key");
+                            return undefined;
+                        }
+                        return xdySignToPrivateKey(jwk.x, d, jwk.ySign);
+                    }
+                    default: {
+                        console.error("KeySubPrefix not recognized");
+                    }
+                }
+            }
+            break;
+        default: {
+            console.error("KeyPrefix not recognized");
+        }
+    }
+    return undefined;
+}
 export class SBCrypto {
     generateIdKey(buf) {
+        if (!(buf instanceof ArrayBuffer))
+            throw new TypeError('Input must be an ArrayBuffer');
         return new Promise((resolve, reject) => {
             try {
                 crypto.subtle.digest('SHA-512', buf).then((digest) => {
@@ -1267,7 +1321,8 @@ class SB384 {
                     this.#x = _jwk.x;
                     this.#y = _jwk.y;
                     this.#d = _jwk.d;
-                    console.log("#### FROM SCRATCH", this.#private);
+                    if (DBG2)
+                        console.log("#### FROM SCRATCH", this.#private);
                 }
                 else if (key instanceof CryptoKey) {
                     const _jwk = await sbCrypto.exportKey('jwk', key);
@@ -1299,18 +1354,15 @@ class SB384 {
                 }
                 else if (typeof key === 'string') {
                     const tryParse = parseSB384string(key);
-                    console.log("########### TRYPARSE:", tryParse);
                     if (!tryParse)
                         throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey | SBUserPublicKey | SBUserPrivateKey, or omitted)');
                     const { x, y, d } = tryParse;
                     if (d) {
                         this.#private = true;
                         this.#d = d;
-                        console.log("Private, and we have d:", d);
                     }
                     else {
                         this.#private = false;
-                        console.log("Not private, and we have d:");
                         _sb_assert(!forcePrivate, `ERROR creating SB384 object: key provided is not the requested private`);
                     }
                     _sb_assert(x && y, 'INTERNAL');
@@ -1402,16 +1454,14 @@ class SB384 {
         return this.#ySign;
     }
     get userPublicKey() {
-        _sb_assert(this.#x && (this.#ySign !== null), "userPublicKey() - sufficient key info is not available (fatal)");
+        _sb_assert(this.#x && (this.#ySign !== undefined), "userPublicKey() - sufficient key info is not available (fatal)");
         return KeyPrefix.SBPublicKey + (this.#ySign === 0 ? KeySubPrefix.CompressedEven : KeySubPrefix.CompressedOdd) + base64ToBase62(this.#x);
     }
     get userPrivateKey() {
         _sb_assert(this.#private, 'userPrivateKey() - not a private key, there is no userPrivateKey');
-        _sb_assert(this.#x && (this.#ySign !== null) && this.#d, "userPrivateKey() - sufficient key info is not available (fatal)");
-        const combined = new Uint8Array(2 * 48);
-        combined.set(base64ToArrayBuffer(this.#x), 0);
-        combined.set(base64ToArrayBuffer(this.#d), 48);
-        return KeyPrefix.SBPrivateKey + (this.#ySign === 0 ? KeySubPrefix.CompressedEven : KeySubPrefix.CompressedOdd) + arrayBufferToBase62(combined);
+        const key = xdySignToPrivateKey(this.#x, this.#d, this.#ySign);
+        _sb_assert(key !== undefined, "userPrivateKey() - failed to construct key, probably missing info (fatal)");
+        return key;
     }
     get userPrivateKeyDehydrated() {
         _sb_assert(this.#private && this.#d, "userPrivateKey() - not a private key, and/or 'd' is missing, there is no userPrivateKey");
@@ -1643,7 +1693,8 @@ export class BasicProtocol {
             length: 256,
         }, true, ["encrypt", "decrypt"]);
         this.#key.then((k) => {
-            console.log("[BasicProtocol] generated random key for this session:\n", k);
+            if (DBG)
+                console.log("[BasicProtocol] generated random key for this session:\n", k);
         });
     }
     key() {
@@ -1661,7 +1712,8 @@ class Channel extends SBChannelKeys {
     constructor(handleOrKey, protocol) {
         if (handleOrKey === null)
             throw new Error(`Channel() constructor: you cannot pass 'null'`);
-        console.log("Channel() constructor called with handleOrKey:", handleOrKey);
+        if (DBG2)
+            console.log("Channel() constructor called with handleOrKey:", handleOrKey);
         super(handleOrKey);
         this.#protocol = protocol ? protocol : new BasicProtocol(this);
         this.channelReady =
@@ -2645,5 +2697,5 @@ export var SB = {
 };
 if (!globalThis.SB)
     globalThis.SB = SB;
-console.warn(`==== SNACKABRA jslib loaded ${globalThis.SB.version} ====`);
+console.warn(`==== SNACKABRA jslib (re)loaded, version '${globalThis.SB.version}' ====`);
 //# sourceMappingURL=snackabra.js.map

@@ -21,7 +21,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 37)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 41)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -309,11 +309,20 @@ export interface EncryptParams {
 //   timestamp?: number,
 // }
 
-// these are toggled (globally) by ''new Snackabra(...)''
-// they will stick to 'true' if any Snackabra object is
-// created asking them to be set
-var DBG = true;
+// these are toggled/reset (globally) by ''new Snackabra(...)''
+// they will stick to 'true' if any Snackabra object is created
+var DBG = false;
 var DBG2 = false; // note, if this is true then DBG will be true too
+
+// in addition, for convenience (such as in test suites) we 'pick up' configuration.DEBUG
+if ((globalThis as any).configuration && (globalThis as any).configuration.DEBUG === true) {
+  DBG = true
+  if (DBG) console.warn("++++ Setting DBG to TRUE based on 'configuration.DEBUG' ++++");
+  if ((globalThis as any).configuration.DEBUG2 === true) {
+    DBG2 = true
+    if (DBG) console.warn("++++ ALSO setting DBG2 (verbose) ++++");
+  }
+}
 
 // index/number of seconds/string description of TTL values (0-15)
 // (it's valid to encode it as four bits):
@@ -630,7 +639,6 @@ function _sb_exception(loc: string, msg: string) {
 function _sb_assert(val: unknown, msg: string) {
   if (!(val)) {
     const m = ` <<<<[_sb_assert] assertion failed: '${msg}'>>>> `;
-    // debugger;
     if (DBG) console.trace(m)
     throw new Error(m);
   }
@@ -1314,7 +1322,7 @@ function ySign(y: string | ArrayBuffer): 0 | 1 {
 
 // Takes a public or private key string, populates jwkStruct
 // If a key is dehydrated (missing x), x must be provided (base64, eg jwk.x)
-function parseSB384string(input: string, x?: jwkStruct): jwkStruct | undefined {
+function parseSB384string(input: SBUserPublicKey | SBUserPrivateKey): jwkStruct | undefined {
   try {
     if (input.length <= 4) return undefined;
     const prefix = input.slice(0, 4);
@@ -1375,16 +1383,8 @@ function parseSB384string(input: string, x?: jwkStruct): jwkStruct | undefined {
             };
           }
           case KeySubPrefix.Dehydrated: {
-            if (!x) {
-              console.error("parseSB384string() - x is missing or invalid, needed for rehydration");
-              return undefined;
-            }
-            return {
-              x: x.x,
-              y: x.y,
-              ySign: x.ySign,
-              d: base64ToBase62(data)
-            };
+            console.error("parseSB384string() - you need to rehydrate first ('hydrateKey()')");
+            return undefined;
           }
           default: { console.error("KeySubPrefix not recognized"); }
         }
@@ -1401,6 +1401,58 @@ function parseSB384string(input: string, x?: jwkStruct): jwkStruct | undefined {
   }
 }
 
+
+function xdySignToPrivateKey(x: string, d: string, ySign: 0 | 1): SBUserPrivateKey | undefined {
+  if (!x || x.length !== 64 || !d || d.length !== 64 || ySign === undefined) return undefined;
+  const combined = new Uint8Array(2 * 48);
+  combined.set(base64ToArrayBuffer(x), 0);
+  combined.set(base64ToArrayBuffer(d), 48);
+  return KeyPrefix.SBPrivateKey + (ySign === 0 ? KeySubPrefix.CompressedEven : KeySubPrefix.CompressedOdd) + arrayBufferToBase62(combined)
+}
+
+/**
+ * 'hydrates' a key - if needed; if it's already good on hydration, just returns it.
+ * Providing pubKey (from other source) is optional so that you can use this function
+ * to easily confirm that a key is hydrated, it will return undefined if it's not.
+ */
+export function hydrateKey(privKey: SBUserPrivateKey, pubKey?: SBUserPrivateKey): SBUserPrivateKey | undefined {
+  if (privKey.length <= 4) return undefined;
+  const prefix = privKey.slice(0, 4);
+  switch (prefix.slice(0, 3)) {
+    case KeyPrefix.SBPublicKey:
+      return privKey;
+    case KeyPrefix.SBPrivateKey: {
+      switch (prefix[3]) {
+        case KeySubPrefix.Uncompressed:
+        case KeySubPrefix.CompressedEven:
+        case KeySubPrefix.CompressedOdd:
+          return privKey;
+        case KeySubPrefix.Dehydrated: {
+          if (!pubKey) {
+            console.error("hydrateKey() - you need to provide pubKey to hydrate");
+            return undefined;
+          }
+          const privKeyData = privKey.slice(4);
+          const combined = base62ToArrayBuffer(privKeyData)
+          const dBytes = combined.slice(0, 48);
+          const d = arrayBufferToBase64(dBytes);
+          const jwk = parseSB384string(pubKey);
+          if (!jwk || !jwk.x || jwk.ySign === undefined) {
+            console.error("hydrateKey() - failed to parse public key");
+            return undefined;
+          }
+          return xdySignToPrivateKey(jwk.x!, d, jwk.ySign);
+        }
+        default: { console.error("KeySubPrefix not recognized"); }
+      }
+    } break;
+    default: {
+      console.error("KeyPrefix not recognized");
+    }
+  }
+  return undefined
+}
+
 /**
  * Utility class for SB crypto functions. Generally we use an object instantiation
  * of this (typically ''sbCrypto'') as a global variable.
@@ -1412,6 +1464,7 @@ export class SBCrypto {  /******************************************************
    * encryption (h2, salt, iv).
    */
   generateIdKey(buf: ArrayBuffer): Promise<{ id_binary: ArrayBuffer, key_material: ArrayBuffer }> {
+    if (!(buf instanceof ArrayBuffer)) throw new TypeError('Input must be an ArrayBuffer');
     return new Promise((resolve, reject) => {
       try {
         crypto.subtle.digest('SHA-512', buf).then((digest) => {
@@ -2043,7 +2096,7 @@ class SB384 {
           this.#x = _jwk!.x!
           this.#y = _jwk!.y!
           this.#d = _jwk!.d!
-          console.log("#### FROM SCRATCH", this.#private)
+          if (DBG2) console.log("#### FROM SCRATCH", this.#private)
         } else if (key instanceof CryptoKey) {
           const _jwk = await sbCrypto.exportKey('jwk', key);
           _sb_assert(_jwk && _jwk.x && _jwk.y, 'INTERNAL');
@@ -2078,16 +2131,13 @@ class SB384 {
           // we're given a string encoding
 
           const tryParse = parseSB384string(key)
-          console.log("########### TRYPARSE:", tryParse)
           if (!tryParse) throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey | SBUserPublicKey | SBUserPrivateKey, or omitted)')
           const { x, y, d } = tryParse as jwkStruct
           if (d) {
             this.#private = true
             this.#d = d
-            console.log("Private, and we have d:", d)
           } else {
             this.#private = false
-            console.log("Not private, and we have d:")
             _sb_assert(!forcePrivate, `ERROR creating SB384 object: key provided is not the requested private`)
           }
           _sb_assert(x && y, 'INTERNAL');
@@ -2234,13 +2284,12 @@ class SB384 {
     return this.#ySign!
   }
 
-
   /**
    * Wire format of full (decodable) public key
    * @type {SBUserPublicKey}
    */
   @Memoize get userPublicKey(): SBUserPublicKey {
-    _sb_assert(this.#x && (this.#ySign !== null), "userPublicKey() - sufficient key info is not available (fatal)")
+    _sb_assert(this.#x && (this.#ySign !== undefined), "userPublicKey() - sufficient key info is not available (fatal)")
     return KeyPrefix.SBPublicKey + (this.#ySign! === 0 ? KeySubPrefix.CompressedEven : KeySubPrefix.CompressedOdd) + base64ToBase62(this.#x!)
   }
 
@@ -2262,11 +2311,9 @@ class SB384 {
    */
   @Memoize get userPrivateKey(): SBUserPrivateKey {
     _sb_assert(this.#private, 'userPrivateKey() - not a private key, there is no userPrivateKey')
-    _sb_assert(this.#x && (this.#ySign !== null) && this.#d, "userPrivateKey() - sufficient key info is not available (fatal)")
-    const combined = new Uint8Array(2 * 48);
-    combined.set(base64ToArrayBuffer(this.#x!), 0);
-    combined.set(base64ToArrayBuffer(this.#d!), 48);
-    return KeyPrefix.SBPrivateKey + (this.#ySign! === 0 ? KeySubPrefix.CompressedEven : KeySubPrefix.CompressedOdd) + arrayBufferToBase62(combined)
+    const key = xdySignToPrivateKey(this.#x!, this.#d!, this.#ySign!)
+    _sb_assert(key !== undefined, "userPrivateKey() - failed to construct key, probably missing info (fatal)")
+    return key!
   }
 
   /**
@@ -2531,7 +2578,7 @@ export class BasicProtocol implements SBProtocol {
       ["encrypt", "decrypt"],
     );
     this.#key.then((k) => {
-      console.log("[BasicProtocol] generated random key for this session:\n", k)
+      if (DBG) console.log("[BasicProtocol] generated random key for this session:\n", k)
     })
   }
   key(): Promise<CryptoKey> {
@@ -2581,7 +2628,7 @@ class Channel extends SBChannelKeys {
   constructor(handle: SBChannelHandle, protocol?: SBProtocol)
   constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey, protocol?: SBProtocol) {
     if (handleOrKey === null) throw new Error(`Channel() constructor: you cannot pass 'null'`)
-    console.log("Channel() constructor called with handleOrKey:", handleOrKey)
+    if (DBG2) console.log("Channel() constructor called with handleOrKey:", handleOrKey)
     super(handleOrKey);
     this.#protocol = protocol ? protocol : new BasicProtocol(this)
     this.channelReady =
@@ -4441,6 +4488,7 @@ export var SB = {
 
 if (!(globalThis as any).SB)
   (globalThis as any).SB = SB;
-console.warn(`==== SNACKABRA jslib loaded ${(globalThis as any).SB.version} ====`); // we warn for benefit of Deno and visibility
+// we warn for benefit of Deno and visibility
+console.warn(`==== SNACKABRA jslib (re)loaded, version '${(globalThis as any).SB.version}' ====`);
 
 //#endregion

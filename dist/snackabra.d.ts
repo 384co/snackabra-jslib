@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 37)";
+declare const version = "2.0.0-alpha.5 (build 41)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
@@ -145,6 +145,7 @@ export declare enum KeyPrefix {
     SBPrivateKey = "Xj3",
     SBDehydratedKey = "XjZ"
 }
+export declare function hydrateKey(privKey: SBUserPrivateKey, pubKey?: SBUserPrivateKey): SBUserPrivateKey | undefined;
 export declare class SBCrypto {
     #private;
     generateIdKey(buf: ArrayBuffer): Promise<{
