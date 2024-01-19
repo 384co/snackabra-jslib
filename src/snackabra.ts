@@ -152,6 +152,11 @@ export interface Message {
   _id: string;
 }
 
+/**
+ * Pretty much every api call needs a payload that contains the
+ * api request, information about 'requestor' (user/visitor),
+ * signature of same, time stamp, yada yada.
+ */
 export interface ChannelApiBody {
   [SB_CHANNEL_API_BODY_SYMBOL]?: boolean,
   channelId: SBChannelId,
@@ -1481,87 +1486,7 @@ export class SBCrypto {  /******************************************************
     })
   }
 
-  /**
-   * Extracts (generates) public key from a private key.
-   */
-  extractPubKey(privateKey: JsonWebKey): JsonWebKey | null {
-    try {
-      const pubKey: JsonWebKey = { ...privateKey };
-      delete pubKey.d;
-      delete pubKey.dp;
-      delete pubKey.dq;
-      delete pubKey.q;
-      delete pubKey.qi;
-      pubKey.key_ops = [];
-      return pubKey;
-    } catch (e) {
-      console.error(e)
-      return null
-    }
-  }
 
-  // nota bene this does, and should, permanently be backwards compatible.
-  async #testHash(channelBytes: ArrayBuffer, channel_id: SBChannelId): Promise<boolean> {
-    const MAX_REHASH_ITERATIONS = 160
-    let count = 0
-    let hash = arrayBufferToBase64(channelBytes)
-    while (hash !== channel_id) {
-      if (count++ > MAX_REHASH_ITERATIONS) return false
-      channelBytes = await crypto.subtle.digest('SHA-384', channelBytes)
-      hash = arrayBufferToBase64(channelBytes)
-    }
-    return true
-  }
-
-  /**
-   * SBCrypto.compareHashWithKey()
-   * 
-   * Checks if an existing SB384Hash is 'compatible' with a given key.
-   * 
-   * Note that you CAN NOT have a hash, and a key, generate a hash
-   * from that key, and then compare the two. The hash generation per
-   * se will be deterministic and specific AT ANY POINT IN TIME,
-   * but may change over time, and this comparison function will 
-   * maintain ability to compare over versions.
-   * 
-   * For example, this comparison will accept a simple straight
-   * b64-encoded hash without iteration or other processing.
-   * 
-   */
-  async compareHashWithKey(hash: SB384Hash, key: JsonWebKey | null) {
-    if (!hash || !key) return false
-    let x = key.x
-    let y = key.y
-    if (!(x && y)) {
-      try {
-        // we try to be tolerant of code that loses track of if JWK has been parsed or not
-        const tryParse = jsonParseWrapper(key as unknown as string, "L1787");
-        if (tryParse.x) x = tryParse.x;
-        if (tryParse.y) y = tryParse.y;
-      } catch {
-        return false;
-      }
-    }
-    const xBytes = base64ToArrayBuffer(decodeB64Url(x!))
-    const yBytes = base64ToArrayBuffer(decodeB64Url(y!))
-    const channelBytes = _appendBuffer(xBytes, yBytes)
-
-    const sha256 = await crypto.subtle.digest('SHA-256', channelBytes)
-    const sha256base62 = arrayBufferToBase62(sha256)
-    if (sha256base62 === hash)
-      // first try current approach
-      return true
-    else
-      // try old approach
-      return await this.#testHash(channelBytes, hash)
-  }
-
-  /**
-   * 'Compare' two channel IDs. Note that this is not constant time.
-   */
-  async verifyChannelId(owner_key: JsonWebKey, channel_id: SBChannelId): Promise<boolean> {
-    return await this.compareHashWithKey(channel_id, owner_key)
-  }
 
   /**
    * SBCrypto.generatekeys()
@@ -1743,17 +1668,6 @@ export class SBCrypto {  /******************************************************
   /** Standardized 'ab2str()' function, array buffer to string. */
   ab2str(buffer: Uint8Array): string {
     return new TextDecoder('utf-8').decode(buffer);
-  }
-
-  /**
-   * Compare JSON keys, true if the 'same', false if different. We consider
-   * them "equal" if both have 'x' and 'y' properties and they are the same.
-   * (Which means it doesn't care about which or either being public or private)
-   */
-  compareKeys(key1: Dictionary<any>, key2: Dictionary<any>): boolean {
-    if (key1 != null && key2 != null && typeof key1 === 'object' && typeof key2 === 'object')
-      return key1['x'] === key2['x'] && key1['y'] === key2['y'];
-    return false;
   }
 
 
@@ -2495,16 +2409,24 @@ export class SBChannelKeys extends SB384 {
 
 const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5 // allow for base64 overhead plus extra
 
+/**
+ * Every message being sent needs to at some point be in the form
+ * of an SBMessage object. Upon creation, the provided contents
+ * (which can be any JS object pretty much) is encrypted and
+ * wrapped in a ChannelMessage object, which is what is later
+ * sent to the channel (or socket).
+ */
 class SBMessage {
   [SB_MESSAGE_SYMBOL] = true
-  ready
+  sbMessageReady: Promise<SBMessage>
+  static ReadyFlag = Symbol('SBMessageReadyFlag'); // see below for '(this as any)[<class>.ReadyFlag] = false;'
+
+  #message?: ChannelMessage   // the message that's set to send
+  #encryptionKey?: CryptoKey  // the key that was used to encrypt it
+
   // channel: Channel
-  // contents?: SBMessageContents
-  message?: ChannelMessage
-
-  #encryptionKey?: CryptoKey
+  // contents?: SBMessageContents  
   // #sendToPubKey?: JsonWebKey
-
 
   /**
    * SBMessage
@@ -2512,13 +2434,14 @@ class SBMessage {
    * Body should be below 32KiB, though it tolerates up to 64KiB
    *
    */
-  constructor(public channel: Channel, contents: any, ttl?: number) {
-    this.ready = new Promise<SBMessage>(async (resolve) => {
+  constructor(public channel: Channel, private contents: any, ttl?: number) {
+    this.sbMessageReady = new Promise<SBMessage>(async (resolve) => {
       await channel.channelReady
       // this.#encryptionKey = this.channel.encryptionKey
       this.#encryptionKey = await this.channel.protocol.key()
-      this.message = await sbCrypto.wrap(contents, this.channel.userId, this.#encryptionKey, this.channel.privateKey)
-      this.message.ttl = ttl ? ttl : 0xF // default is inifinte
+      this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, this.#encryptionKey, this.channel.signKey)
+      this.#message.ttl = ttl ? ttl : 0xF // default is inifinte
+      ;(this as any)[SBMessage.ReadyFlag] = true
       resolve(this)
     })
   }
@@ -2532,9 +2455,13 @@ class SBMessage {
   //   return( { contents: b, encryptedContents: c, iv: iv, timestamp: timestamp } )
   // }
 
+  get ready() { return this.sbMessageReady }
+  get SBMessageReadyFlag() { return (this as any)[SBMessage.ReadyFlag] }
 
-  @Ready get encryptionKey() { return this.#encryptionKey }
+  // @Ready get encryptionKey() { return this.#encryptionKey }
   // get sendToPubKey() { return this.#sendToPubKey }
+
+  @Ready get message() { return this.#message! }
 
   /**
    * SBMessage.send()
@@ -2642,6 +2569,7 @@ class Channel extends SBChannelKeys {
 
   get ready() { return this.channelReady }
   get ChannelReadyFlag(): boolean { return (this as any)[Channel.ReadyFlag] }
+
   @Memoize @Ready get protocol() { return this.#protocol }
   @Memoize @Ready get api() { return this } // for compatibility
 
@@ -2811,8 +2739,14 @@ class Channel extends SBChannelKeys {
     });
   }
 
-  send(_msg: SBMessage | string): Promise<string> {
-    return Promise.reject("Channel.send(): abstract method, must be implemented in subclass")
+  @Ready async send(msg: SBMessage | any): Promise<string> {
+    // return Promise.reject("Channel.send(): abstract method, must be implemented in subclass")
+    const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
+    await sbm.ready // message needs to be ready
+    await this.ready // and 'we' (channel) need to be ready
+    const messagePayload = assemblePayload(sbm.message)
+    _sb_assert(messagePayload, "Channel.send(): failed to assemble message")
+    return this.#callApi('/send', messagePayload)
   }
 
   // this is mostly used for 'are you there?' calls
@@ -3406,8 +3340,6 @@ class ChannelSocket extends Channel {
   //   this.#resolveFirstMessage(this)
   // }
 
-
-
   get ready() { return this.channelSocketReady }
   // get readyFlag(): boolean { return this.#ChannelSocketReadyFlag }
   get ChannelSocketReadyFlag(): boolean { return (this as any)[ChannelSocket.ReadyFlag] }
@@ -3439,7 +3371,7 @@ class ChannelSocket extends Channel {
     */
   @VerifyParameters
   send(msg: SBMessage | any): Promise<string> {
-    const message: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
+    const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
     _sb_assert(this.#ws.websocket, "ChannelSocket.send() called before ready")
     if (this.#ws.closed) {
       if (this.#traceSocket) console.info("send() triggered reset of #readyPromise() (normal)")
@@ -3448,16 +3380,15 @@ class ChannelSocket extends Channel {
         ; (this as any)[ChannelSocket.ReadyFlag] = false;
     }
     return new Promise(async (resolve, reject) => {
-      await message.ready // message needs to be ready
+      await sbm.ready // message needs to be ready
       await this.ready // and 'we' (channel socket) need to be ready
       if (!this.ChannelSocketReadyFlag) reject("ChannelSocket.send() is confused - ready or not?")
       switch (this.#ws.websocket!.readyState) {
         case 1: // OPEN
           if (this.#traceSocket)
-            console.log("++++++++ ChannelSocket.send() will send message:", Object.assign({}, message))
-          const messagePayload = assemblePayload(message)
+            console.log("++++++++ ChannelSocket.send() will send message:", Object.assign({}, sbm.message))
+          const messagePayload = assemblePayload(sbm.message)
           _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message")
-
           // we keep track of a hash of things we've sent so we can track when we see them
           const hash = await crypto.subtle.digest('SHA-256', messagePayload!)
           const messageHash = arrayBufferToBase64(hash)
