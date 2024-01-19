@@ -74,6 +74,7 @@ export interface EncryptParams {
     additionalData?: BufferSource;
     tagLength?: number;
 }
+declare function setDebugLevel(dbg1: boolean, dbg2?: boolean): void;
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
 export type SBObjectType = 'f' | 'p' | 'b' | 't';
@@ -147,14 +148,10 @@ export declare enum KeyPrefix {
 }
 export declare function hydrateKey(privKey: SBUserPrivateKey, pubKey?: SBUserPrivateKey): SBUserPrivateKey | undefined;
 export declare class SBCrypto {
-    #private;
     generateIdKey(buf: ArrayBuffer): Promise<{
         id_binary: ArrayBuffer;
         key_material: ArrayBuffer;
     }>;
-    extractPubKey(privateKey: JsonWebKey): JsonWebKey | null;
-    compareHashWithKey(hash: SB384Hash, key: JsonWebKey | null): Promise<boolean>;
-    verifyChannelId(owner_key: JsonWebKey, channel_id: SBChannelId): Promise<boolean>;
     generateKeys(): Promise<CryptoKeyPair>;
     importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey | undefined>;
@@ -166,7 +163,6 @@ export declare class SBCrypto {
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
     str2ab(string: string): Uint8Array;
     ab2str(buffer: Uint8Array): string;
-    compareKeys(key1: Dictionary<any>, key2: Dictionary<any>): boolean;
 }
 declare const SB_CHANNEL_MESSAGE_SYMBOL: unique symbol;
 declare const SB_CHANNEL_API_BODY_SYMBOL: unique symbol;
@@ -211,11 +207,14 @@ export declare class SBChannelKeys extends SB384 {
 declare class SBMessage {
     #private;
     channel: Channel;
+    private contents;
     [SB_MESSAGE_SYMBOL]: boolean;
-    ready: Promise<SBMessage>;
-    message?: ChannelMessage;
+    sbMessageReady: Promise<SBMessage>;
+    static ReadyFlag: symbol;
     constructor(channel: Channel, contents: any, ttl?: number);
-    get encryptionKey(): CryptoKey | undefined;
+    get ready(): Promise<SBMessage>;
+    get SBMessageReadyFlag(): any;
+    get message(): ChannelMessage;
     send(): Promise<string>;
 }
 export interface SBProtocol {
@@ -244,7 +243,8 @@ declare class Channel extends SBChannelKeys {
     deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<Message | undefined>;
     getLastMessageTimes(): void;
     getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
-    send(_msg: SBMessage | string): Promise<string>;
+    getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
+    send(msg: SBMessage | any): Promise<string>;
     getChannelKeys(): Promise<SBChannelData>;
     updateCapacity(capacity: number): Promise<any>;
     getCapacity(): Promise<any>;
@@ -329,7 +329,7 @@ declare class Snackabra {
     get crypto(): SBCrypto;
     get version(): string;
 }
-export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, };
+export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
 export declare var SB: {
     Snackabra: typeof Snackabra;
     SBMessage: typeof SBMessage;
@@ -342,5 +342,6 @@ export declare var SB: {
     base62ToArrayBuffer: typeof base62ToArrayBuffer;
     sbCrypto: SBCrypto;
     version: string;
+    setDebugLevel: typeof setDebugLevel;
 };
 //# sourceMappingURL=snackabra.d.ts.map

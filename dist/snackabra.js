@@ -70,18 +70,17 @@ export function validate_ChannelMessage(body) {
         throw new Error(`invalid ChannelMessage (null or undefined)`);
     else if (body[SB_CHANNEL_MESSAGE_SYMBOL])
         return body;
-    else if ((!body._id || (typeof body._id === 'string' && body._id.length === 86))
+    else if ((body.f && typeof body.f === 'string' && body.f.length === 43)
+        && (body.c && body.c instanceof ArrayBuffer)
+        && (body.ts && Number.isInteger(body.ts))
+        && (body.iv && body.iv instanceof Uint8Array && body.iv.length === 12)
+        && (body.s && body.s instanceof ArrayBuffer)
+        && (!body._id || (typeof body._id === 'string' && body._id.length === 86))
         && (!body.ready || typeof body.ready === 'boolean')
         && (!body.timestampPrefix || (typeof body.timestampPrefix === 'string' && body.timestampPrefix.length === 26))
         && (!body.channelId || (typeof body.channelId === 'string' && body.channelId.length === 43))
         && (!body.i2 || (typeof body.i2 === 'string' && /^[a-zA-Z0-9_]{4}$/.test(body.i2)))
-        && (!body.unencryptedContents || body.unencryptedContents instanceof ArrayBuffer)
-        && (!body.f || typeof body.f === 'string' && body.f.length === 43)
-        && (!body.c || body.c instanceof ArrayBuffer)
-        && (!body.ts || Number.isInteger(body.ts))
-        && (!body.ttl || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
-        && (!body.iv || body.iv instanceof ArrayBuffer)
-        && (!body.s || body.s instanceof ArrayBuffer)) {
+        && (!body.ttl || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))) {
         return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true };
     }
     else {
@@ -101,6 +100,15 @@ if (globalThis.configuration && globalThis.configuration.DEBUG === true) {
         if (DBG)
             console.warn("++++ ALSO setting DBG2 (verbose) ++++");
     }
+}
+function setDebugLevel(dbg1, dbg2) {
+    DBG = dbg1;
+    if (dbg2)
+        DBG2 = dbg1 && dbg2;
+    if (DBG)
+        console.warn("++++ [setDebugLevel]: setting DBG to TRUE ++++");
+    if (DBG2)
+        console.warn("++++ [setDebugLevel]: ALSO setting DBG2 to TRUE (verbose) ++++");
 }
 export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 7200, 86400, 604800, -1, -1, -1, -1, -1, Infinity];
 export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One minute', 'Five minutes', 'Thirty minutes', 'Two hours', '24 hours', '7 days (one week)', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)'];
@@ -618,6 +626,8 @@ function _assemblePayload(data) {
     }
 }
 export function assemblePayload(data) {
+    if (DBG && data instanceof ArrayBuffer)
+        console.warn('[assemblePayload] Warning: data is already an ArrayBuffer, make sure you are not double-encoding');
     return _assemblePayload({ ver003: true, payload: data });
 }
 function deserializeValue(buffer, type) {
@@ -882,64 +892,6 @@ export class SBCrypto {
             }
         });
     }
-    extractPubKey(privateKey) {
-        try {
-            const pubKey = { ...privateKey };
-            delete pubKey.d;
-            delete pubKey.dp;
-            delete pubKey.dq;
-            delete pubKey.q;
-            delete pubKey.qi;
-            pubKey.key_ops = [];
-            return pubKey;
-        }
-        catch (e) {
-            console.error(e);
-            return null;
-        }
-    }
-    async #testHash(channelBytes, channel_id) {
-        const MAX_REHASH_ITERATIONS = 160;
-        let count = 0;
-        let hash = arrayBufferToBase64(channelBytes);
-        while (hash !== channel_id) {
-            if (count++ > MAX_REHASH_ITERATIONS)
-                return false;
-            channelBytes = await crypto.subtle.digest('SHA-384', channelBytes);
-            hash = arrayBufferToBase64(channelBytes);
-        }
-        return true;
-    }
-    async compareHashWithKey(hash, key) {
-        if (!hash || !key)
-            return false;
-        let x = key.x;
-        let y = key.y;
-        if (!(x && y)) {
-            try {
-                const tryParse = jsonParseWrapper(key, "L1787");
-                if (tryParse.x)
-                    x = tryParse.x;
-                if (tryParse.y)
-                    y = tryParse.y;
-            }
-            catch {
-                return false;
-            }
-        }
-        const xBytes = base64ToArrayBuffer(decodeB64Url(x));
-        const yBytes = base64ToArrayBuffer(decodeB64Url(y));
-        const channelBytes = _appendBuffer(xBytes, yBytes);
-        const sha256 = await crypto.subtle.digest('SHA-256', channelBytes);
-        const sha256base62 = arrayBufferToBase62(sha256);
-        if (sha256base62 === hash)
-            return true;
-        else
-            return await this.#testHash(channelBytes, hash);
-    }
-    async verifyChannelId(owner_key, channel_id) {
-        return await this.compareHashWithKey(channel_id, owner_key);
-    }
     async generateKeys() {
         try {
             return await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-384' }, true, ['deriveKey']);
@@ -1051,10 +1003,9 @@ export class SBCrypto {
         const view = new DataView(new ArrayBuffer(8));
         view.setFloat64(0, timestamp);
         const message = {
-            unencryptedContents: body,
+            f: sender,
             c: await sbCrypto.encrypt(payload, encryptionKey, { iv: iv, additionalData: view }),
             iv: iv,
-            f: sender,
             s: await sbCrypto.sign(signingKey, payload),
             ts: timestamp,
         };
@@ -1090,11 +1041,6 @@ export class SBCrypto {
     }
     ab2str(buffer) {
         return new TextDecoder('utf-8').decode(buffer);
-    }
-    compareKeys(key1, key2) {
-        if (key1 != null && key2 != null && typeof key1 === 'object' && typeof key2 === 'object')
-            return key1['x'] === key2['x'] && key1['y'] === key2['y'];
-        return false;
     }
 }
 function Memoize(target, propertyKey, descriptor) {
@@ -1650,21 +1596,28 @@ __decorate([
 const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
 class SBMessage {
     channel;
+    contents;
     [SB_MESSAGE_SYMBOL] = true;
-    ready;
-    message;
+    sbMessageReady;
+    static ReadyFlag = Symbol('SBMessageReadyFlag');
+    #message;
     #encryptionKey;
     constructor(channel, contents, ttl) {
         this.channel = channel;
-        this.ready = new Promise(async (resolve) => {
+        this.contents = contents;
+        this.sbMessageReady = new Promise(async (resolve) => {
             await channel.channelReady;
             this.#encryptionKey = await this.channel.protocol.key();
-            this.message = await sbCrypto.wrap(contents, this.channel.userId, this.#encryptionKey, this.channel.privateKey);
-            this.message.ttl = ttl ? ttl : 0xF;
+            this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, this.#encryptionKey, this.channel.signKey);
+            if (ttl)
+                this.#message.ttl = ttl;
+            this[SBMessage.ReadyFlag] = true;
             resolve(this);
         });
     }
-    get encryptionKey() { return this.#encryptionKey; }
+    get ready() { return this.sbMessageReady; }
+    get SBMessageReadyFlag() { return this[SBMessage.ReadyFlag]; }
+    get message() { return this.#message; }
     send() {
         return new Promise((resolve, reject) => {
             this.ready.then(() => {
@@ -1682,7 +1635,7 @@ class SBMessage {
 }
 __decorate([
     Ready
-], SBMessage.prototype, "encryptionKey", null);
+], SBMessage.prototype, "message", null);
 export class BasicProtocol {
     #key;
     #channel;
@@ -1828,8 +1781,24 @@ class Channel extends SBChannelKeys {
             });
         });
     }
-    send(_msg) {
-        return Promise.reject("Channel.send(): abstract method, must be implemented in subclass");
+    getMessageKeys(currentMessagesLength = 100, paginate = false) {
+        return new Promise(async (resolve, _reject) => {
+            _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)");
+            let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
+            const messages = await this.#callApi('/getMessageKeys?currentMessagesLength=' + currentMessagesLength + cursorOption);
+            _sb_assert(messages, "Channel.getMessageKeys: no messages (empty/null response)");
+            if (DBG)
+                console.log("getMessageKeys\n", messages);
+            resolve(messages);
+        });
+    }
+    async send(msg) {
+        const sbm = msg instanceof SBMessage ? msg : new SBMessage(this, msg);
+        await sbm.ready;
+        await this.ready;
+        const messagePayload = assemblePayload(sbm.message);
+        _sb_assert(messagePayload, "Channel.send(): failed to assemble message");
+        return this.#callApi('/send', messagePayload);
     }
     getChannelKeys() {
         return this.#callApi('/getChannelKeys');
@@ -1908,6 +1877,9 @@ __decorate([
     Memoize,
     Ready
 ], Channel.prototype, "api", null);
+__decorate([
+    Ready
+], Channel.prototype, "send", null);
 __decorate([
     Ready
 ], Channel.prototype, "getChannelKeys", null);
@@ -2052,7 +2024,7 @@ class ChannelSocket extends Channel {
             console.log("==== jslib ChannelSocket: Tracing enabled ====");
     }
     send(msg) {
-        const message = msg instanceof SBMessage ? msg : new SBMessage(this, msg);
+        const sbm = msg instanceof SBMessage ? msg : new SBMessage(this, msg);
         _sb_assert(this.#ws.websocket, "ChannelSocket.send() called before ready");
         if (this.#ws.closed) {
             if (this.#traceSocket)
@@ -2061,15 +2033,15 @@ class ChannelSocket extends Channel {
             this[_a.ReadyFlag] = false;
         }
         return new Promise(async (resolve, reject) => {
-            await message.ready;
+            await sbm.ready;
             await this.ready;
             if (!this.ChannelSocketReadyFlag)
                 reject("ChannelSocket.send() is confused - ready or not?");
             switch (this.#ws.websocket.readyState) {
                 case 1:
                     if (this.#traceSocket)
-                        console.log("++++++++ ChannelSocket.send() will send message:", Object.assign({}, message));
-                    const messagePayload = assemblePayload(message);
+                        console.log("++++++++ ChannelSocket.send() will send message:", Object.assign({}, sbm.message));
+                    const messagePayload = assemblePayload(sbm.message);
                     _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message");
                     const hash = await crypto.subtle.digest('SHA-256', messagePayload);
                     const messageHash = arrayBufferToBase64(hash);
@@ -2681,7 +2653,7 @@ class Snackabra {
         return this.#version;
     }
 }
-export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, };
+export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
 export var SB = {
     Snackabra: Snackabra,
     SBMessage: SBMessage,
@@ -2693,7 +2665,8 @@ export var SB = {
     arrayBufferToBase62: arrayBufferToBase62,
     base62ToArrayBuffer: base62ToArrayBuffer,
     sbCrypto: sbCrypto,
-    version: version
+    version: version,
+    setDebugLevel: setDebugLevel,
 };
 if (!globalThis.SB)
     globalThis.SB = SB;

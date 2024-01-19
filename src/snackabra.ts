@@ -229,7 +229,7 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
 export interface ChannelMessage {
   [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean,
 
-  // strictly speaking, only these five are strictly necessary when *sending*
+  // strictly speaking, only these five are necessary when *sending*
   f?: SBUserId, // 'from': public (hash) of sender, matches publicKey of sender, verified by channel server
   c?: ArrayBuffer, // encrypted contents
   iv?: ArrayBuffer, // nonce
@@ -246,6 +246,7 @@ export interface ChannelMessage {
   // whatever is being sent; should (must) be stripped when sent
   // when encrypted, this is packaged as payload (and then encrypted)
   // (signing is done on the payload version)
+  // internally before sending, it's referenced as-is
   unencryptedContents?: any,
 
   ready?: boolean, // if present, signals other side is ready to receive messages (rest of message ignored)
@@ -253,25 +254,61 @@ export interface ChannelMessage {
   ttl?: number, // Value 0-15; if it's missing it's 15/0xF (infinite); if it's 1-7 it's duplicated to subchannels
 }
 
+// {
+//   unencryptedContents: 'Hello world!',
+//   c: ArrayBuffer {
+//     [Uint8Contents]: <cd f7 b1 57 96 23 ad 23 44 59 ad 3c 5d 4d e2 2d b4 c5 67 e8 d6 f5
+// 79 fb 36 e3 7d 12 f1 3e 18 59 ee f1 04 d3 c7 5d b6 b6 d7 69 25 61 60 37 27 15 f2 87 18 4c 8c 5d 9b
+// 6d 8d 63 d3 b6 d0 55 15 b3 e8 0f 5e 7b 62 44 f7 da 19 15 6a f0 b1 16 52 60 9c a7 4f d0 88 18 74 ee
+// 7a 0f 72 04 85 34 71 37 78 b0 db 10 ... 14 more bytes>,
+//     byteLength: 114
+//   },
+//   iv: Uint8Array(12) [
+//     168, 154,  13, 137,
+//     169,  48, 234, 250,
+//      11, 233, 182, 116
+//   ],
+//   f: 'wqGNRnjPd3biQkEKOTt3ONKplcenxcUhVfiAGw8xM0r',
+//   s: ArrayBuffer {
+//     [Uint8Contents]: <32 c2 c6 4c e8 0a 96 23 aa 2d 8c c7 14 03 e5 d1 da af 13 88 2f 83
+// 6a 78 c2 7a fb 5e 32 64 c8 ff ea 89 7d ec af a4 de 08 e1 de c3 db 3a a8 d4 91 f7 cc ea 01 ee ff 5e
+// 02 dc 14 04 48 ad 67 92 ed 5c 02 50 84 09 31 10 cb da d1 94 e3 2e 35 1d 10 c8 82 74 b2 a3 61 b2 85
+// f1 6a e8 b5 1b 15 9c 6a>,
+//     byteLength: 96
+//   },
+//   ts: 1705694578850,
+//   ttl: 15
+// }
+
+
+  // // strictly speaking, only these five are necessary when *sending*
+  // f?: SBUserId, // 'from': public (hash) of sender, matches publicKey of sender, verified by channel server
+  // c?: ArrayBuffer, // encrypted contents
+  // iv?: ArrayBuffer, // nonce
+  // s?: ArrayBuffer, // signature
+  // ts?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
+
+  
 export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
   if (!body) throw new Error(`invalid ChannelMessage (null or undefined)`)
   else if (body[SB_CHANNEL_MESSAGE_SYMBOL]) return body as ChannelMessage
   else if (
+    // these five are minimally required
+       (body.f  && typeof body.f === 'string' && body.f.length === 43)
+    && (body.c  && body.c instanceof ArrayBuffer)
+    && (body.ts && Number.isInteger(body.ts))
+    && (body.iv && body.iv instanceof Uint8Array && body.iv.length === 12)
+    && (body.s  && body.s instanceof ArrayBuffer)
+
     // todo: might as well add regexes to some of these
-    (!body._id || (typeof body._id === 'string' && body._id.length === 86))
+    && (!body._id || (typeof body._id === 'string' && body._id.length === 86))
     && (!body.ready || typeof body.ready === 'boolean')
     && (!body.timestampPrefix    || (typeof body.timestampPrefix === 'string' && body.timestampPrefix.length === 26))
-    && (!body.channelId     || (typeof body.channelId === 'string' && body.channelId.length === 43))
+    && (!body.channelId          || (typeof body.channelId === 'string' && body.channelId.length === 43))
     // 'i2' is a bit more complicated, it must be 4xbase62 (plus '_'), so we regex against [a-zA-Z0-9_]
-    && (!body.i2    || (typeof body.i2 === 'string' && /^[a-zA-Z0-9_]{4}$/.test(body.i2)))
-    && (!body.unencryptedContents     || body.unencryptedContents instanceof ArrayBuffer)
-    && (!body.f     || typeof body.f === 'string' && body.f.length === 43)
-    && (!body.c    || body.c instanceof ArrayBuffer)
-    && (!body.ts    || Number.isInteger(body.ts))
-    // also check body.ttl is a whole integer (cannot be a fraction)
-    && (!body.ttl   || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
-    && (!body.iv    || body.iv instanceof ArrayBuffer)
-    && (!body.s     || body.s instanceof ArrayBuffer)
+    && (!body.i2                 || (typeof body.i2 === 'string' && /^[a-zA-Z0-9_]{4}$/.test(body.i2)))
+    // body.ttl must be 0-15 (4 bits)
+    && (!body.ttl                || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
   ) {
     return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true } as ChannelMessage
   } else {
@@ -327,6 +364,13 @@ if ((globalThis as any).configuration && (globalThis as any).configuration.DEBUG
     DBG2 = true
     if (DBG) console.warn("++++ ALSO setting DBG2 (verbose) ++++");
   }
+}
+// some cases we need explit access to poke these
+function setDebugLevel(dbg1: boolean, dbg2?: boolean) {
+  DBG = dbg1
+  if (dbg2) DBG2 = dbg1 && dbg2
+  if (DBG) console.warn("++++ [setDebugLevel]: setting DBG to TRUE ++++");
+  if (DBG2) console.warn("++++ [setDebugLevel]: ALSO setting DBG2 to TRUE (verbose) ++++");
 }
 
 // index/number of seconds/string description of TTL values (0-15)
@@ -1123,6 +1167,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
  * of an arbitrary set of (named) binary objects.
  */
 export function assemblePayload(data: any): ArrayBuffer | null {
+  if (DBG && data instanceof ArrayBuffer) console.warn('[assemblePayload] Warning: data is already an ArrayBuffer, make sure you are not double-encoding');
   return _assemblePayload({ ver003: true, payload: data })
 }
 
@@ -1619,12 +1664,12 @@ export class SBCrypto {  /******************************************************
     const view = new DataView(new ArrayBuffer(8));
     view.setFloat64(0, timestamp);
     const message: ChannelMessage = {
-      unencryptedContents: body, // payload!,
+      f: sender,
       c: await sbCrypto.encrypt(payload!, encryptionKey, { iv: iv, additionalData: view }),
       iv: iv,
-      f: sender,
       s: await sbCrypto.sign(signingKey, payload!),
       ts: timestamp,
+      // unencryptedContents: body, // 'original' payload' .. we do NOT include this
     }
     return message
   }
@@ -2440,20 +2485,12 @@ class SBMessage {
       // this.#encryptionKey = this.channel.encryptionKey
       this.#encryptionKey = await this.channel.protocol.key()
       this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, this.#encryptionKey, this.channel.signKey)
-      this.#message.ttl = ttl ? ttl : 0xF // default is inifinte
+      // this.#message.ttl = ttl ? ttl : 0xF // default is inifinite
+      if (ttl) this.#message.ttl = ttl
       ;(this as any)[SBMessage.ReadyFlag] = true
       resolve(this)
     })
   }
-
-  // async wrap(k: CryptoKey, b: ArrayBuffer): Promise<ChannelMessage> {
-  //   const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
-  //   const view = new DataView(new ArrayBuffer(8));
-  //   view.setFloat64(0, timestamp);
-  //   const iv = crypto.getRandomValues(new Uint8Array(12))
-  //   const c = await sbCrypto.encrypt(b, k, { iv: iv, additionalData: view })
-  //   return( { contents: b, encryptedContents: c, iv: iv, timestamp: timestamp } )
-  // }
 
   get ready() { return this.sbMessageReady }
   get SBMessageReadyFlag() { return (this as any)[SBMessage.ReadyFlag] }
@@ -2701,14 +2738,8 @@ class Channel extends SBChannelKeys {
     // });
   }
 
-  /**
-   * Channel.getOldMessages
-   * 
+  /** 
    * Will return most recent messages from the channel.
-   * 
-   * @param currentMessagesLength - number to fetch (default 100)
-   * @param paginate - if true, will paginate from last request (default false)
-   *
    */
   getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
     // todo: add IndexedDB caching - see above
@@ -2736,6 +2767,20 @@ class Channel extends SBChannelKeys {
           console.error(msg)
           reject(msg)
         })
+    });
+  }
+
+  getMessageKeys(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Set<string>> {
+    // todo: add IndexedDB caching - see above
+    return new Promise(async (resolve, _reject) => {
+      _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)")
+      // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)
+      let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
+      const messages = await this.#callApi('/getMessageKeys?currentMessagesLength=' + currentMessagesLength + cursorOption)
+      // todo: empty is valid
+      _sb_assert(messages, "Channel.getMessageKeys: no messages (empty/null response)")
+      if (DBG) console.log("getMessageKeys\n", messages)
+      resolve(messages)
     });
   }
 
@@ -3434,6 +3479,7 @@ class ChannelSocket extends Channel {
 
 /******************************************************************************************************/
 //#region STORAGE: SBObjectHandle, StorageApi
+
 /**
  * SBObjectHandle
  */
@@ -3694,19 +3740,6 @@ export class StorageApi {
   constructor(storageServer: string) {
     _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)')
     this.storageServer = storageServer
-
-    // channelServer: string;
-    // shardServer?: string;
-    // sbServer: SBServer;
-    // constructor(server: string, channelServer: string, shardServer?: string) {
-    // if (typeof sbServerOrStorageServer === 'object') {
-    //   this.storageServer = sbServerOrStorageServer.storage_server
-    //   // const { storage_server, /* channel_server, */ shard_server } = sbServer
-    //   // this.server = storage_server + '/api/v1';
-    //   // // this.channelServer = channel_server + '/api/room/'
-    //   // // if (shard_server) this.shardServer = shard_server
-    //   // this.sbServer = sbServer
-    // } else
   }
 
   /**
@@ -3774,23 +3807,6 @@ export class StorageApi {
       }
     });
   }
-
-  // // returns a storage token (promise); basic consumption of channel budget
-  // getStorageToken(roomId: SBChannelId, size: number): Promise<string> {
-  //   return new Promise((resolve, reject) => {
-  //     SBFetch(this.channelServer + stripA32(roomId) + '/storageRequest?size=' + size)
-  //       .then((r) => r.json())
-  //       .then((storageTokenReq) => {
-  //         if (storageTokenReq.hasOwnProperty('error')) reject(`storage token request error (${storageTokenReq.error})`)
-  //         resolve(JSON.stringify(storageTokenReq))
-  //       })
-  //       .catch((e) => {
-  //         const msg = `getStorageToken] storage token request failed: ${e}`
-  //         console.error(msg)
-  //         reject(msg)
-  //       });
-  //   });
-  // }
 
   /** @private
    * get "permission" to store in the form of a token
@@ -4401,6 +4417,7 @@ export {
   arrayBufferToBase62,
   base62ToArrayBuffer,
   version,
+  setDebugLevel,
 };
 
 export var SB = {
@@ -4414,7 +4431,8 @@ export var SB = {
   arrayBufferToBase62: arrayBufferToBase62,
   base62ToArrayBuffer: base62ToArrayBuffer,
   sbCrypto: sbCrypto,
-  version: version
+  version: version,
+  setDebugLevel: setDebugLevel,
 };
 
 if (!(globalThis as any).SB)
