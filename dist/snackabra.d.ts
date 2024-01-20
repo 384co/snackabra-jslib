@@ -35,9 +35,10 @@ export interface ChannelApiBody {
     userId: SBUserId;
     userPublicKey: SBUserPublicKey;
     isOwner?: boolean;
-    apiPayload?: ArrayBuffer;
     timestamp: number;
     sign: ArrayBuffer;
+    apiPayloadBuf?: ArrayBuffer;
+    apiPayload?: any;
 }
 export declare function validate_ChannelApiBody(body: any): ChannelApiBody;
 export interface ChannelMessage {
@@ -203,6 +204,8 @@ export declare class SBChannelKeys extends SB384 {
     get owner(): boolean | "" | undefined;
     get channelId(): string | undefined;
     get handle(): SBChannelHandle;
+    callApi(path: string): Promise<any>;
+    callApi(path: string, apiPayload: any): Promise<any>;
 }
 declare class SBMessage {
     #private;
@@ -244,6 +247,7 @@ declare class Channel extends SBChannelKeys {
     getLastMessageTimes(): void;
     getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
+    getMessages(messageKeys: Set<string>): Promise<Array<ChannelMessage>>;
     send(msg: SBMessage | any): Promise<string>;
     getChannelKeys(): Promise<SBChannelData>;
     updateCapacity(capacity: number): Promise<any>;
