@@ -156,9 +156,8 @@ export declare class SBCrypto {
     generateKeys(): Promise<CryptoKeyPair>;
     importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey | undefined>;
-    deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer>;
-    wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey): Promise<ChannelMessage>;
+    wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey, options?: MessageOptions): Promise<ChannelMessage>;
     unwrap(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
     sign(signKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
@@ -207,49 +206,67 @@ export declare class SBChannelKeys extends SB384 {
     callApi(path: string): Promise<any>;
     callApi(path: string, apiPayload: any): Promise<any>;
 }
+export interface MessageOptions {
+    ttl?: number;
+    sendTo?: SBUserId;
+    subChannel?: string;
+    protocol?: SBProtocol;
+}
 declare class SBMessage {
     #private;
     channel: Channel;
-    private contents;
+    contents: any;
+    options: MessageOptions;
     [SB_MESSAGE_SYMBOL]: boolean;
     sbMessageReady: Promise<SBMessage>;
     static ReadyFlag: symbol;
-    constructor(channel: Channel, contents: any, ttl?: number);
+    constructor(channel: Channel, contents: any, options?: MessageOptions);
     get ready(): Promise<SBMessage>;
     get SBMessageReadyFlag(): any;
     get message(): ChannelMessage;
     send(): Promise<string>;
 }
 export interface SBProtocol {
-    key(): Promise<CryptoKey>;
+    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
+    decryptionKey(channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
 }
-export declare class BasicProtocol implements SBProtocol {
+export declare class Protocol_AES_GCM_384 implements SBProtocol {
     #private;
-    constructor(channel: Channel);
-    key(): Promise<CryptoKey>;
-    get channel(): Channel;
+    private entropy;
+    private salt;
+    private iterations;
+    constructor(entropy: string, salt: ArrayBuffer, iterations?: number);
+    encryptionKey(_msg: SBMessage): Promise<CryptoKey>;
+    decryptionKey(_channel: Channel, _msg: ChannelMessage): Promise<CryptoKey>;
+}
+export declare class Protocol_ECDH implements SBProtocol {
+    #private;
+    constructor();
+    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
+    decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined>;
 }
 declare class Channel extends SBChannelKeys {
     #private;
+    protocol?: SBProtocol | undefined;
     channelReady: Promise<Channel>;
     static ReadyFlag: symbol;
     locked?: boolean;
     adminData?: Dictionary<any>;
+    visitors: Map<SBUserId, SBUserPrivateKey>;
     constructor();
     constructor(key: SBUserPrivateKey, protocol?: SBProtocol);
     constructor(handle: SBChannelHandle, protocol?: SBProtocol);
     get ready(): Promise<Channel>;
     get ChannelReadyFlag(): boolean;
-    get protocol(): SBProtocol;
     get api(): this;
     create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<SBChannelHandle>;
-    deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<Message | undefined>;
+    deCryptChannelMessage(channel: Channel, id: string, buf: ArrayBuffer): Promise<any>;
     getLastMessageTimes(): void;
-    getOldMessages(currentMessagesLength?: number, paginate?: boolean): Promise<Array<ChannelMessage>>;
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
-    getMessages(messageKeys: Set<string>): Promise<Array<ChannelMessage>>;
+    getMessages(messageKeys: Set<string>): Promise<Map<string, ChannelMessage>>;
     send(msg: SBMessage | any): Promise<string>;
     getChannelKeys(): Promise<SBChannelData>;
+    getPubKeys(): Promise<Map<SBUserId, SBUserPublicKey>>;
     updateCapacity(capacity: number): Promise<any>;
     getCapacity(): Promise<any>;
     getStorageLimit(): Promise<any>;

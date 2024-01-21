@@ -66,7 +66,7 @@ export function validate_SBChannelHandle(data: SBChannelHandle): SBChannelHandle
   else if (_checkChannelHandle(data)) {
     return { ...data, [SB_CHANNEL_HANDLE_SYMBOL]: true } as SBChannelHandle
   } else {
-    if (DBG) console.error('invalid SBChannelHandle ... trying to ingest:\n', data)
+    if (DBG2) console.error('invalid SBChannelHandle ... trying to ingest:\n', data)
     throw new Error(`invalid SBChannelHandle`)
   }
 }
@@ -313,7 +313,7 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
   ) {
     return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true } as ChannelMessage
   } else {
-    if (DBG) console.error('invalid ChannelMessage ... trying to ingest:\n', body)
+    if (DBG2) console.error('invalid ChannelMessage ... trying to ingest:\n', body)
     throw new Error(`invalid ChannelMessage`)
   }
 }
@@ -655,7 +655,7 @@ function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any> 
           if (DBG) console.error("[SBApiFetch] error:\n", apiErrorMsg)
           reject(new Error(apiErrorMsg))
         } else {
-          if (DBG) console.log(
+          if (DBG2) console.log(
             "[SBApiFetch] Success:\n",
             SEP, input, '\n',
             SEP, retValue, '\n', SEP)
@@ -1601,50 +1601,6 @@ export class SBCrypto {  /******************************************************
       })
   }
 
-  /** Takes a private and public key, and returns a Promise to a cryptoKey */
-  deriveKey(privateKey: CryptoKey, publicKey: CryptoKey, type: 'AES-GCM' | 'HMAC', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey> {
-    _sb_assert(privateKey && publicKey, "Either private or public key is null or undefined (L1836)")
-    return new Promise(async (resolve, reject) => {
-      let _keyAlgorithm: any
-      switch (type) {
-        case 'AES-GCM': {
-          _keyAlgorithm = { name: 'AES-GCM', length: 256 }
-          break
-        }
-        case 'HMAC': {
-          _keyAlgorithm = { name: 'HMAC', hash: 'SHA-256', length: 256 }
-          break
-        }
-        default: {
-          throw new Error(`deriveKey() - unknown type: ${type}`)
-        }
-      }
-      let _key = publicKey
-      if (_key.type === 'private') {
-        // handle case of being given a private key (so callee doesn't have to worry)
-        const _jwk = await this.exportKey('jwk', _key); _sb_assert(_jwk, "INTERNAL (L1878)")
-        delete _jwk!.d
-        delete _jwk!.alg // Deno issue
-        _key = await this.importKey('jwk', _jwk!, 'ECDH', true, []);
-        _sb_assert(_key, "INTERNAL (L1882)")
-      }
-      _sb_assert(_key.type === 'public', "INTERNAL (L1884)")
-      try {
-        resolve(await crypto.subtle.deriveKey({
-          name: 'ECDH',
-          public: _key
-        },
-          privateKey,
-          _keyAlgorithm,
-          extractable,
-          keyUsages));
-      } catch (e) {
-        console.error(e, privateKey, publicKey, type, extractable, keyUsages);
-        reject(e);
-      }
-    });
-  }
-
   async encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer> {
     if (data === null) throw new Error('no contents')
     if (!params.iv) throw new Error('no nonce')
@@ -1654,7 +1610,7 @@ export class SBCrypto {  /******************************************************
   }
 
   /** Basic (core) method to construct a ChannelMessage */
-  async wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey): Promise<ChannelMessage> {
+  async wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey, options?: MessageOptions): Promise<ChannelMessage> {
     _sb_assert(body && sender && encryptionKey && signingKey, "wrapMessage(): missing required parameter(2)")
     const payload = assemblePayload(body);
     _sb_assert(payload, "wrapMessage(): failed to assemble payload")
@@ -1664,13 +1620,25 @@ export class SBCrypto {  /******************************************************
     const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
     const view = new DataView(new ArrayBuffer(8));
     view.setFloat64(0, timestamp);
-    const message: ChannelMessage = {
+    var message: ChannelMessage = {
       f: sender,
       c: await sbCrypto.encrypt(payload!, encryptionKey, { iv: iv, additionalData: view }),
       iv: iv,
       s: await sbCrypto.sign(signingKey, payload!),
       ts: timestamp,
       // unencryptedContents: body, // 'original' payload' .. we do NOT include this
+    }
+    if (options) {
+      if (options.sendTo) message.t = options.sendTo
+      if (options.ttl) message.ttl = options.ttl
+      if (options.subChannel) throw new Error(`wrapMessage(): subChannel not yet supported`)
+    }
+    try {
+      message = validate_ChannelMessage(message)
+    } catch (e) {
+      const msg = `wrapMessage(): failed to validate message: ${e}`
+      console.error(msg)
+      throw new Error(msg)
     }
     return message
   }
@@ -2420,7 +2388,7 @@ export class SBChannelKeys extends SB384 {
         },
         body: assemblePayload(validate_ChannelApiBody(apiBody))
       }
-      if (DBG) console.log("==== ChannelApi.callApi: calling fetch with init:\n", init)
+      if (DBG2) console.log("==== ChannelApi.callApi: calling fetch with init:\n", init)
       SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId! + path, init)
         .then((ret: any) => { resolve(ret) })
         .catch((e: Error) => { reject("[Channel.callApi] Error: " + WrapError(e)) })
@@ -2455,6 +2423,13 @@ export class SBChannelKeys extends SB384 {
 
 const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5 // allow for base64 overhead plus extra
 
+export interface MessageOptions {
+  ttl?: number,
+  sendTo?: SBUserId,   // 't' in ChannelMessage
+  subChannel?: string, // 'i2' in ChannelMessage
+  protocol?: SBProtocol,
+}
+
 /**
  * Every message being sent needs to at some point be in the form
  * of an SBMessage object. Upon creation, the provided contents
@@ -2468,11 +2443,6 @@ class SBMessage {
   static ReadyFlag = Symbol('SBMessageReadyFlag'); // see below for '(this as any)[<class>.ReadyFlag] = false;'
 
   #message?: ChannelMessage   // the message that's set to send
-  #encryptionKey?: CryptoKey  // the key that was used to encrypt it
-
-  // channel: Channel
-  // contents?: SBMessageContents  
-  // #sendToPubKey?: JsonWebKey
 
   /**
    * SBMessage
@@ -2480,25 +2450,28 @@ class SBMessage {
    * Body should be below 32KiB, though it tolerates up to 64KiB
    *
    */
-  constructor(public channel: Channel, private contents: any, ttl?: number) {
+  constructor(
+    public channel: Channel,
+    public contents: any,
+    public options: MessageOptions = {}
+  ) {
     this.sbMessageReady = new Promise<SBMessage>(async (resolve) => {
       await channel.channelReady
-      // this.#encryptionKey = this.channel.encryptionKey
-      this.#encryptionKey = await this.channel.protocol.key()
-      this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, this.#encryptionKey, this.channel.signKey)
-      // this.#message.ttl = ttl ? ttl : 0xF // default is inifinite
-      if (ttl) this.#message.ttl = ttl
-      ;(this as any)[SBMessage.ReadyFlag] = true
+      if (!this.options.protocol) this.options.protocol = channel.protocol
+      if (!this.options.protocol) throw new Error("SBMessage() - no protocol provided")
+      this.#message = await sbCrypto.wrap(
+        this.contents,
+        this.channel.userId,
+        await this.options.protocol.encryptionKey(this),
+        this.channel.signKey,
+        options);
+      (this as any)[SBMessage.ReadyFlag] = true
       resolve(this)
     })
   }
 
   get ready() { return this.sbMessageReady }
   get SBMessageReadyFlag() { return (this as any)[SBMessage.ReadyFlag] }
-
-  // @Ready get encryptionKey() { return this.#encryptionKey }
-  // get sendToPubKey() { return this.#sendToPubKey }
-
   @Ready get message() { return this.#message! }
 
   /**
@@ -2516,40 +2489,129 @@ class SBMessage {
         })
       })
     })
-    // todo: i've punted on queue here <--- queueMicrotaks maybe?
   }
 } /* class SBMessage */
 
 /**
- * Key exchange protocol.
+ * Key exchange protocol. (Note that SBMessage always includes
+ * a reference to the channel)
  */
 export interface SBProtocol {
-  key(): Promise<CryptoKey>;
+  // if the protocol doesn't 'apply' to the message, this should throw
+  encryptionKey(msg: SBMessage): Promise<CryptoKey>;
+  // 'undefined' means it's outside the scope of our protocol, for example
+  // if we're not a permitted recipient, or keys have expired, etc
+  decryptionKey(channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
 }
 
-export class BasicProtocol implements SBProtocol {
-  #key: Promise<CryptoKey>
-  #channel: Channel
+/**
+ * Basic protocol, just provide entropy and salt, then all
+ * messages are encrypted accordingly.
+ */
+export class Protocol_AES_GCM_384 implements SBProtocol {
+  #key?: Promise<CryptoKey>
 
-  constructor(channel: Channel) {
-    // TDOO: placeholder, create a random key for each "session" (usage of protocol)
-    this.#channel = channel
-    this.#key = window.crypto.subtle.generateKey(
-      {
-        name: "AES-GCM",
-        length: 256,
+  constructor(private entropy: string, private salt: ArrayBuffer, private iterations = 1000000) {
+    this.#key = new Promise(async (resolve, _reject) => {
+      const hash = "SHA-384";
+      const derivedKeyLength = 384 / 8; // For P-384 curve, in bytes
+      const strongpinBuffer = new TextEncoder().encode(this.entropy);
+      const keyMaterial = await crypto.subtle.importKey(
+          "raw",
+          strongpinBuffer,
+          { name: "PBKDF2" },
+          false,
+          ["deriveKey", "deriveBits"]
+      );
+      const derivedKey = await crypto.subtle.deriveKey({
+        'name': 'PBKDF2', // salt: crypto.getRandomValues(new Uint8Array(16)),
+        'salt': this.salt,
+        'iterations': this.iterations,
+        'hash': hash
       },
-      true,
-      ["encrypt", "decrypt"],
-    );
-    this.#key.then((k) => {
-      if (DBG) console.log("[BasicProtocol] generated random key for this session:\n", k)
+      keyMaterial,
+        { 'name': 'AES-GCM', 'length': derivedKeyLength }, true, ['encrypt', 'decrypt'])
+      resolve(derivedKey)
     })
   }
-  key(): Promise<CryptoKey> {
+  encryptionKey(_msg: SBMessage): Promise<CryptoKey> {
+    if (!this.#key) throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready")
     return this.#key
   }
-  get channel() { return this.#channel }
+  decryptionKey(_channel: Channel, _msg: ChannelMessage): Promise<CryptoKey> {
+    if (!this.#key) throw new Error("Protocol_AES_GCM_384.key() - decryption key not ready")
+    return this.#key
+  }
+}
+
+/**
+ * Implements 'whisper', eg 1:1 public-key based encryption between
+ * sender and receiver. It will use as sender the private key used
+ * on the Channel, and you can either provide 'sendTo' in the 
+ * SBMessage options, or omit it in which case it will use the
+ * channel owner's public key.
+ */
+export class Protocol_ECDH implements SBProtocol {
+  #keyMap: Map<string, CryptoKey> = new Map()
+  constructor() { /* this protocol depends on channel and recipient only */ }
+  encryptionKey(msg: SBMessage): Promise<CryptoKey> {
+    return new Promise(async (resolve, _reject) => {
+      await msg.channel.ready;
+      const channelId = msg.channel.channelId!;
+      _sb_assert(channelId, "Internal Error (L2565)")
+      const sendTo = msg.options.sendTo
+        ? msg.options.sendTo
+        : msg.channel.channelData.ownerPublicKey;
+      const key = channelId + "_" + sendTo;
+      if (!this.#keyMap.has(key)) {
+        const newKey = await crypto.subtle.deriveKey(
+          {
+            name: 'ECDH',
+            public: (await new SB384(sendTo).ready).publicKey
+          },
+          msg.channel.privateKey,
+          { name: 'AES-GCM', length: 256 },
+          true,
+          ['encrypt', 'decrypt']);
+        this.#keyMap.set(key, newKey);
+        console.log("++++ Protocol_ECDH.key() - newKey:", newKey)
+      }
+      const res = this.#keyMap.get(key);
+      _sb_assert(res, "Internal Error (L2584)")
+      console.log("++++ Protocol_ECDH.key() - res:", res)
+      resolve(res!);
+    });
+  }
+  decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
+    // todo: refactor, we have overlapping code w/ encrypt
+    return new Promise(async (resolve, _reject) => {
+      await channel.ready;
+      const channelId = channel.channelId!;
+      _sb_assert(channelId, "Internal Error (L2594)")
+      const sentFrom = channel.visitors.get(msg.f)!; // full pub key (not just hash)
+      if (!sentFrom) {
+        if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown")
+        return undefined
+      }
+      const key = channelId + "_" + sentFrom;
+      if (!this.#keyMap.has(key)) {
+        const newKey = await crypto.subtle.deriveKey(
+          {
+            name: 'ECDH',
+            public: (await new SB384(sentFrom).ready).publicKey
+          },
+          channel.privateKey,
+          { name: 'AES-GCM', length: 256 },
+          true,
+          ['encrypt', 'decrypt']);
+        this.#keyMap.set(key, newKey);
+      }
+      const res = this.#keyMap.get(key);
+      _sb_assert(res, "Internal Error (L2611)")
+      resolve(res!);
+    });
+  
+  }
 }
 
 /**
@@ -2570,6 +2632,11 @@ export class BasicProtocol implements SBProtocol {
  * The ChannelSocket class is a subclass of Channel, and it communicates
  * synchronously (via websockets).
  * 
+ * Protocol is called for every message to get the CryptoKey to use
+ * for that message; if provided, then it's the default for each
+ * message. Individual messages can override this. Upon sending, one
+ * or the other needs to be there.
+ * 
  * Note that you don't need to worry about what API calls involve race
  * conditions and which don't, the library will do that for you.
  * 
@@ -2582,8 +2649,9 @@ class Channel extends SBChannelKeys {
   adminData?: Dictionary<any> // todo: make into getter
   // verifiedGuest: boolean = false
   #cursor: string = ''; // last (oldest) message key seen
+  // #protocol?: SBProtocol
 
-  #protocol: SBProtocol
+  visitors: Map<SBUserId, SBUserPrivateKey> = new Map()
 
   /**
    * Channel
@@ -2591,11 +2659,12 @@ class Channel extends SBChannelKeys {
   constructor()
   constructor(key: SBUserPrivateKey, protocol?: SBProtocol)
   constructor(handle: SBChannelHandle, protocol?: SBProtocol)
-  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey, protocol?: SBProtocol) {
+  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey, public protocol?: SBProtocol) {
     if (handleOrKey === null) throw new Error(`Channel() constructor: you cannot pass 'null'`)
     if (DBG2) console.log("Channel() constructor called with handleOrKey:", handleOrKey)
     super(handleOrKey);
-    this.#protocol = protocol ? protocol : new BasicProtocol(this)
+    // this.protocol = protocol ? protocol : new BasicProtocol(this)
+    // if (protocol) this.#protocol = protocol
     this.channelReady =
       this.sbChannelKeysReady
         .then(() => {
@@ -2608,7 +2677,7 @@ class Channel extends SBChannelKeys {
   get ready() { return this.channelReady }
   get ChannelReadyFlag(): boolean { return (this as any)[Channel.ReadyFlag] }
 
-  @Memoize @Ready get protocol() { return this.#protocol }
+  // @Memoize @Ready get protocol() { return this.#protocol }
   @Memoize @Ready get api() { return this } // for compatibility
 
   // /*
@@ -2709,9 +2778,37 @@ class Channel extends SBChannelKeys {
     })
   }
 
-  async deCryptChannelMessage(m00: string, m01: ChannelMessage): Promise<Message | undefined> {
-    if (DBG) console.log("Asked to decrypt:", m00, m01)
-    return undefined
+  async deCryptChannelMessage(channel: Channel, id: string, buf: ArrayBuffer): Promise<any> {
+    if (DBG2) console.log("Asked to decrypt:", id, buf)
+    if (!buf) return undefined;
+
+    try {
+      const msgRaw = validate_ChannelMessage(extractPayload(buf).payload)
+      const f = msgRaw.f // protocols may use 'from', so needs to be in channel visitor map
+      if (!f) return undefined
+      if (!this.visitors.has(f)) {
+        if (DBG) console.log("++++ deCryptChannelMessage: need to update visitor table ...")
+        const visitorMap = await this.callApi('/getPubKeys')
+        if (!visitorMap || !(visitorMap instanceof Map)) return undefined
+        if (DBG) console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP)
+        for (const [k, v] of visitorMap) {
+          if (DBG) console.log("++++ deCryptChannelMessage: adding visitor:", k, v)
+          this.visitors.set(k, v)
+        }
+      }
+      _sb_assert(this.visitors.has(f), `Cannot find sender userId hash ${f} in public key map`)
+      const k = await channel.protocol?.decryptionKey(this, msgRaw)
+      if (!k) return undefined
+      const msgDecrypted = await sbCrypto.unwrap(k!, msgRaw)
+      // const msg = validate_ChannelMessage(extractPayload(msgDecrypted).payload)
+      const msg = extractPayload(msgDecrypted).payload
+      if (DBG2) console.log("++++ deCryptChannelMessage: decrypted message:\n", msg)
+      return msg
+      // return await sbCrypto.unwrap(msg, this.privateKey)
+    } catch (e) {
+      if (DBG) console.error("Message was not a payload of a ChannelMessage")
+      return undefined
+    }
   }
 
   /**
@@ -2739,37 +2836,37 @@ class Channel extends SBChannelKeys {
     // });
   }
 
-  /** 
-   * Will return most recent messages from the channel.
-   */
-  getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
-    // todo: add IndexedDB caching - see above
-    return new Promise(async (resolve, reject) => {
-      _sb_assert(this.channelId, "Channel.getOldMessages: no channel ID (?)")
-      // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)
-      let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
-      const messages = await this.callApi('/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption)
-      _sb_assert(messages, "Channel.getOldMessages: no messages (empty/null response)")
-      if (DBG) console.log("getOldMessages\n", messages)
-      Promise.all(Object
-        .keys(messages)
-        .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-        .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
-        .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v): v is Message => Boolean(v)))
-        .then((decryptedMessageArray) => {
-          let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-          if (lastMessage)
-            this.#cursor = lastMessage._id || /* lastMessage.id || */ '';
-          if (DBG2) console.log(decryptedMessageArray)
-          resolve(decryptedMessageArray)
-        })
-        .catch((e) => {
-          const msg = `Channel.getOldMessages(): failed to decrypt messages: ${e}`
-          console.error(msg)
-          reject(msg)
-        })
-    });
-  }
+  // /** 
+  //  * [OLDER API] Will return most recent messages from the channel.
+  //  */
+  // getOldMessages(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Array<ChannelMessage>> {
+  //   // todo: add IndexedDB caching - see above
+  //   return new Promise(async (resolve, reject) => {
+  //     _sb_assert(this.channelId, "Channel.getOldMessages: no channel ID (?)")
+  //     // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)
+  //     let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
+  //     const messages = await this.callApi('/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption)
+  //     _sb_assert(messages, "Channel.getOldMessages: no messages (empty/null response)")
+  //     if (DBG) console.log("getOldMessages\n", messages)
+  //     Promise.all(Object
+  //       .keys(messages)
+  //       .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
+  //       .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
+  //       .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v): v is Message => Boolean(v)))
+  //       .then((decryptedMessageArray) => {
+  //         let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
+  //         if (lastMessage)
+  //           this.#cursor = lastMessage._id || /* lastMessage.id || */ '';
+  //         if (DBG2) console.log(decryptedMessageArray)
+  //         resolve(decryptedMessageArray)
+  //       })
+  //       .catch((e) => {
+  //         const msg = `Channel.getOldMessages(): failed to decrypt messages: ${e}`
+  //         console.error(msg)
+  //         reject(msg)
+  //       })
+  //   });
+  // }
 
   getMessageKeys(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Set<string>> {
     // todo: add IndexedDB caching - see above
@@ -2780,7 +2877,7 @@ class Channel extends SBChannelKeys {
       const messages = await this.callApi('/getMessageKeys?currentMessagesLength=' + currentMessagesLength + cursorOption)
       // todo: empty is valid
       _sb_assert(messages, "Channel.getMessageKeys: no messages (empty/null response)")
-      if (DBG) console.log("getMessageKeys\n", messages)
+      if (DBG2) console.log("getMessageKeys\n", messages)
       resolve(messages)
     });
   }
@@ -2799,30 +2896,48 @@ class Channel extends SBChannelKeys {
   //   });
   // }
 
-  getMessages(messageKeys: Set<string>): Promise<Array<ChannelMessage>> {
+  // ToDo: actually, getting the messages, vs decrypting are different things ...
+  //       ... eg to decrypt we provide a protocol, which would apply to a 'subset' of all messages
+  //       ... (where 'all' the messages is just a special case)
+  getMessages(messageKeys: Set<string>): Promise<Map<string, ChannelMessage>> {
     // todo: add IndexedDB caching - see above
-    return new Promise(async (resolve, reject) => {
+    return new Promise(async (resolve, _reject) => {
       _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
-      const messages = await this.callApi('/getMessages', messageKeys)
+      const messages: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
       _sb_assert(messages, "Channel.getMessages: no messages (empty/null response)")
-      if (DBG) console.log("getMessages\n", messages)
-      Promise.all(Object
-        .keys(messages)
-        .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-        .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
-        .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v): v is Message => Boolean(v)))
-        .then((decryptedMessageArray) => {
-          let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-          if (lastMessage)
-            this.#cursor = lastMessage._id || /* lastMessage.id || */ '';
-          if (DBG2) console.log(decryptedMessageArray)
-          resolve(decryptedMessageArray)
-        })
-        .catch((e) => {
-          const msg = `Channel.getMessages(): failed to decrypt messages: ${e}`
-          console.error(msg)
-          reject(msg)
-        })
+      if (DBG2) console.log(SEP, SEP, "getMessages - here are the raw ones\n", messages, SEP, SEP)
+
+      // we want to iterate through all the entries in the map, and call 'deCryptChannelMessage' on each
+      // one with parameters of the key and the value (which is the encrypted contents). if it failed
+      // to decrypt, it will return 'undefined', otherwise we add the returned 'Message' object and
+      // add it to a NEW map, which maps from the key to the decrypted message
+
+      const decryptedMessages = new Map<string, ChannelMessage>()
+      for (const [key, value] of messages.entries()) {
+        if (!this.protocol) throw new Error("Channel.getMessages(): need protocol to decrypt messages")
+        const decryptedMessage = await this.deCryptChannelMessage(this, key, value)
+        if (decryptedMessage) decryptedMessages.set(key, decryptedMessage)
+      }
+      if (DBG2) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP)
+      resolve(decryptedMessages)
+
+      // Promise.all(Object
+      //   .keys(messages)
+      //   // .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
+      //   .map((v) => this.deCryptChannelMessage(v, messages.get(v))))
+      //   .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v): v is Message => Boolean(v)))
+      //   .then((decryptedMessageArray) => {
+      //     let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
+      //     if (lastMessage)
+      //       this.#cursor = lastMessage._id || /* lastMessage.id || */ '';
+      //     if (DBG) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessageArray, "\n", SEP)
+      //     resolve(decryptedMessageArray)
+      //   })
+      //   .catch((e) => {
+      //     const msg = `Channel.getMessages(): failed to decrypt messages: ${e}`
+      //     console.error(msg)
+      //     reject(msg)
+      //   })
     });
   }
 
@@ -2836,6 +2951,12 @@ class Channel extends SBChannelKeys {
   @Ready getChannelKeys(): Promise<SBChannelData> {
     return this.callApi('/getChannelKeys')
   }
+
+  // returns what the server knows about visitors eg userId (hash) -> full public key
+  @Ready getPubKeys(): Promise<Map<SBUserId, SBUserPublicKey>> {
+    return this.callApi('/getPubKeys')
+  }
+  
 
   /**
    * Update (set) the capacity of the channel; Owner only

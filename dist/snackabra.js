@@ -22,7 +22,7 @@ export function validate_SBChannelHandle(data) {
         return { ...data, [SB_CHANNEL_HANDLE_SYMBOL]: true };
     }
     else {
-        if (DBG)
+        if (DBG2)
             console.error('invalid SBChannelHandle ... trying to ingest:\n', data);
         throw new Error(`invalid SBChannelHandle`);
     }
@@ -84,7 +84,7 @@ export function validate_ChannelMessage(body) {
         return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true };
     }
     else {
-        if (DBG)
+        if (DBG2)
             console.error('invalid ChannelMessage ... trying to ingest:\n', body);
         throw new Error(`invalid ChannelMessage`);
     }
@@ -242,7 +242,7 @@ function SBApiFetch(input, init) {
                 reject(new Error(apiErrorMsg));
             }
             else {
-                if (DBG)
+                if (DBG2)
                     console.log("[SBApiFetch] Success:\n", SEP, input, '\n', SEP, retValue, '\n', SEP);
                 resolve(retValue);
             }
@@ -943,45 +943,6 @@ export class SBCrypto {
             return undefined;
         });
     }
-    deriveKey(privateKey, publicKey, type, extractable, keyUsages) {
-        _sb_assert(privateKey && publicKey, "Either private or public key is null or undefined (L1836)");
-        return new Promise(async (resolve, reject) => {
-            let _keyAlgorithm;
-            switch (type) {
-                case 'AES-GCM': {
-                    _keyAlgorithm = { name: 'AES-GCM', length: 256 };
-                    break;
-                }
-                case 'HMAC': {
-                    _keyAlgorithm = { name: 'HMAC', hash: 'SHA-256', length: 256 };
-                    break;
-                }
-                default: {
-                    throw new Error(`deriveKey() - unknown type: ${type}`);
-                }
-            }
-            let _key = publicKey;
-            if (_key.type === 'private') {
-                const _jwk = await this.exportKey('jwk', _key);
-                _sb_assert(_jwk, "INTERNAL (L1878)");
-                delete _jwk.d;
-                delete _jwk.alg;
-                _key = await this.importKey('jwk', _jwk, 'ECDH', true, []);
-                _sb_assert(_key, "INTERNAL (L1882)");
-            }
-            _sb_assert(_key.type === 'public', "INTERNAL (L1884)");
-            try {
-                resolve(await crypto.subtle.deriveKey({
-                    name: 'ECDH',
-                    public: _key
-                }, privateKey, _keyAlgorithm, extractable, keyUsages));
-            }
-            catch (e) {
-                console.error(e, privateKey, publicKey, type, extractable, keyUsages);
-                reject(e);
-            }
-        });
-    }
     async encrypt(data, key, params) {
         if (data === null)
             throw new Error('no contents');
@@ -993,7 +954,7 @@ export class SBCrypto {
             _sb_assert(params.name === 'AES-GCM', "Must be AES-GCM (L1951)");
         return crypto.subtle.encrypt(params, key, data);
     }
-    async wrap(body, sender, encryptionKey, signingKey) {
+    async wrap(body, sender, encryptionKey, signingKey, options) {
         _sb_assert(body && sender && encryptionKey && signingKey, "wrapMessage(): missing required parameter(2)");
         const payload = assemblePayload(body);
         _sb_assert(payload, "wrapMessage(): failed to assemble payload");
@@ -1002,13 +963,29 @@ export class SBCrypto {
         const timestamp = Math.round(Date.now() / 25) * 25;
         const view = new DataView(new ArrayBuffer(8));
         view.setFloat64(0, timestamp);
-        const message = {
+        var message = {
             f: sender,
             c: await sbCrypto.encrypt(payload, encryptionKey, { iv: iv, additionalData: view }),
             iv: iv,
             s: await sbCrypto.sign(signingKey, payload),
             ts: timestamp,
         };
+        if (options) {
+            if (options.sendTo)
+                message.t = options.sendTo;
+            if (options.ttl)
+                message.ttl = options.ttl;
+            if (options.subChannel)
+                throw new Error(`wrapMessage(): subChannel not yet supported`);
+        }
+        try {
+            message = validate_ChannelMessage(message);
+        }
+        catch (e) {
+            const msg = `wrapMessage(): failed to validate message: ${e}`;
+            console.error(msg);
+            throw new Error(msg);
+        }
         return message;
     }
     unwrap(k, o) {
@@ -1570,7 +1547,7 @@ export class SBChannelKeys extends SB384 {
                 },
                 body: assemblePayload(validate_ChannelApiBody(apiBody))
             };
-            if (DBG)
+            if (DBG2)
                 console.log("==== ChannelApi.callApi: calling fetch with init:\n", init);
             SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + path, init)
                 .then((ret) => { resolve(ret); })
@@ -1598,20 +1575,22 @@ const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5;
 class SBMessage {
     channel;
     contents;
+    options;
     [SB_MESSAGE_SYMBOL] = true;
     sbMessageReady;
     static ReadyFlag = Symbol('SBMessageReadyFlag');
     #message;
-    #encryptionKey;
-    constructor(channel, contents, ttl) {
+    constructor(channel, contents, options = {}) {
         this.channel = channel;
         this.contents = contents;
+        this.options = options;
         this.sbMessageReady = new Promise(async (resolve) => {
             await channel.channelReady;
-            this.#encryptionKey = await this.channel.protocol.key();
-            this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, this.#encryptionKey, this.channel.signKey);
-            if (ttl)
-                this.#message.ttl = ttl;
+            if (!this.options.protocol)
+                this.options.protocol = channel.protocol;
+            if (!this.options.protocol)
+                throw new Error("SBMessage() - no protocol provided");
+            this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, await this.options.protocol.encryptionKey(this), this.channel.signKey, options);
             this[SBMessage.ReadyFlag] = true;
             resolve(this);
         });
@@ -1637,39 +1616,106 @@ class SBMessage {
 __decorate([
     Ready
 ], SBMessage.prototype, "message", null);
-export class BasicProtocol {
+export class Protocol_AES_GCM_384 {
+    entropy;
+    salt;
+    iterations;
     #key;
-    #channel;
-    constructor(channel) {
-        this.#channel = channel;
-        this.#key = window.crypto.subtle.generateKey({
-            name: "AES-GCM",
-            length: 256,
-        }, true, ["encrypt", "decrypt"]);
-        this.#key.then((k) => {
-            if (DBG)
-                console.log("[BasicProtocol] generated random key for this session:\n", k);
+    constructor(entropy, salt, iterations = 1000000) {
+        this.entropy = entropy;
+        this.salt = salt;
+        this.iterations = iterations;
+        this.#key = new Promise(async (resolve, _reject) => {
+            const hash = "SHA-384";
+            const derivedKeyLength = 384 / 8;
+            const strongpinBuffer = new TextEncoder().encode(this.entropy);
+            const keyMaterial = await crypto.subtle.importKey("raw", strongpinBuffer, { name: "PBKDF2" }, false, ["deriveKey", "deriveBits"]);
+            const derivedKey = await crypto.subtle.deriveKey({
+                'name': 'PBKDF2',
+                'salt': this.salt,
+                'iterations': this.iterations,
+                'hash': hash
+            }, keyMaterial, { 'name': 'AES-GCM', 'length': derivedKeyLength }, true, ['encrypt', 'decrypt']);
+            resolve(derivedKey);
         });
     }
-    key() {
+    encryptionKey(_msg) {
+        if (!this.#key)
+            throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready");
         return this.#key;
     }
-    get channel() { return this.#channel; }
+    decryptionKey(_channel, _msg) {
+        if (!this.#key)
+            throw new Error("Protocol_AES_GCM_384.key() - decryption key not ready");
+        return this.#key;
+    }
+}
+export class Protocol_ECDH {
+    #keyMap = new Map();
+    constructor() { }
+    encryptionKey(msg) {
+        return new Promise(async (resolve, _reject) => {
+            await msg.channel.ready;
+            const channelId = msg.channel.channelId;
+            _sb_assert(channelId, "Internal Error (L2565)");
+            const sendTo = msg.options.sendTo
+                ? msg.options.sendTo
+                : msg.channel.channelData.ownerPublicKey;
+            const key = channelId + "_" + sendTo;
+            if (!this.#keyMap.has(key)) {
+                const newKey = await crypto.subtle.deriveKey({
+                    name: 'ECDH',
+                    public: (await new SB384(sendTo).ready).publicKey
+                }, msg.channel.privateKey, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+                this.#keyMap.set(key, newKey);
+                console.log("++++ Protocol_ECDH.key() - newKey:", newKey);
+            }
+            const res = this.#keyMap.get(key);
+            _sb_assert(res, "Internal Error (L2584)");
+            console.log("++++ Protocol_ECDH.key() - res:", res);
+            resolve(res);
+        });
+    }
+    decryptionKey(channel, msg) {
+        return new Promise(async (resolve, _reject) => {
+            await channel.ready;
+            const channelId = channel.channelId;
+            _sb_assert(channelId, "Internal Error (L2594)");
+            const sentFrom = channel.visitors.get(msg.f);
+            if (!sentFrom) {
+                if (DBG)
+                    console.log("Protocol_ECDH.key() - sentFrom is unknown");
+                return undefined;
+            }
+            const key = channelId + "_" + sentFrom;
+            if (!this.#keyMap.has(key)) {
+                const newKey = await crypto.subtle.deriveKey({
+                    name: 'ECDH',
+                    public: (await new SB384(sentFrom).ready).publicKey
+                }, channel.privateKey, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+                this.#keyMap.set(key, newKey);
+            }
+            const res = this.#keyMap.get(key);
+            _sb_assert(res, "Internal Error (L2611)");
+            resolve(res);
+        });
+    }
 }
 class Channel extends SBChannelKeys {
+    protocol;
     channelReady;
     static ReadyFlag = Symbol('ChannelReadyFlag');
     locked = false;
     adminData;
     #cursor = '';
-    #protocol;
+    visitors = new Map();
     constructor(handleOrKey, protocol) {
         if (handleOrKey === null)
             throw new Error(`Channel() constructor: you cannot pass 'null'`);
         if (DBG2)
             console.log("Channel() constructor called with handleOrKey:", handleOrKey);
         super(handleOrKey);
-        this.#protocol = protocol ? protocol : new BasicProtocol(this);
+        this.protocol = protocol;
         this.channelReady =
             this.sbChannelKeysReady
                 .then(() => {
@@ -1680,7 +1726,6 @@ class Channel extends SBChannelKeys {
     }
     get ready() { return this.channelReady; }
     get ChannelReadyFlag() { return this[Channel.ReadyFlag]; }
-    get protocol() { return this.#protocol; }
     get api() { return this; }
     create(storageToken, channelServer) {
         _sb_assert(storageToken !== null, '[Channel.create] Missing storage token');
@@ -1705,41 +1750,48 @@ class Channel extends SBChannelKeys {
             }).catch((e) => { reject("Channel.create() failed: " + WrapError(e)); });
         });
     }
-    async deCryptChannelMessage(m00, m01) {
-        if (DBG)
-            console.log("Asked to decrypt:", m00, m01);
-        return undefined;
+    async deCryptChannelMessage(channel, id, buf) {
+        if (DBG2)
+            console.log("Asked to decrypt:", id, buf);
+        if (!buf)
+            return undefined;
+        try {
+            const msgRaw = validate_ChannelMessage(extractPayload(buf).payload);
+            const f = msgRaw.f;
+            if (!f)
+                return undefined;
+            if (!this.visitors.has(f)) {
+                if (DBG)
+                    console.log("++++ deCryptChannelMessage: need to update visitor table ...");
+                const visitorMap = await this.callApi('/getPubKeys');
+                if (!visitorMap || !(visitorMap instanceof Map))
+                    return undefined;
+                if (DBG)
+                    console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP);
+                for (const [k, v] of visitorMap) {
+                    if (DBG)
+                        console.log("++++ deCryptChannelMessage: adding visitor:", k, v);
+                    this.visitors.set(k, v);
+                }
+            }
+            _sb_assert(this.visitors.has(f), `Cannot find sender userId hash ${f} in public key map`);
+            const k = await channel.protocol?.decryptionKey(this, msgRaw);
+            if (!k)
+                return undefined;
+            const msgDecrypted = await sbCrypto.unwrap(k, msgRaw);
+            const msg = extractPayload(msgDecrypted).payload;
+            if (DBG2)
+                console.log("++++ deCryptChannelMessage: decrypted message:\n", msg);
+            return msg;
+        }
+        catch (e) {
+            if (DBG)
+                console.error("Message was not a payload of a ChannelMessage");
+            return undefined;
+        }
     }
     getLastMessageTimes() {
         throw new Error("Channel.getLastMessageTimes(): not supported in 2.0 yet");
-    }
-    getOldMessages(currentMessagesLength = 100, paginate = false) {
-        return new Promise(async (resolve, reject) => {
-            _sb_assert(this.channelId, "Channel.getOldMessages: no channel ID (?)");
-            let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
-            const messages = await this.callApi('/oldMessages?currentMessagesLength=' + currentMessagesLength + cursorOption);
-            _sb_assert(messages, "Channel.getOldMessages: no messages (empty/null response)");
-            if (DBG)
-                console.log("getOldMessages\n", messages);
-            Promise.all(Object
-                .keys(messages)
-                .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-                .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
-                .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v) => Boolean(v)))
-                .then((decryptedMessageArray) => {
-                let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-                if (lastMessage)
-                    this.#cursor = lastMessage._id || '';
-                if (DBG2)
-                    console.log(decryptedMessageArray);
-                resolve(decryptedMessageArray);
-            })
-                .catch((e) => {
-                const msg = `Channel.getOldMessages(): failed to decrypt messages: ${e}`;
-                console.error(msg);
-                reject(msg);
-            });
-        });
     }
     getMessageKeys(currentMessagesLength = 100, paginate = false) {
         return new Promise(async (resolve, _reject) => {
@@ -1747,36 +1799,29 @@ class Channel extends SBChannelKeys {
             let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
             const messages = await this.callApi('/getMessageKeys?currentMessagesLength=' + currentMessagesLength + cursorOption);
             _sb_assert(messages, "Channel.getMessageKeys: no messages (empty/null response)");
-            if (DBG)
+            if (DBG2)
                 console.log("getMessageKeys\n", messages);
             resolve(messages);
         });
     }
     getMessages(messageKeys) {
-        return new Promise(async (resolve, reject) => {
+        return new Promise(async (resolve, _reject) => {
             _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)");
             const messages = await this.callApi('/getMessages', messageKeys);
             _sb_assert(messages, "Channel.getMessages: no messages (empty/null response)");
-            if (DBG)
-                console.log("getMessages\n", messages);
-            Promise.all(Object
-                .keys(messages)
-                .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-                .map((v) => this.deCryptChannelMessage(v, messages[v].encrypted_contents)))
-                .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v) => Boolean(v)))
-                .then((decryptedMessageArray) => {
-                let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-                if (lastMessage)
-                    this.#cursor = lastMessage._id || '';
-                if (DBG2)
-                    console.log(decryptedMessageArray);
-                resolve(decryptedMessageArray);
-            })
-                .catch((e) => {
-                const msg = `Channel.getMessages(): failed to decrypt messages: ${e}`;
-                console.error(msg);
-                reject(msg);
-            });
+            if (DBG2)
+                console.log(SEP, SEP, "getMessages - here are the raw ones\n", messages, SEP, SEP);
+            const decryptedMessages = new Map();
+            for (const [key, value] of messages.entries()) {
+                if (!this.protocol)
+                    throw new Error("Channel.getMessages(): need protocol to decrypt messages");
+                const decryptedMessage = await this.deCryptChannelMessage(this, key, value);
+                if (decryptedMessage)
+                    decryptedMessages.set(key, decryptedMessage);
+            }
+            if (DBG2)
+                console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP);
+            resolve(decryptedMessages);
         });
     }
     async send(msg) {
@@ -1786,6 +1831,9 @@ class Channel extends SBChannelKeys {
     }
     getChannelKeys() {
         return this.callApi('/getChannelKeys');
+    }
+    getPubKeys() {
+        return this.callApi('/getPubKeys');
     }
     updateCapacity(capacity) { return this.callApi('/updateRoomCapacity?capacity=' + capacity); }
     getCapacity() { return (this.callApi('/getRoomCapacity')); }
@@ -1856,10 +1904,6 @@ class Channel extends SBChannelKeys {
 __decorate([
     Memoize,
     Ready
-], Channel.prototype, "protocol", null);
-__decorate([
-    Memoize,
-    Ready
 ], Channel.prototype, "api", null);
 __decorate([
     Ready
@@ -1867,6 +1911,9 @@ __decorate([
 __decorate([
     Ready
 ], Channel.prototype, "getChannelKeys", null);
+__decorate([
+    Ready
+], Channel.prototype, "getPubKeys", null);
 __decorate([
     Ready,
     Owner
