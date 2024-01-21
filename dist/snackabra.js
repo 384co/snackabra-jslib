@@ -90,6 +90,40 @@ export function validate_ChannelMessage(body) {
         throw new Error(`invalid ChannelMessage`);
     }
 }
+export function stripChannelMessage(msg) {
+    const ret = {};
+    if (msg.f)
+        ret.f = msg.f;
+    else
+        throw new Error("ERROR: missing 'f' ('from') in message");
+    if (msg.c)
+        ret.c = msg.c;
+    else
+        throw new Error("ERROR: missing 'ec' ('encrypted contents') in message");
+    if (msg.iv)
+        ret.iv = msg.iv;
+    else
+        throw new Error("ERROR: missing 'iv' ('nonce') in message");
+    if (msg.salt)
+        ret.salt = msg.salt;
+    else
+        throw new Error("ERROR: missing 'salt' in message");
+    if (msg.s)
+        ret.s = msg.s;
+    else
+        throw new Error("ERROR: missing 's' ('signature') in message");
+    if (msg.ts)
+        ret.ts = msg.ts;
+    else
+        throw new Error("ERROR: missing 'ts' ('timestamp') in message");
+    if (msg.ttl && msg.ttl !== 0xF)
+        ret.ttl = msg.ttl;
+    if (msg.t)
+        ret.t = msg.t;
+    if (msg.i2 && msg.i2 !== '____')
+        ret.i2 = msg.i2;
+    return ret;
+}
 var DBG = false;
 var DBG2 = false;
 if (globalThis.configuration && globalThis.configuration.DEBUG === true) {
@@ -960,6 +994,7 @@ export class SBCrypto {
         const payload = assemblePayload(body);
         _sb_assert(payload, "wrapMessage(): failed to assemble payload");
         _sb_assert(payload.byteLength < MAX_SB_BODY_SIZE, `wrapMessage(): body must be smaller than ${MAX_SB_BODY_SIZE / 1024} KiB (we got ${payload.byteLength / 1024} KiB)})`);
+        _sb_assert(salt, "wrapMessage(): missing salt");
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const timestamp = Math.round(Date.now() / 25) * 25;
         const view = new DataView(new ArrayBuffer(8));
@@ -972,6 +1007,8 @@ export class SBCrypto {
             s: await sbCrypto.sign(signingKey, payload),
             ts: timestamp,
         };
+        if (DBG2)
+            console.log("wrap() message is\n", message);
         if (options) {
             if (options.sendTo)
                 message.t = options.sendTo;

@@ -59,6 +59,7 @@ export interface ChannelMessage {
     ttl?: number;
 }
 export declare function validate_ChannelMessage(body: ChannelMessage): ChannelMessage;
+export declare function stripChannelMessage(msg: ChannelMessage): ChannelMessage;
 export interface ChannelAdminData {
     channelId: SBChannelId;
     channelData: SBChannelData;
