@@ -230,10 +230,11 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
 export interface ChannelMessage {
   [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean,
 
-  // strictly speaking, only these five are necessary when *sending*
+  // strictly speaking, only these are necessary when *sending*
   f?: SBUserId, // 'from': public (hash) of sender, matches publicKey of sender, verified by channel server
   c?: ArrayBuffer, // encrypted contents
-  iv?: ArrayBuffer, // nonce
+  iv?: Uint8Array, // nonce, always present whether needed by protocol or not
+  salt?: ArrayBuffer, // salt, always present whether needed by protocol or not
   s?: ArrayBuffer, // signature
   ts?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
 
@@ -294,12 +295,14 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
   if (!body) throw new Error(`invalid ChannelMessage (null or undefined)`)
   else if (body[SB_CHANNEL_MESSAGE_SYMBOL]) return body as ChannelMessage
   else if (
-    // these five are minimally required
+    // these are minimally required
        (body.f  && typeof body.f === 'string' && body.f.length === 43)
     && (body.c  && body.c instanceof ArrayBuffer)
     && (body.ts && Number.isInteger(body.ts))
     && (body.iv && body.iv instanceof Uint8Array && body.iv.length === 12)
     && (body.s  && body.s instanceof ArrayBuffer)
+
+    && (!body.salt || body.salt instanceof ArrayBuffer) // required by the time we send it
 
     // todo: might as well add regexes to some of these
     && (!body._id || (typeof body._id === 'string' && body._id.length === 86))
@@ -435,7 +438,7 @@ export namespace Interfaces {
     // you'll need these in case you want to track an object
     // across future (storage) servers, but as long as you
     // are within the same SB servers you can request them.
-    iv?: ArrayBuffer | string, // if external it's base64
+    iv?: Uint8Array | string, // if external it's base64
     salt?: ArrayBuffer | string, // if external it's base64
     // the following are optional and not tracked by
     // shard servers etc, but facilitates app usage
@@ -1610,7 +1613,13 @@ export class SBCrypto {  /******************************************************
   }
 
   /** Basic (core) method to construct a ChannelMessage */
-  async wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey, options?: MessageOptions): Promise<ChannelMessage> {
+  async wrap(
+    body: any,
+    sender: SBUserId,
+    encryptionKey: CryptoKey,
+    salt: ArrayBuffer,
+    signingKey: CryptoKey,
+    options?: MessageOptions): Promise<ChannelMessage> {
     _sb_assert(body && sender && encryptionKey && signingKey, "wrapMessage(): missing required parameter(2)")
     const payload = assemblePayload(body);
     _sb_assert(payload, "wrapMessage(): failed to assemble payload")
@@ -1624,6 +1633,7 @@ export class SBCrypto {  /******************************************************
       f: sender,
       c: await sbCrypto.encrypt(payload!, encryptionKey, { iv: iv, additionalData: view }),
       iv: iv,
+      salt: salt,
       s: await sbCrypto.sign(signingKey, payload!),
       ts: timestamp,
       // unencryptedContents: body, // 'original' payload' .. we do NOT include this
@@ -2441,8 +2451,8 @@ class SBMessage {
   [SB_MESSAGE_SYMBOL] = true
   sbMessageReady: Promise<SBMessage>
   static ReadyFlag = Symbol('SBMessageReadyFlag'); // see below for '(this as any)[<class>.ReadyFlag] = false;'
-
   #message?: ChannelMessage   // the message that's set to send
+  salt: ArrayBuffer
 
   /**
    * SBMessage
@@ -2455,6 +2465,8 @@ class SBMessage {
     public contents: any,
     public options: MessageOptions = {}
   ) {
+    // there is always salt, whether or not the protocol needs it
+    this.salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
     this.sbMessageReady = new Promise<SBMessage>(async (resolve) => {
       await channel.channelReady
       if (!this.options.protocol) this.options.protocol = channel.protocol
@@ -2463,6 +2475,7 @@ class SBMessage {
         this.contents,
         this.channel.userId,
         await this.options.protocol.encryptionKey(this),
+        this.salt,
         this.channel.signKey,
         options);
       (this as any)[SBMessage.ReadyFlag] = true
@@ -2508,39 +2521,47 @@ export interface SBProtocol {
  * Basic protocol, just provide entropy and salt, then all
  * messages are encrypted accordingly.
  */
-export class Protocol_AES_GCM_384 implements SBProtocol {
-  #key?: Promise<CryptoKey>
+export class Protocol_AES_GCM_256 implements SBProtocol {
+  #keyMaterial?: Promise<CryptoKey>
 
-  constructor(private entropy: string, private salt: ArrayBuffer, private iterations = 1000000) {
-    this.#key = new Promise(async (resolve, _reject) => {
-      const hash = "SHA-384";
-      const derivedKeyLength = 384 / 8; // For P-384 curve, in bytes
-      const strongpinBuffer = new TextEncoder().encode(this.entropy);
+  constructor(private entropy: string, private iterations = 100000) {
+    this.#keyMaterial = new Promise(async (resolve, _reject) => {
+      const entropyBuffer = new TextEncoder().encode(this.entropy);
       const keyMaterial = await crypto.subtle.importKey(
           "raw",
-          strongpinBuffer,
+          entropyBuffer,
           { name: "PBKDF2" },
           false,
           ["deriveKey", "deriveBits"]
       );
-      const derivedKey = await crypto.subtle.deriveKey({
-        'name': 'PBKDF2', // salt: crypto.getRandomValues(new Uint8Array(16)),
-        'salt': this.salt,
-        'iterations': this.iterations,
-        'hash': hash
-      },
-      keyMaterial,
-        { 'name': 'AES-GCM', 'length': derivedKeyLength }, true, ['encrypt', 'decrypt'])
-      resolve(derivedKey)
+      resolve(keyMaterial)
     })
   }
-  encryptionKey(_msg: SBMessage): Promise<CryptoKey> {
-    if (!this.#key) throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready")
-    return this.#key
+
+  async #genKey(salt: ArrayBuffer): Promise<CryptoKey> {
+    if (!this.#keyMaterial) throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready")
+    const derivedKey = await crypto.subtle.deriveKey(
+      {
+        'name': 'PBKDF2',
+        'salt': salt,
+        'iterations': this.iterations,
+        'hash': "SHA-384"
+      },
+      await this.#keyMaterial,
+      { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
+    return derivedKey
   }
-  decryptionKey(_channel: Channel, _msg: ChannelMessage): Promise<CryptoKey> {
-    if (!this.#key) throw new Error("Protocol_AES_GCM_384.key() - decryption key not ready")
-    return this.#key
+
+  async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
+    return this.#genKey(msg.salt)
+  }
+
+  async decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined> {
+    if (!msg.salt) {
+      console.warn("Salt should always be present in ChannelMessage")
+      return undefined
+    }
+    return this.#genKey(msg.salt!)
   }
 }
 
@@ -2585,12 +2606,14 @@ export class Protocol_ECDH implements SBProtocol {
   decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
     // todo: refactor, we have overlapping code w/ encrypt
     return new Promise(async (resolve, _reject) => {
+      console.log("CALLING Protocol_ECDH.key() - msg:", msg)
       await channel.ready;
       const channelId = channel.channelId!;
       _sb_assert(channelId, "Internal Error (L2594)")
       const sentFrom = channel.visitors.get(msg.f)!; // full pub key (not just hash)
       if (!sentFrom) {
-        if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown")
+        // if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown")
+        console.log("**** Protocol_ECDH.key() - sentFrom is unknown")
         return undefined
       }
       const key = channelId + "_" + sentFrom;
@@ -2608,6 +2631,7 @@ export class Protocol_ECDH implements SBProtocol {
       }
       const res = this.#keyMap.get(key);
       _sb_assert(res, "Internal Error (L2611)")
+      console.log("++++ Protocol_ECDH.key() - res:", res)
       resolve(res!);
     });
   
@@ -2783,7 +2807,9 @@ class Channel extends SBChannelKeys {
     if (!buf) return undefined;
 
     try {
-      const msgRaw = validate_ChannelMessage(extractPayload(buf).payload)
+      const msgBuf = extractPayload(buf).payload
+      if (DBG2) console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf)
+      const msgRaw = validate_ChannelMessage(msgBuf)
       const f = msgRaw.f // protocols may use 'from', so needs to be in channel visitor map
       if (!f) return undefined
       if (!this.visitors.has(f)) {
@@ -2806,7 +2832,7 @@ class Channel extends SBChannelKeys {
       return msg
       // return await sbCrypto.unwrap(msg, this.privateKey)
     } catch (e) {
-      if (DBG) console.error("Message was not a payload of a ChannelMessage")
+      if (DBG) console.error("Message was not a payload of a ChannelMessage:\n", e)
       return undefined
     }
   }
@@ -3652,7 +3678,7 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
 
   #verification?: Promise<string> | string;
   shardServer?: string;
-  iv?: ArrayBuffer | string;
+  iv?: Uint8Array | string;
   salt?: ArrayBuffer | string;
 
   // the rest are conveniences, should probably migrate to SBFileHandle
@@ -3945,7 +3971,7 @@ export class StorageApi {
   }
 
   /** @private */
-  #getObjectKey(fileHashBuffer: BufferSource, _salt: ArrayBuffer): Promise<CryptoKey> {
+  #getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey> {
     return new Promise((resolve, reject) => {
       try {
         sbCrypto.importKey('raw', fileHashBuffer /* base64ToArrayBuffer(decodeURIComponent(fileHash))*/,
@@ -3953,7 +3979,7 @@ export class StorageApi {
             // todo - Support deriving from PBKDF2 in sbCrypto.deriveKey function
             crypto.subtle.deriveKey({
               'name': 'PBKDF2', // salt: crypto.getRandomValues(new Uint8Array(16)),
-              'salt': _salt,
+              'salt': salt,
               'iterations': 100000, // small is fine, we want it snappy
               'hash': 'SHA-256'
             }, keyMaterial, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt']).then((key) => {
@@ -3970,7 +3996,7 @@ export class StorageApi {
   /** @private
    * get "permission" to store in the form of a token
    */
-  #_allocateObject(image_id: ArrayBuffer, type: SBObjectType): Promise<{ salt: Uint8Array, iv: ArrayBuffer }> {
+  #_allocateObject(image_id: ArrayBuffer, type: SBObjectType): Promise<{ salt: ArrayBuffer, iv: Uint8Array }> {
     return new Promise((resolve, reject) => {
       SBFetch(this.storageServer + '/api/v1' + "/storeRequest?name=" + arrayBufferToBase62(image_id) + "&type=" + type)
         .then((r) => { /* console.log('got storage reply:'); console.log(r); */ return r.arrayBuffer(); })
@@ -4135,10 +4161,10 @@ export class StorageApi {
           console.log(data)
         }
         // payload includes nonce and salt
-        const iv = new ArrayBuffer(data.iv)
+        const iv = new Uint8Array(data.iv)
         const salt = new ArrayBuffer(data.salt)
         // we accept b64 versions
-        const handleIV: ArrayBuffer | undefined = (!h.iv) ? undefined : (typeof h.iv === 'string') ? base64ToArrayBuffer(h.iv) : h.iv
+        const handleIV: Uint8Array | undefined = (!h.iv) ? undefined : (typeof h.iv === 'string') ? base64ToArrayBuffer(h.iv) : h.iv
         const handleSalt: ArrayBuffer | undefined = (!h.salt) ? undefined : (typeof h.salt === 'string') ? base64ToArrayBuffer(h.salt) : h.salt
 
         if ((handleIV) && (!compareBuffers(iv, handleIV))) {

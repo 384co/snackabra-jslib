@@ -45,7 +45,8 @@ export interface ChannelMessage {
     [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean;
     f?: SBUserId;
     c?: ArrayBuffer;
-    iv?: ArrayBuffer;
+    iv?: Uint8Array;
+    salt?: ArrayBuffer;
     s?: ArrayBuffer;
     ts?: number;
     channelId?: SBChannelId;
@@ -86,7 +87,7 @@ export declare namespace Interfaces {
         version?: SBObjectHandleVersions;
         type?: SBObjectType;
         verification?: Promise<string> | string;
-        iv?: ArrayBuffer | string;
+        iv?: Uint8Array | string;
         salt?: ArrayBuffer | string;
         fileName?: string;
         dateAndTime?: string;
@@ -157,7 +158,7 @@ export declare class SBCrypto {
     importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey | undefined>;
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer>;
-    wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, signingKey: CryptoKey, options?: MessageOptions): Promise<ChannelMessage>;
+    wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, salt: ArrayBuffer, signingKey: CryptoKey, options?: MessageOptions): Promise<ChannelMessage>;
     unwrap(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
     sign(signKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
@@ -220,6 +221,7 @@ declare class SBMessage {
     [SB_MESSAGE_SYMBOL]: boolean;
     sbMessageReady: Promise<SBMessage>;
     static ReadyFlag: symbol;
+    salt: ArrayBuffer;
     constructor(channel: Channel, contents: any, options?: MessageOptions);
     get ready(): Promise<SBMessage>;
     get SBMessageReadyFlag(): any;
@@ -230,14 +232,13 @@ export interface SBProtocol {
     encryptionKey(msg: SBMessage): Promise<CryptoKey>;
     decryptionKey(channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
 }
-export declare class Protocol_AES_GCM_384 implements SBProtocol {
+export declare class Protocol_AES_GCM_256 implements SBProtocol {
     #private;
     private entropy;
-    private salt;
     private iterations;
-    constructor(entropy: string, salt: ArrayBuffer, iterations?: number);
-    encryptionKey(_msg: SBMessage): Promise<CryptoKey>;
-    decryptionKey(_channel: Channel, _msg: ChannelMessage): Promise<CryptoKey>;
+    constructor(entropy: string, iterations?: number);
+    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
+    decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
 }
 export declare class Protocol_ECDH implements SBProtocol {
     #private;
@@ -303,7 +304,7 @@ declare class SBObjectHandle implements Interfaces.SBObjectHandle_base {
     #private;
     version: SBObjectHandleVersions;
     shardServer?: string;
-    iv?: ArrayBuffer | string;
+    iv?: Uint8Array | string;
     salt?: ArrayBuffer | string;
     fileName?: string;
     dateAndTime?: string;

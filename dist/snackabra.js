@@ -75,6 +75,7 @@ export function validate_ChannelMessage(body) {
         && (body.ts && Number.isInteger(body.ts))
         && (body.iv && body.iv instanceof Uint8Array && body.iv.length === 12)
         && (body.s && body.s instanceof ArrayBuffer)
+        && (!body.salt || body.salt instanceof ArrayBuffer)
         && (!body._id || (typeof body._id === 'string' && body._id.length === 86))
         && (!body.ready || typeof body.ready === 'boolean')
         && (!body.timestampPrefix || (typeof body.timestampPrefix === 'string' && body.timestampPrefix.length === 26))
@@ -954,7 +955,7 @@ export class SBCrypto {
             _sb_assert(params.name === 'AES-GCM', "Must be AES-GCM (L1951)");
         return crypto.subtle.encrypt(params, key, data);
     }
-    async wrap(body, sender, encryptionKey, signingKey, options) {
+    async wrap(body, sender, encryptionKey, salt, signingKey, options) {
         _sb_assert(body && sender && encryptionKey && signingKey, "wrapMessage(): missing required parameter(2)");
         const payload = assemblePayload(body);
         _sb_assert(payload, "wrapMessage(): failed to assemble payload");
@@ -967,6 +968,7 @@ export class SBCrypto {
             f: sender,
             c: await sbCrypto.encrypt(payload, encryptionKey, { iv: iv, additionalData: view }),
             iv: iv,
+            salt: salt,
             s: await sbCrypto.sign(signingKey, payload),
             ts: timestamp,
         };
@@ -1580,17 +1582,19 @@ class SBMessage {
     sbMessageReady;
     static ReadyFlag = Symbol('SBMessageReadyFlag');
     #message;
+    salt;
     constructor(channel, contents, options = {}) {
         this.channel = channel;
         this.contents = contents;
         this.options = options;
+        this.salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
         this.sbMessageReady = new Promise(async (resolve) => {
             await channel.channelReady;
             if (!this.options.protocol)
                 this.options.protocol = channel.protocol;
             if (!this.options.protocol)
                 throw new Error("SBMessage() - no protocol provided");
-            this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, await this.options.protocol.encryptionKey(this), this.channel.signKey, options);
+            this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, await this.options.protocol.encryptionKey(this), this.salt, this.channel.signKey, options);
             this[SBMessage.ReadyFlag] = true;
             resolve(this);
         });
@@ -1616,38 +1620,39 @@ class SBMessage {
 __decorate([
     Ready
 ], SBMessage.prototype, "message", null);
-export class Protocol_AES_GCM_384 {
+export class Protocol_AES_GCM_256 {
     entropy;
-    salt;
     iterations;
-    #key;
-    constructor(entropy, salt, iterations = 1000000) {
+    #keyMaterial;
+    constructor(entropy, iterations = 100000) {
         this.entropy = entropy;
-        this.salt = salt;
         this.iterations = iterations;
-        this.#key = new Promise(async (resolve, _reject) => {
-            const hash = "SHA-384";
-            const derivedKeyLength = 384 / 8;
-            const strongpinBuffer = new TextEncoder().encode(this.entropy);
-            const keyMaterial = await crypto.subtle.importKey("raw", strongpinBuffer, { name: "PBKDF2" }, false, ["deriveKey", "deriveBits"]);
-            const derivedKey = await crypto.subtle.deriveKey({
-                'name': 'PBKDF2',
-                'salt': this.salt,
-                'iterations': this.iterations,
-                'hash': hash
-            }, keyMaterial, { 'name': 'AES-GCM', 'length': derivedKeyLength }, true, ['encrypt', 'decrypt']);
-            resolve(derivedKey);
+        this.#keyMaterial = new Promise(async (resolve, _reject) => {
+            const entropyBuffer = new TextEncoder().encode(this.entropy);
+            const keyMaterial = await crypto.subtle.importKey("raw", entropyBuffer, { name: "PBKDF2" }, false, ["deriveKey", "deriveBits"]);
+            resolve(keyMaterial);
         });
     }
-    encryptionKey(_msg) {
-        if (!this.#key)
+    async #genKey(salt) {
+        if (!this.#keyMaterial)
             throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready");
-        return this.#key;
+        const derivedKey = await crypto.subtle.deriveKey({
+            'name': 'PBKDF2',
+            'salt': salt,
+            'iterations': this.iterations,
+            'hash': "SHA-384"
+        }, await this.#keyMaterial, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt']);
+        return derivedKey;
     }
-    decryptionKey(_channel, _msg) {
-        if (!this.#key)
-            throw new Error("Protocol_AES_GCM_384.key() - decryption key not ready");
-        return this.#key;
+    async encryptionKey(msg) {
+        return this.#genKey(msg.salt);
+    }
+    async decryptionKey(_channel, msg) {
+        if (!msg.salt) {
+            console.warn("Salt should always be present in ChannelMessage");
+            return undefined;
+        }
+        return this.#genKey(msg.salt);
     }
 }
 export class Protocol_ECDH {
@@ -1678,13 +1683,13 @@ export class Protocol_ECDH {
     }
     decryptionKey(channel, msg) {
         return new Promise(async (resolve, _reject) => {
+            console.log("CALLING Protocol_ECDH.key() - msg:", msg);
             await channel.ready;
             const channelId = channel.channelId;
             _sb_assert(channelId, "Internal Error (L2594)");
             const sentFrom = channel.visitors.get(msg.f);
             if (!sentFrom) {
-                if (DBG)
-                    console.log("Protocol_ECDH.key() - sentFrom is unknown");
+                console.log("**** Protocol_ECDH.key() - sentFrom is unknown");
                 return undefined;
             }
             const key = channelId + "_" + sentFrom;
@@ -1697,6 +1702,7 @@ export class Protocol_ECDH {
             }
             const res = this.#keyMap.get(key);
             _sb_assert(res, "Internal Error (L2611)");
+            console.log("++++ Protocol_ECDH.key() - res:", res);
             resolve(res);
         });
     }
@@ -1756,7 +1762,10 @@ class Channel extends SBChannelKeys {
         if (!buf)
             return undefined;
         try {
-            const msgRaw = validate_ChannelMessage(extractPayload(buf).payload);
+            const msgBuf = extractPayload(buf).payload;
+            if (DBG2)
+                console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf);
+            const msgRaw = validate_ChannelMessage(msgBuf);
             const f = msgRaw.f;
             if (!f)
                 return undefined;
@@ -1786,7 +1795,7 @@ class Channel extends SBChannelKeys {
         }
         catch (e) {
             if (DBG)
-                console.error("Message was not a payload of a ChannelMessage");
+                console.error("Message was not a payload of a ChannelMessage:\n", e);
             return undefined;
         }
     }
@@ -2335,13 +2344,13 @@ export class StorageApi {
         }
         return data_buffer.slice(0, _size);
     }
-    #getObjectKey(fileHashBuffer, _salt) {
+    #getObjectKey(fileHashBuffer, salt) {
         return new Promise((resolve, reject) => {
             try {
                 sbCrypto.importKey('raw', fileHashBuffer, 'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
                     crypto.subtle.deriveKey({
                         'name': 'PBKDF2',
-                        'salt': _salt,
+                        'salt': salt,
                         'iterations': 100000,
                         'hash': 'SHA-256'
                     }, keyMaterial, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt']).then((key) => {
@@ -2476,7 +2485,7 @@ export class StorageApi {
                     console.log("Payload (#processData) is:");
                     console.log(data);
                 }
-                const iv = new ArrayBuffer(data.iv);
+                const iv = new Uint8Array(data.iv);
                 const salt = new ArrayBuffer(data.salt);
                 const handleIV = (!h.iv) ? undefined : (typeof h.iv === 'string') ? base64ToArrayBuffer(h.iv) : h.iv;
                 const handleSalt = (!h.salt) ? undefined : (typeof h.salt === 'string') ? base64ToArrayBuffer(h.salt) : h.salt;
