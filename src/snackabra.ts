@@ -401,17 +401,17 @@ function setDebugLevel(dbg1: boolean, dbg2?: boolean) {
 // 3	        60  One minute (current minimum)
 // 4	       300  Five minutes
 // 5	      1800  Thirty minutes
-// 6	      7200  Two hours
-// 7	     86400  24 hours
-// 8      604800	Seven days (one week)
+// 6	     14400  Four hours
+// 7	    129600  36 hours
+// 8      864000  Ten days
 // 10             <reserved>
 // 11		          <reserved>
 // 12		          <reserved>
 // 13		          <reserved>
 // 14		          <reserved>
 // 15	  Infinity	Infinity
-export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 7200, 86400, 604800, -1, -1, -1, -1, -1, Infinity]
-export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>',  'One minute', 'Five minutes', 'Thirty minutes', 'Two hours', '24 hours', '7 days (one week)', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)']
+export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 14400, 129600, 864000, -1, -1, -1, -1, -1, Infinity]
+export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>',  'One minute', 'Five minutes', 'Thirty minutes', 'Four hours', '36 hours', '10 days', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)']
 
 /**
  * SBObjectType
@@ -1685,6 +1685,7 @@ export class SBCrypto {  /******************************************************
       } catch (e) {
         // not an error per se, for example could just be wrong key
         if (DBG) console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`)
+        if (DBG2) console.log("message was \n", o)
         reject(e);
       }
     });
@@ -2387,7 +2388,8 @@ export class SBChannelKeys extends SB384 {
   callApi(path: string, apiPayload: any): Promise<any>
   callApi(path: string, apiPayload?: any): Promise<any> {
     _sb_assert(this.channelServer, "[ChannelApi.callApi] channelServer is unknown")
-    if (DBG) console.log("ChannelApi.callApi: calling fetch with path:", path, "body:", apiPayload)
+    if (DBG) console.log("ChannelApi.callApi: calling fetch with path:", path)
+    if (DBG2) console.log("... and body:", apiPayload)
     _sb_assert(this.#channelId && path, "Internal Error (L2528)")
     return new Promise(async (resolve, reject) => {
       await this.sb384Ready // enough for signing
@@ -2508,18 +2510,9 @@ class SBMessage {
   /**
    * SBMessage.send()
    */
-  send() {
-    return new Promise<string>((resolve, reject) => {
-      this.ready.then(() => {
-        this.channel.send(this).then((result) => {
-          if (result === "success") {
-            resolve(result)
-          } else {
-            reject(result)
-          }
-        })
-      })
-    })
+  async send() {
+    if (DBG2) console.log("SBMessage.send() - sending message:", this.message)
+    return this.channel.send(this)
   }
 } /* class SBMessage */
 
@@ -2571,6 +2564,7 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
   }
 
   async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
+    if (DBG) console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt)
     return this.#genKey(msg.salt)
   }
 
@@ -2579,6 +2573,7 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
       console.warn("Salt should always be present in ChannelMessage")
       return undefined
     }
+    if (DBG) console.log("CALLING Protocol_AES_GCM_384.decryptionKey(), salt:", msg.salt)
     return this.#genKey(msg.salt!)
   }
 }
@@ -2613,25 +2608,24 @@ export class Protocol_ECDH implements SBProtocol {
           true,
           ['encrypt', 'decrypt']);
         this.#keyMap.set(key, newKey);
-        console.log("++++ Protocol_ECDH.key() - newKey:", newKey)
+        if (DBG2) console.log("++++ Protocol_ECDH.key() - newKey:", newKey)
       }
       const res = this.#keyMap.get(key);
       _sb_assert(res, "Internal Error (L2584)")
-      console.log("++++ Protocol_ECDH.key() - res:", res)
+      if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res)
       resolve(res!);
     });
   }
   decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
     // todo: refactor, we have overlapping code w/ encrypt
     return new Promise(async (resolve, _reject) => {
-      console.log("CALLING Protocol_ECDH.key() - msg:", msg)
+      if (DBG2) console.log("CALLING Protocol_ECDH.key() - msg:", msg)
       await channel.ready;
       const channelId = channel.channelId!;
       _sb_assert(channelId, "Internal Error (L2594)")
       const sentFrom = channel.visitors.get(msg.f)!; // full pub key (not just hash)
       if (!sentFrom) {
-        // if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown")
-        console.log("**** Protocol_ECDH.key() - sentFrom is unknown")
+        if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown")
         return undefined
       }
       const key = channelId + "_" + sentFrom;
@@ -2649,7 +2643,7 @@ export class Protocol_ECDH implements SBProtocol {
       }
       const res = this.#keyMap.get(key);
       _sb_assert(res, "Internal Error (L2611)")
-      console.log("++++ Protocol_ECDH.key() - res:", res)
+      if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res)
       resolve(res!);
     });
   
@@ -2828,27 +2822,33 @@ class Channel extends SBChannelKeys {
       const msgBuf = extractPayload(buf).payload
       if (DBG2) console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf)
       const msgRaw = validate_ChannelMessage(msgBuf)
+      if (DBG2) console.log("++++ deCryptChannelMessage: validated")
       const f = msgRaw.f // protocols may use 'from', so needs to be in channel visitor map
       if (!f) return undefined
       if (!this.visitors.has(f)) {
-        if (DBG) console.log("++++ deCryptChannelMessage: need to update visitor table ...")
+        if (DBG2) console.log("++++ deCryptChannelMessage: need to update visitor table ...")
         const visitorMap = await this.callApi('/getPubKeys')
         if (!visitorMap || !(visitorMap instanceof Map)) return undefined
-        if (DBG) console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP)
+        if (DBG2) console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP)
         for (const [k, v] of visitorMap) {
-          if (DBG) console.log("++++ deCryptChannelMessage: adding visitor:", k, v)
+          if (DBG2) console.log("++++ deCryptChannelMessage: adding visitor:", k, v)
           this.visitors.set(k, v)
         }
       }
       _sb_assert(this.visitors.has(f), `Cannot find sender userId hash ${f} in public key map`)
       const k = await channel.protocol?.decryptionKey(this, msgRaw)
       if (!k) return undefined
-      const msgDecrypted = await sbCrypto.unwrap(k!, msgRaw)
-      // const msg = validate_ChannelMessage(extractPayload(msgDecrypted).payload)
-      const msg = extractPayload(msgDecrypted).payload
-      if (DBG2) console.log("++++ deCryptChannelMessage: decrypted message:\n", msg)
-      return msg
-      // return await sbCrypto.unwrap(msg, this.privateKey)
+      try {
+        const msgDecrypted = await sbCrypto.unwrap(k!, msgRaw)
+        // const msg = validate_ChannelMessage(extractPayload(msgDecrypted).payload)
+        const msg = extractPayload(msgDecrypted).payload
+        if (DBG2) console.log("++++ deCryptChannelMessage: decrypted message:\n", msg)
+        return msg
+      } catch (e) {
+        if (DBG) console.error("Message was not a payload of a ChannelMessage:\n")
+        return undefined
+      }
+
     } catch (e) {
       if (DBG) console.error("Message was not a payload of a ChannelMessage:\n", e)
       return undefined

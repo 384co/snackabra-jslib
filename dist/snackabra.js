@@ -145,8 +145,8 @@ function setDebugLevel(dbg1, dbg2) {
     if (DBG2)
         console.warn("++++ [setDebugLevel]: ALSO setting DBG2 to TRUE (verbose) ++++");
 }
-export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 7200, 86400, 604800, -1, -1, -1, -1, -1, Infinity];
-export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One minute', 'Five minutes', 'Thirty minutes', 'Two hours', '24 hours', '7 days (one week)', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)'];
+export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 14400, 129600, 864000, -1, -1, -1, -1, -1, Infinity];
+export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One minute', 'Five minutes', 'Thirty minutes', 'Four hours', '36 hours', '10 days', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)'];
 const currentSBOHVersion = '2';
 export class MessageBus {
     bus = {};
@@ -1042,6 +1042,8 @@ export class SBCrypto {
             catch (e) {
                 if (DBG)
                     console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`);
+                if (DBG2)
+                    console.log("message was \n", o);
                 reject(e);
             }
         });
@@ -1557,7 +1559,9 @@ export class SBChannelKeys extends SB384 {
     callApi(path, apiPayload) {
         _sb_assert(this.channelServer, "[ChannelApi.callApi] channelServer is unknown");
         if (DBG)
-            console.log("ChannelApi.callApi: calling fetch with path:", path, "body:", apiPayload);
+            console.log("ChannelApi.callApi: calling fetch with path:", path);
+        if (DBG2)
+            console.log("... and body:", apiPayload);
         _sb_assert(this.#channelId && path, "Internal Error (L2528)");
         return new Promise(async (resolve, reject) => {
             await this.sb384Ready;
@@ -1639,19 +1643,10 @@ class SBMessage {
     get ready() { return this.sbMessageReady; }
     get SBMessageReadyFlag() { return this[SBMessage.ReadyFlag]; }
     get message() { return this.#message; }
-    send() {
-        return new Promise((resolve, reject) => {
-            this.ready.then(() => {
-                this.channel.send(this).then((result) => {
-                    if (result === "success") {
-                        resolve(result);
-                    }
-                    else {
-                        reject(result);
-                    }
-                });
-            });
-        });
+    async send() {
+        if (DBG2)
+            console.log("SBMessage.send() - sending message:", this.message);
+        return this.channel.send(this);
     }
 }
 __decorate([
@@ -1682,6 +1677,8 @@ export class Protocol_AES_GCM_256 {
         return derivedKey;
     }
     async encryptionKey(msg) {
+        if (DBG)
+            console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt);
         return this.#genKey(msg.salt);
     }
     async decryptionKey(_channel, msg) {
@@ -1689,6 +1686,8 @@ export class Protocol_AES_GCM_256 {
             console.warn("Salt should always be present in ChannelMessage");
             return undefined;
         }
+        if (DBG)
+            console.log("CALLING Protocol_AES_GCM_384.decryptionKey(), salt:", msg.salt);
         return this.#genKey(msg.salt);
     }
 }
@@ -1710,23 +1709,27 @@ export class Protocol_ECDH {
                     public: (await new SB384(sendTo).ready).publicKey
                 }, msg.channel.privateKey, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
                 this.#keyMap.set(key, newKey);
-                console.log("++++ Protocol_ECDH.key() - newKey:", newKey);
+                if (DBG2)
+                    console.log("++++ Protocol_ECDH.key() - newKey:", newKey);
             }
             const res = this.#keyMap.get(key);
             _sb_assert(res, "Internal Error (L2584)");
-            console.log("++++ Protocol_ECDH.key() - res:", res);
+            if (DBG2)
+                console.log("++++ Protocol_ECDH.key() - res:", res);
             resolve(res);
         });
     }
     decryptionKey(channel, msg) {
         return new Promise(async (resolve, _reject) => {
-            console.log("CALLING Protocol_ECDH.key() - msg:", msg);
+            if (DBG2)
+                console.log("CALLING Protocol_ECDH.key() - msg:", msg);
             await channel.ready;
             const channelId = channel.channelId;
             _sb_assert(channelId, "Internal Error (L2594)");
             const sentFrom = channel.visitors.get(msg.f);
             if (!sentFrom) {
-                console.log("**** Protocol_ECDH.key() - sentFrom is unknown");
+                if (DBG)
+                    console.log("Protocol_ECDH.key() - sentFrom is unknown");
                 return undefined;
             }
             const key = channelId + "_" + sentFrom;
@@ -1739,7 +1742,8 @@ export class Protocol_ECDH {
             }
             const res = this.#keyMap.get(key);
             _sb_assert(res, "Internal Error (L2611)");
-            console.log("++++ Protocol_ECDH.key() - res:", res);
+            if (DBG2)
+                console.log("++++ Protocol_ECDH.key() - res:", res);
             resolve(res);
         });
     }
@@ -1803,19 +1807,21 @@ class Channel extends SBChannelKeys {
             if (DBG2)
                 console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf);
             const msgRaw = validate_ChannelMessage(msgBuf);
+            if (DBG2)
+                console.log("++++ deCryptChannelMessage: validated");
             const f = msgRaw.f;
             if (!f)
                 return undefined;
             if (!this.visitors.has(f)) {
-                if (DBG)
+                if (DBG2)
                     console.log("++++ deCryptChannelMessage: need to update visitor table ...");
                 const visitorMap = await this.callApi('/getPubKeys');
                 if (!visitorMap || !(visitorMap instanceof Map))
                     return undefined;
-                if (DBG)
+                if (DBG2)
                     console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP);
                 for (const [k, v] of visitorMap) {
-                    if (DBG)
+                    if (DBG2)
                         console.log("++++ deCryptChannelMessage: adding visitor:", k, v);
                     this.visitors.set(k, v);
                 }
@@ -1824,11 +1830,18 @@ class Channel extends SBChannelKeys {
             const k = await channel.protocol?.decryptionKey(this, msgRaw);
             if (!k)
                 return undefined;
-            const msgDecrypted = await sbCrypto.unwrap(k, msgRaw);
-            const msg = extractPayload(msgDecrypted).payload;
-            if (DBG2)
-                console.log("++++ deCryptChannelMessage: decrypted message:\n", msg);
-            return msg;
+            try {
+                const msgDecrypted = await sbCrypto.unwrap(k, msgRaw);
+                const msg = extractPayload(msgDecrypted).payload;
+                if (DBG2)
+                    console.log("++++ deCryptChannelMessage: decrypted message:\n", msg);
+                return msg;
+            }
+            catch (e) {
+                if (DBG)
+                    console.error("Message was not a payload of a ChannelMessage:\n");
+                return undefined;
+            }
         }
         catch (e) {
             if (DBG)
