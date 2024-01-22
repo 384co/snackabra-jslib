@@ -1653,33 +1653,48 @@ __decorate([
     Ready
 ], SBMessage.prototype, "message", null);
 export class Protocol_AES_GCM_256 {
-    entropy;
-    iterations;
-    #keyMaterial;
-    constructor(entropy, iterations = 100000) {
-        this.entropy = entropy;
-        this.iterations = iterations;
-        this.#keyMaterial = new Promise(async (resolve, _reject) => {
-            const entropyBuffer = new TextEncoder().encode(this.entropy);
-            const keyMaterial = await crypto.subtle.importKey("raw", entropyBuffer, { name: "PBKDF2" }, false, ["deriveKey", "deriveBits"]);
-            resolve(keyMaterial);
-        });
+    #masterKey;
+    #keyInfo;
+    constructor(passphrase, keyInfo) {
+        this.#keyInfo = keyInfo;
+        this.#masterKey = this.initializeMasterKey(passphrase);
     }
-    async #genKey(salt) {
-        if (!this.#keyMaterial)
-            throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready");
+    async initializeMasterKey(passphrase) {
+        const salt = this.#keyInfo.salt1;
+        const iterations = this.#keyInfo.iterations1;
+        const hash = this.#keyInfo.hash1;
+        _sb_assert(salt && iterations && hash, "Protocol_AES_GCM_256.initializeMasterKey() - insufficient key info (fatal)");
+        const baseKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), { name: 'PBKDF2' }, false, ['deriveBits', 'deriveKey']);
+        const masterKeyBuffer = await crypto.subtle.deriveBits({
+            name: 'PBKDF2',
+            salt: salt,
+            iterations: iterations,
+            hash: hash
+        }, baseKey, 256);
+        return crypto.subtle.importKey('raw', masterKeyBuffer, { name: 'PBKDF2' }, false, ['deriveBits', 'deriveKey']);
+    }
+    static async genKey() {
+        return {
+            salt1: crypto.getRandomValues(new Uint8Array(16)).buffer,
+            iterations1: 100000,
+            iterations2: 10000,
+            hash1: 'SHA-256',
+            summary: 'PBKDF2 - SHA-256 - AES-GCM',
+        };
+    }
+    async #getMessageKey(salt) {
         const derivedKey = await crypto.subtle.deriveKey({
             'name': 'PBKDF2',
             'salt': salt,
-            'iterations': this.iterations,
-            'hash': "SHA-384"
-        }, await this.#keyMaterial, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt']);
+            'iterations': this.#keyInfo.iterations2,
+            'hash': this.#keyInfo.hash1
+        }, await this.#masterKey, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt']);
         return derivedKey;
     }
     async encryptionKey(msg) {
         if (DBG)
             console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt);
-        return this.#genKey(msg.salt);
+        return this.#getMessageKey(msg.salt);
     }
     async decryptionKey(_channel, msg) {
         if (!msg.salt) {
@@ -1688,7 +1703,7 @@ export class Protocol_AES_GCM_256 {
         }
         if (DBG)
             console.log("CALLING Protocol_AES_GCM_384.decryptionKey(), salt:", msg.salt);
-        return this.#genKey(msg.salt);
+        return this.#getMessageKey(msg.salt);
     }
 }
 export class Protocol_ECDH {

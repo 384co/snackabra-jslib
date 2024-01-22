@@ -233,11 +233,20 @@ export interface SBProtocol {
     encryptionKey(msg: SBMessage): Promise<CryptoKey>;
     decryptionKey(channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
 }
+export interface Protocol_KeyInfo {
+    salt1?: ArrayBuffer;
+    salt2?: ArrayBuffer;
+    iterations1?: number;
+    iterations2?: number;
+    hash1?: string;
+    hash2?: string;
+    summary?: string;
+}
 export declare class Protocol_AES_GCM_256 implements SBProtocol {
     #private;
-    private entropy;
-    private iterations;
-    constructor(entropy: string, iterations?: number);
+    constructor(passphrase: string, keyInfo: Protocol_KeyInfo);
+    initializeMasterKey(passphrase: string): Promise<CryptoKey>;
+    static genKey(): Promise<Protocol_KeyInfo>;
     encryptionKey(msg: SBMessage): Promise<CryptoKey>;
     decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
 }
@@ -265,7 +274,7 @@ declare class Channel extends SBChannelKeys {
     deCryptChannelMessage(channel: Channel, id: string, buf: ArrayBuffer): Promise<any>;
     getLastMessageTimes(): void;
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
-    getMessages(messageKeys: Set<string>): Promise<Map<string, ChannelMessage>>;
+    getMessages(messageKeys: Set<string>): Promise<Map<string, any>>;
     send(msg: SBMessage | any): Promise<string>;
     getChannelKeys(): Promise<SBChannelData>;
     getPubKeys(): Promise<Map<SBUserId, SBUserPublicKey>>;

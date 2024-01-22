@@ -2529,43 +2529,93 @@ export interface SBProtocol {
 }
 
 /**
+ * Superset of what different protocols might need. Their meaning
+ * depends on the protocol
+ */
+export interface Protocol_KeyInfo {
+  salt1?: ArrayBuffer,
+  salt2?: ArrayBuffer,
+  iterations1?: number,
+  iterations2?: number,
+  hash1?: string,
+  hash2?: string,
+  summary?: string,
+}
+
+/**
  * Basic protocol, just provide entropy and salt, then all
  * messages are encrypted accordingly.
  */
 export class Protocol_AES_GCM_256 implements SBProtocol {
-  #keyMaterial?: Promise<CryptoKey>
+  #masterKey?: Promise<CryptoKey>
+  #keyInfo: Protocol_KeyInfo
 
-  constructor(private entropy: string, private iterations = 100000) {
-    this.#keyMaterial = new Promise(async (resolve, _reject) => {
-      const entropyBuffer = new TextEncoder().encode(this.entropy);
-      const keyMaterial = await crypto.subtle.importKey(
-          "raw",
-          entropyBuffer,
-          { name: "PBKDF2" },
-          false,
-          ["deriveKey", "deriveBits"]
-      );
-      resolve(keyMaterial)
-    })
+  constructor(passphrase: string, keyInfo: Protocol_KeyInfo) {
+    this.#keyInfo = keyInfo; // todo: assert components
+    this.#masterKey = this.initializeMasterKey(passphrase);
   }
 
-  async #genKey(salt: ArrayBuffer): Promise<CryptoKey> {
-    if (!this.#keyMaterial) throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready")
+  async initializeMasterKey(passphrase: string): Promise<CryptoKey> {
+    const salt = this.#keyInfo.salt1!;
+    const iterations = this.#keyInfo.iterations1!;
+    const hash = this.#keyInfo.hash1!;
+    _sb_assert(salt && iterations && hash, "Protocol_AES_GCM_256.initializeMasterKey() - insufficient key info (fatal)")
+
+    const baseKey = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(passphrase),
+      { name: 'PBKDF2' },
+      false,
+      ['deriveBits', 'deriveKey']
+    );
+
+    const masterKeyBuffer = await crypto.subtle.deriveBits(
+      {
+        name: 'PBKDF2',
+        salt: salt,
+        iterations: iterations,
+        hash: hash
+      },
+      baseKey,
+      256
+    );
+
+    return crypto.subtle.importKey(
+      'raw',
+      masterKeyBuffer,
+      { name: 'PBKDF2' },
+      false,
+      ['deriveBits', 'deriveKey']
+    );
+  }
+
+  static async genKey(): Promise<Protocol_KeyInfo> {
+    return {
+      salt1: crypto.getRandomValues(new Uint8Array(16)).buffer,
+      iterations1: 100000,
+      iterations2: 10000,
+      hash1: 'SHA-256',
+      summary: 'PBKDF2 - SHA-256 - AES-GCM',
+    }
+  }
+
+  // Derive a per-message key 
+  async #getMessageKey(salt: ArrayBuffer): Promise<CryptoKey> {
     const derivedKey = await crypto.subtle.deriveKey(
       {
         'name': 'PBKDF2',
         'salt': salt,
-        'iterations': this.iterations,
-        'hash': "SHA-384"
+        'iterations': this.#keyInfo.iterations2!, // on a per-message basis
+        'hash': this.#keyInfo.hash1!
       },
-      await this.#keyMaterial,
+      await this.#masterKey!,
       { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
     return derivedKey
   }
 
   async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
     if (DBG) console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt)
-    return this.#genKey(msg.salt)
+    return this.#getMessageKey(msg.salt)
   }
 
   async decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined> {
@@ -2574,9 +2624,163 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
       return undefined
     }
     if (DBG) console.log("CALLING Protocol_AES_GCM_384.decryptionKey(), salt:", msg.salt)
-    return this.#genKey(msg.salt!)
+    return this.#getMessageKey(msg.salt!)
   }
 }
+
+  // constructor(passphrase: string, keyInfo: Protocol_KeyInfo) {
+  //   this.#keyInfo = keyInfo // todo: assert components
+  //   this.#masterKey = new Promise(async (resolve, _reject) => {
+  //     const salt = this.#keyInfo.salt1!
+  //     const iterations = this.#keyInfo.iterations1!
+  //     const hash = this.#keyInfo.hash1!
+  //     return crypto.subtle.importKey(
+  //       'raw',
+  //       new TextEncoder().encode(passphrase),
+  //       { name: 'PBKDF2' },
+  //       false,
+  //       ['deriveBits']
+  //     )
+  //       .then(key => {
+  //         const rez = crypto.subtle.deriveBits({
+  //           name: 'PBKDF2',
+  //           salt: salt,
+  //           iterations: iterations,
+  //           hash: hash
+  //         }, key, 256);
+  //         rez.then((masterKeyBuffer) => {
+  //           const importedKey = crypto.subtle.importKey(
+  //             'raw',
+  //             masterKeyBuffer,
+  //             {  
+  //               name: 'PBKDF2' 
+  //             },
+  //             false, 
+  //             ['deriveBits']
+  //           );
+  //           importedKey.then((derivedKey) => {
+  //             resolve(derivedKey)
+  //           })
+  //         }
+  //         )
+  //       })
+  //   })
+  // }
+
+  // #keyMaterial?: Promise<CryptoKey>
+  // #channelKey?: Promise<CryptoKey>;
+  // constructor(entropy: string, keyInfo: Protocol_KeyInfo) {
+  //   this.#keyMaterial = new Promise(async (resolve, _reject) => {
+  //     const entropyBuffer = new TextEncoder().encode(entropy);
+  //     const baseKeyMaterial = await crypto.subtle.importKey(
+  //       "raw",
+  //       entropyBuffer,
+  //       { name: "PBKDF2" },
+  //       false,
+  //       ["deriveKey"]
+  //     );
+  //     _sb_assert(keyInfo.salt && keyInfo.iterations, "Protocol_AES_GCM_256() - iterations not provided");
+  //     // Derive a generic secret key using PBKDF2
+  //     const channelKey = await crypto.subtle.deriveKey(
+  //       {
+  //         name: 'PBKDF2',
+  //         salt: keyInfo.salt,
+  //         iterations: keyInfo.iterations,
+  //         hash: 'SHA-256'
+  //       },
+  //       baseKeyMaterial,
+  //       { name: 'HMAC', hash: { name: 'SHA-256' } }, // Generic key for further derivation
+  //       false,
+  //       ['sign']  // HMAC key, to be used for HKDF in message key derivation
+  //     );
+  //     resolve(channelKey);
+  //   });
+  // }
+  // // constructor(entropy: string, keyInfo: Protocol_KeyInfo) {
+  // //   this.#channelKey = new Promise(async (resolve, _reject) => {
+  // //     const entropyBuffer = new TextEncoder().encode(entropy);
+  // //     const baseKeyMaterial = await crypto.subtle.importKey(
+  // //       "raw",
+  // //       entropyBuffer,
+  // //       { name: "PBKDF2" },
+  // //       false,
+  // //       ["deriveKey"]
+  // //     );
+  // //     _sb_assert(keyInfo.salt && keyInfo.iterations, "Protocol_AES_GCM_256() - iterations not provided");
+  // //     const channelKey = await crypto.subtle.deriveKey(
+  // //       {
+  // //         name: 'PBKDF2',
+  // //         salt: keyInfo.salt,
+  // //         iterations: keyInfo.iterations,
+  // //         hash: 'SHA-256'
+  // //       },
+  // //       baseKeyMaterial,
+  // //       // { name: 'AES-GCM', length: 256 },
+  // //       { name: 'HMAC', hash: { name: 'SHA-256' }  },
+  // //       false, // Channel key should not be extractable
+  // //       ['deriveKey']
+  // //     );
+  // //     resolve(channelKey);
+  // //   });
+  // // }
+  // async #genKey(salt: ArrayBuffer): Promise<CryptoKey> {
+  //   if (!this.#keyMaterial) throw new Error("Channel key not ready");
+  //   const channelKey = await this.#keyMaterial;
+  //   return crypto.subtle.deriveKey(
+  //     {
+  //       name: 'HKDF',
+  //       hash: 'SHA-256',
+  //       salt: salt,
+  //       info: new Uint8Array()  // HKDF info parameter can be empty
+  //     },
+  //     channelKey,
+  //     { name: 'AES-GCM', length: 256 },
+  //     true, // Extractable for debugging, set to false in production
+  //     ['encrypt', 'decrypt']
+  //   );
+  // }
+  // constructor(entropy: string, keyInfo: Protocol_KeyInfo) {
+  //   this.#keyMaterial = new Promise(async (resolve, _reject) => {
+  //     const entropyBuffer = new TextEncoder().encode(entropy);
+  //     const keyMaterial = await crypto.subtle.importKey(
+  //       "raw",
+  //       entropyBuffer,
+  //       { name: "PBKDF2" },
+  //       false,
+  //       ["deriveKey", "deriveBits"]
+  //     );
+  //     _sb_assert(keyInfo.salt && keyInfo.iterations, "Protocol_AES_GCM_256() - iterations not provided")
+  //     const derivedKey = await crypto.subtle.deriveKey(
+  //       {
+  //         'name': 'PBKDF2',
+  //         'salt': keyInfo.salt,
+  //         'iterations': keyInfo.iterations,
+  //         'hash': "SHA-256"
+  //       },
+  //       keyMaterial,
+  //       { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
+  //     resolve(derivedKey)
+  //   });
+  // }
+
+  // Derive a master key from the passphrase
+  
+
+
+  // Encrypt message
+  // async #genKey(salt: ArrayBuffer): Promise<CryptoKey> {
+  //   if (!this.#keyMaterial) throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready")
+  //   const derivedKey = await crypto.subtle.deriveKey(
+  //     {
+  //       'name': 'PBKDF2',
+  //       'salt': salt,
+  //       'iterations': 10000, // on a per-message basis
+  //       'hash': "SHA-256"
+  //     },
+  //     await this.#keyMaterial,
+  //     { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
+  //   return derivedKey
+  // }
 
 /**
  * Implements 'whisper', eg 1:1 public-key based encryption between
@@ -2943,7 +3147,7 @@ class Channel extends SBChannelKeys {
   // ToDo: actually, getting the messages, vs decrypting are different things ...
   //       ... eg to decrypt we provide a protocol, which would apply to a 'subset' of all messages
   //       ... (where 'all' the messages is just a special case)
-  getMessages(messageKeys: Set<string>): Promise<Map<string, ChannelMessage>> {
+  getMessages(messageKeys: Set<string>): Promise<Map<string, any>> {
     // todo: add IndexedDB caching - see above
     return new Promise(async (resolve, _reject) => {
       _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
