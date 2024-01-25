@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 41)";
+declare const version = "2.0.0-alpha.5 (build 61)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
@@ -18,6 +18,12 @@ export type SBStorageToken = string;
 export interface Dictionary<T> {
     [index: string]: T;
 }
+export declare function composeMessageKey(channelId: SBChannelId, timestamp: number, subChannel?: string): string;
+export declare function deComposeMessageKey(key: string): {
+    channelId: string;
+    timestamp: number;
+    subChannel: string;
+};
 export interface Message {
     body: any;
     channelId: SBChannelId;
@@ -28,6 +34,7 @@ export interface Message {
     eol?: number;
     _id: string;
 }
+export declare function validate_Message(data: Message): Message;
 export interface ChannelApiBody {
     [SB_CHANNEL_API_BODY_SYMBOL]?: boolean;
     channelId: SBChannelId;
@@ -51,6 +58,7 @@ export interface ChannelMessage {
     ts?: number;
     channelId?: SBChannelId;
     i2?: string;
+    sts?: number;
     timestampPrefix?: string;
     _id?: string;
     unencryptedContents?: any;
@@ -205,6 +213,7 @@ export declare class SBChannelKeys extends SB384 {
     get owner(): boolean | "" | undefined;
     get channelId(): string | undefined;
     get handle(): SBChannelHandle;
+    buildApiBody(path: string, apiPayload?: any): Promise<ChannelApiBody>;
     callApi(path: string): Promise<any>;
     callApi(path: string, apiPayload: any): Promise<any>;
 }
@@ -271,7 +280,7 @@ declare class Channel extends SBChannelKeys {
     get ChannelReadyFlag(): boolean;
     get api(): this;
     create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<SBChannelHandle>;
-    deCryptChannelMessage(channel: Channel, id: string, buf: ArrayBuffer): Promise<any>;
+    deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<any>;
     getLastMessageTimes(): void;
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
     getMessages(messageKeys: Set<string>): Promise<Map<string, any>>;
@@ -301,12 +310,11 @@ declare class ChannelSocket extends Channel {
     #private;
     channelSocketReady: Promise<ChannelSocket>;
     static ReadyFlag: symbol;
+    onMessage: (_m: Message) => void;
     constructor(handle: SBChannelHandle, onMessage: (m: Message) => void);
     get ready(): Promise<ChannelSocket>;
     get ChannelSocketReadyFlag(): boolean;
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
-    set onMessage(f: (m: Message) => void);
-    get onMessage(): (m: Message) => void;
     set enableTrace(b: boolean);
     send(msg: SBMessage | any): Promise<string>;
 }

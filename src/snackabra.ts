@@ -21,13 +21,13 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 41)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 61)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
 
 // minimum when creating a new channel
-export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024; // 8 MB
+export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024; // 32 MB
 
 /** 
  * Complete descriptor of a channel. The channel ID is a hash
@@ -137,6 +137,29 @@ export interface Dictionary<T> {
   [index: string]: T;
 }
 
+// Time stamps are monotonically increasing. We enforce that they must be different.
+// Stored as a string of [0-3] to facilitate prefix searches (within 4x time ranges).
+// We append "0000" for future needs, for example if we need above 1000 messages per second.
+// Can represent epoch timestamps for the next 400+ years.
+function timestampToBase4String(tsNum: number) {
+  return tsNum.toString(4).padStart(22, "0") + "0000" // total length 26
+}
+
+function base4StringToTimestamp(tsStr: string) {
+  return parseInt(tsStr, 4)
+}
+
+export function composeMessageKey(channelId: SBChannelId, timestamp: number, subChannel: string = '____', ) {
+  return `${channelId}_${subChannel ?? '____'}_${timestampToBase4String(timestamp)}`
+}
+
+export function deComposeMessageKey(key: string) {
+  const channelId = key.slice(0, 43)
+  const subChannel = key.slice(44, 48)
+  const timestamp = base4StringToTimestamp(key.slice(49))
+  return { channelId, timestamp, subChannel }
+}
+
 /**
  * The "app" level message format, provided to onMessage (by ChannelSocket)
  * Note it will only be forwarded if verified.
@@ -150,6 +173,24 @@ export interface Message {
   serverTimestamp: number; // reconstructed from timestampPrefix
   eol?: number; // end of life (timestamp), if present
   _id: string;
+}
+
+export function validate_Message(data: Message): Message {
+  if (!data) throw new Error(`invalid Message (null or undefined)`)
+  else if (
+    data.body && typeof data.body === 'object'
+    && data.channelId && typeof data.channelId === 'string' && data.channelId.length === 43
+    && data.sender && typeof data.sender === 'string' && data.sender.length === 43
+    && data.senderPublicKey && typeof data.senderPublicKey === 'string' && data.senderPublicKey.length > 0
+    && data.senderTimestamp && Number.isInteger(data.senderTimestamp)
+    && data.serverTimestamp && Number.isInteger(data.serverTimestamp)
+    && data._id && typeof data._id === 'string' && data._id.length === 86
+  ) {
+    return data as Message
+  } else {
+    if (DBG) console.error('invalid Message ... trying to ingest:\n', data)
+    throw new Error(`invalid Message`)
+  }
 }
 
 /**
@@ -226,15 +267,30 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
  * packaging have short names (apologies for lack of readability).
  * 'unencryptedContents' has a long and cumbersome name for obvious reasons.
  * 
+ * There are a couple of semantics that are enforced by the channel server;
+ * since this is partly a policy issue of the channel server, anything in this
+ * jslib documentation might be incomplete. For example, baseline channel
+ * server does not allow messages to both be 'infinite ttl' and addressed
+ * (eg have a 'to' field value). 
+ * 
+ * If any protocol wants to do additional or different encryption,
+ * it would need to wrap: the core binary format is defined to have room
+ * for iv and salt, and prescribes sizes 12 and 16 respectively. 
+ * Strictly speaking, the protocol can use these 28 bytes for whatever
+ * it wants. A protocol that wants to do something completely different
+ * can simply modify the 'c' (contents) buffer and append any binary data
+ * it needs.
+ * 
  */
+
 export interface ChannelMessage {
   [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean,
 
-  // strictly speaking, only these are necessary when *sending*
+  // the following is minimum when *sending*. see also stripChannelMessage()
   f?: SBUserId, // 'from': public (hash) of sender, matches publicKey of sender, verified by channel server
   c?: ArrayBuffer, // encrypted contents
-  iv?: Uint8Array, // nonce, always present whether needed by protocol or not
-  salt?: ArrayBuffer, // salt, always present whether needed by protocol or not
+  iv?: Uint8Array, // nonce, always present whether needed by protocol or not (12 bytes)
+  salt?: ArrayBuffer, // salt, always present whether needed by protocol or not (16 bytes)
   s?: ArrayBuffer, // signature
   ts?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
 
@@ -242,7 +298,8 @@ export interface ChannelMessage {
   // server provided, or can be reconstructed
   channelId?: SBChannelId, // channelId base62 x 43
   i2?: string, // subchannel; default is '____', can be any 4xbase62; only owner can read/write subchannels
-  timestampPrefix?: string, // timestampPrefix '0'/'1'/'2'/'3' - 26 of them (note last four are '0000'), timestamp per server
+  sts?: number, //  timestamp from server
+  timestampPrefix?: string, // string/base4 encoding of timestamp (see timestampToBase4String)
   _id?: string, // channelId + '_' + subChannel + '_' + timestampPrefix
 
   // whatever is being sent; should (must) be stripped when sent
@@ -256,41 +313,6 @@ export interface ChannelMessage {
   ttl?: number, // Value 0-15; if it's missing it's 15/0xF (infinite); if it's 1-7 it's duplicated to subchannels
 }
 
-// {
-//   unencryptedContents: 'Hello world!',
-//   c: ArrayBuffer {
-//     [Uint8Contents]: <cd f7 b1 57 96 23 ad 23 44 59 ad 3c 5d 4d e2 2d b4 c5 67 e8 d6 f5
-// 79 fb 36 e3 7d 12 f1 3e 18 59 ee f1 04 d3 c7 5d b6 b6 d7 69 25 61 60 37 27 15 f2 87 18 4c 8c 5d 9b
-// 6d 8d 63 d3 b6 d0 55 15 b3 e8 0f 5e 7b 62 44 f7 da 19 15 6a f0 b1 16 52 60 9c a7 4f d0 88 18 74 ee
-// 7a 0f 72 04 85 34 71 37 78 b0 db 10 ... 14 more bytes>,
-//     byteLength: 114
-//   },
-//   iv: Uint8Array(12) [
-//     168, 154,  13, 137,
-//     169,  48, 234, 250,
-//      11, 233, 182, 116
-//   ],
-//   f: 'wqGNRnjPd3biQkEKOTt3ONKplcenxcUhVfiAGw8xM0r',
-//   s: ArrayBuffer {
-//     [Uint8Contents]: <32 c2 c6 4c e8 0a 96 23 aa 2d 8c c7 14 03 e5 d1 da af 13 88 2f 83
-// 6a 78 c2 7a fb 5e 32 64 c8 ff ea 89 7d ec af a4 de 08 e1 de c3 db 3a a8 d4 91 f7 cc ea 01 ee ff 5e
-// 02 dc 14 04 48 ad 67 92 ed 5c 02 50 84 09 31 10 cb da d1 94 e3 2e 35 1d 10 c8 82 74 b2 a3 61 b2 85
-// f1 6a e8 b5 1b 15 9c 6a>,
-//     byteLength: 96
-//   },
-//   ts: 1705694578850,
-//   ttl: 15
-// }
-
-
-  // // strictly speaking, only these five are necessary when *sending*
-  // f?: SBUserId, // 'from': public (hash) of sender, matches publicKey of sender, verified by channel server
-  // c?: ArrayBuffer, // encrypted contents
-  // iv?: ArrayBuffer, // nonce
-  // s?: ArrayBuffer, // signature
-  // ts?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
-
-  
 export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
   if (!body) throw new Error(`invalid ChannelMessage (null or undefined)`)
   else if (body[SB_CHANNEL_MESSAGE_SYMBOL]) return body as ChannelMessage
@@ -302,14 +324,15 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
     && (body.iv && body.iv instanceof Uint8Array && body.iv.length === 12)
     && (body.s  && body.s instanceof ArrayBuffer)
 
-    && (!body.salt || body.salt instanceof ArrayBuffer) // required by the time we send it
+    && (!body.sts  || Number.isInteger(body.sts)) // if present came from server
+    && (!body.salt || body.salt instanceof ArrayBuffer && body.salt.byteLength === 16) // required by the time we send it
 
     // todo: might as well add regexes to some of these
-    && (!body._id || (typeof body._id === 'string' && body._id.length === 86))
-    && (!body.ready || typeof body.ready === 'boolean')
+    && (!body._id                || (typeof body._id === 'string' && body._id.length === 86))
+    && (!body.ready              || typeof body.ready === 'boolean')
     && (!body.timestampPrefix    || (typeof body.timestampPrefix === 'string' && body.timestampPrefix.length === 26))
     && (!body.channelId          || (typeof body.channelId === 'string' && body.channelId.length === 43))
-    // 'i2' is a bit more complicated, it must be 4xbase62 (plus '_'), so we regex against [a-zA-Z0-9_]
+    // 'subChannel': 'i2' is a bit more complicated, it must be 4xbase62 (plus boundary '_'), so we regex against [a-zA-Z0-9_]
     && (!body.i2                 || (typeof body.i2 === 'string' && /^[a-zA-Z0-9_]{4}$/.test(body.i2)))
     // body.ttl must be 0-15 (4 bits)
     && (!body.ttl                || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
@@ -321,18 +344,20 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
   }
 }
 
-// safety/privacy measures
+// safety/privacy measures; also economizing on storage
 export function stripChannelMessage(msg: ChannelMessage): ChannelMessage {
+  if (DBG) console.log('stripping message:\n', msg)
   const ret: ChannelMessage = {}
-  if (msg.f) ret.f = msg.f; else throw new Error("ERROR: missing 'f' ('from') in message")
-  if (msg.c) ret.c = msg.c; else throw new Error("ERROR: missing 'ec' ('encrypted contents') in message")
-  if (msg.iv) ret.iv = msg.iv; else throw new Error("ERROR: missing 'iv' ('nonce') in message")
-  if (msg.salt) ret.salt = msg.salt; else throw new Error("ERROR: missing 'salt' in message")
-  if (msg.s) ret.s = msg.s; else throw new Error("ERROR: missing 's' ('signature') in message")
-  if (msg.ts) ret.ts = msg.ts; else throw new Error("ERROR: missing 'ts' ('timestamp') in message")
-  if (msg.ttl && msg.ttl !== 0xF) ret.ttl = msg.ttl; // optional, and we strip default
-  if (msg.t) ret.t = msg.t; // optional
-  if (msg.i2 && msg.i2 !== '____') ret.i2 = msg.i2; // optional, also we strip out default value
+  if (msg.f !== undefined) ret.f = msg.f; else throw new Error("ERROR: missing 'f' ('from') in message")
+  if (msg.c !== undefined) ret.c = msg.c; else throw new Error("ERROR: missing 'ec' ('encrypted contents') in message")
+  if (msg.iv !== undefined) ret.iv = msg.iv; else throw new Error("ERROR: missing 'iv' ('nonce') in message")
+  if (msg.salt !== undefined) ret.salt = msg.salt; else throw new Error("ERROR: missing 'salt' in message")
+  if (msg.s !== undefined) ret.s = msg.s; else throw new Error("ERROR: missing 's' ('signature') in message")
+  if (msg.ts !== undefined) ret.ts = msg.ts; else throw new Error("ERROR: missing 'ts' ('timestamp') in message")
+  if (msg.sts !== undefined) ret.sts = msg.sts; else throw new Error("ERROR: missing 'sts' ('servertimestamp') in message")
+  if (msg.ttl !== undefined && msg.ttl !== 0xF) ret.ttl = msg.ttl; // optional, and we strip if set to default value
+  if (msg.t !== undefined) ret.t = msg.t; // 'to', optional but if present is kept
+  if (msg.i2 !== undefined && msg.i2 !== '____') ret.i2 = msg.i2; // optional, also we strip out default value
   return ret
 }
 
@@ -394,6 +419,7 @@ function setDebugLevel(dbg1: boolean, dbg2?: boolean) {
 }
 
 // index/number of seconds/string description of TTL values (0-15)
+//
 // (it's valid to encode it as four bits):
 // 0	         0  Ephemeral (not stored)
 // 1              <reserved>
@@ -404,12 +430,17 @@ function setDebugLevel(dbg1: boolean, dbg2?: boolean) {
 // 6	     14400  Four hours
 // 7	    129600  36 hours
 // 8      864000  Ten days
-// 10             <reserved>
+// 10             <reserved> (all 'reserved' future choices will be monotonically increasing)
 // 11		          <reserved>
 // 12		          <reserved>
 // 13		          <reserved>
 // 14		          <reserved>
 // 15	  Infinity	Infinity
+//
+// Note that time periods above '8' is largely TBD pending finalization
+// of what the storage server will prefer. As far as messages are concerned,
+// anything above '8' is 'very long'. Thus for example, messages with a 'to'
+// field (routable) may not have ttl above '8'.
 export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 14400, 129600, 864000, -1, -1, -1, -1, -1, Infinity]
 export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>',  'One minute', 'Five minutes', 'Thirty minutes', 'Four hours', '36 hours', '10 days', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)']
 
@@ -1071,7 +1102,10 @@ function getType(value: any) {
   //   console.error(`[getType] Only supported typed array is Uint8Array (got '${value.constructor.name}')`);
   //   return '<unsupported>';
   // }
-  console.error('[getType] Unsupported for object:', value);
+  if (typeof value === 'object' && typeof value.then === 'function')
+    console.error("[getType] Trying to serialize a Promise - did you forget an 'await'?");
+  else
+    console.error('[getType] Unsupported for object:', value);
   throw new Error('Unsupported type');
 }
 
@@ -1166,10 +1200,10 @@ function _assemblePayload(data: any): ArrayBuffer | null {
         startIndex += size;
       }
     }
-
+    // console.log(`[assemblePayload] metadata:\n`, metadata);
+    // console.log(`[assemblePayload] JSON.stringify:\n`, JSON.stringify(metadata))
     const metadataBuffer = new TextEncoder().encode(JSON.stringify(metadata));
     const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
-
     let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
     for (let i = 0; i < BufferList.length; i++) {
       payload = _appendBuffer(new Uint8Array(payload), BufferList[i]);
@@ -1245,8 +1279,7 @@ function _extractPayload(payload: ArrayBuffer): any {
     const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
     const decoder = new TextDecoder();
     const json = decoder.decode(payload.slice(4, 4 + metadataSize));
-    // console.log("json is", json)
-    const metadata = jsonParseWrapper(json, "L1290");
+    const metadata: any = jsonParseWrapper(json, "L1290");
     const startIndex = 4 + metadataSize;
 
     const data: any = {};
@@ -1265,7 +1298,7 @@ function _extractPayload(payload: ArrayBuffer): any {
     }
     return data;
   } catch (e) {
-    throw new Error('extractPayload() exception (' + e + ')');
+    throw new Error('[extractPayload] exception <<' + e + '>> [/extractPayload]');
   }
 }
 /**
@@ -1642,6 +1675,7 @@ export class SBCrypto {  /******************************************************
     _sb_assert(payload!.byteLength < MAX_SB_BODY_SIZE,
       `wrapMessage(): body must be smaller than ${MAX_SB_BODY_SIZE / 1024} KiB (we got ${payload!.byteLength / 1024} KiB)})`)
     _sb_assert(salt, "wrapMessage(): missing salt")
+    if (DBG2) console.log("will wrap() body, payload:\n", SEP, "\n", body, "\n", SEP, payload, "\n", SEP)
     const iv = crypto.getRandomValues(new Uint8Array(12))
     const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
     const view = new DataView(new ArrayBuffer(8));
@@ -2378,6 +2412,29 @@ export class SBChannelKeys extends SB384 {
     }
   }
 
+  async buildApiBody(path: string, apiPayload?: any) {
+    await this.sb384Ready // enough for signing
+    const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
+    const viewBuf = new ArrayBuffer(8);
+    const view = new DataView(viewBuf);
+    view.setFloat64(0, timestamp);
+    const pathAsArrayBuffer = new TextEncoder().encode(path).buffer
+    const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer)
+    const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload)! : undefined
+    // sign with userId key, covering timestamp + path + apiPayload
+    const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf)
+    const apiBody: ChannelApiBody = {
+      channelId: this.#channelId!,
+      path: path,
+      userId: this.userId,
+      userPublicKey: this.userPublicKey,
+      timestamp: timestamp,
+      sign: sign
+    }
+    if (apiPayloadBuf) apiBody.apiPayloadBuf = apiPayloadBuf
+    return validate_ChannelApiBody(apiBody)
+  }
+
   /**
     * Implements Channel api calls.
     * 
@@ -2391,67 +2448,33 @@ export class SBChannelKeys extends SB384 {
     if (DBG) console.log("ChannelApi.callApi: calling fetch with path:", path)
     if (DBG2) console.log("... and body:", apiPayload)
     _sb_assert(this.#channelId && path, "Internal Error (L2528)")
+    // todo: we can add 'GET' support with apiBody put into search term,
+    //       if we want that (as we're forced to do for web sockets)
     return new Promise(async (resolve, reject) => {
-      await this.sb384Ready // enough for signing
-      const timestamp = Math.round(Date.now() / 25) * 25 // fingerprinting protection
-      const viewBuf = new ArrayBuffer(8);
-      const view = new DataView(viewBuf);
-      view.setFloat64(0, timestamp);
-      const pathAsArrayBuffer = new TextEncoder().encode(path).buffer
-      const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer)
-      const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload)! : undefined
-      // sign with userId key, covering timestamp + path + apiPayload
-      const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf)
-      const apiBody: ChannelApiBody = {
-        channelId: this.#channelId!,
-        path: path,
-        userId: this.userId,
-        userPublicKey: this.userPublicKey,
-        timestamp: timestamp,
-        sign: sign
-      }
-      if (apiPayloadBuf) apiBody.apiPayloadBuf = apiPayloadBuf
       const init: RequestInit = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/octet-stream"',
         },
-        body: assemblePayload(validate_ChannelApiBody(apiBody))
+        body: assemblePayload(await this.buildApiBody(path, apiPayload))
       }
       if (DBG2) console.log("==== ChannelApi.callApi: calling fetch with init:\n", init)
       SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId! + path, init)
         .then((ret: any) => { resolve(ret) })
         .catch((e: Error) => { reject("[Channel.callApi] Error: " + WrapError(e)) })
-
-      // SBFetch(this.channelServer + '/api/v2/channel/' + this.channelId! + path, init)
-      //   .then(async (response: Response) => {
-      //     var retValue: any
-      //     if (response.headers.get('content-type') === 'application/json; charset=utf-8') {
-      //       retValue = jsonParseWrapper(await response.json(), "L2928")
-      //     } else if (response.headers.get('content-type') === 'application/octet-stream') {
-      //       retValue = extractPayload(await response.arrayBuffer())
-      //     } else {
-      //       throw new Error("ChannelApi.callApi: invalid content-type in response")
-      //     }
-      //     if (!response.ok || retValue.error || (retValue.success && !retValue.success)) {
-      //       let apiErrorMsg = 'Network or Server error on Channel API call'
-      //       if (response.status) apiErrorMsg += ' [' + response.status + ']'
-      //       if (retValue.error) apiErrorMsg += ': ' + retValue.error
-      //       if (DBG) console.error("ChannelApi.callApi error:\n", apiErrorMsg)
-      //       reject(new Error(apiErrorMsg))
-      //     } else {
-      //       if (DBG) console.log("ChannelApi.callApi: success\n", retValue)
-      //       resolve(retValue)
-      //     }
-      //   })
-      //   .catch((e: Error) => { reject("ChannelApi (SBFetch) Error [2]: " + WrapError(e)) })
     })
   }
 
 
 } /* class SBChannelKeys */
 
-const MAX_SB_BODY_SIZE = 64 * 1024 * 1.5 // allow for base64 overhead plus extra
+// in principle these could be much (much) bigger; but the intent of Channels is
+// lots of small 'messages', anything 'big' should be managed as shards, and the
+// handles of such shards sent in messages. there are good arguments for allowing
+// much larger messages, especially if ephemeral, but it's always easy to INCREASE
+// max size, harder to decrease. also, storage cost of messages is MUCH higher than
+// shard storage, so we don't want to inadvertently encourage large messages.
+const MAX_SB_BODY_SIZE = 64 * 1024
 
 export interface MessageOptions {
   ttl?: number,
@@ -2790,69 +2813,119 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
  * channel owner's public key.
  */
 export class Protocol_ECDH implements SBProtocol {
-  #keyMap: Map<string, CryptoKey> = new Map()
+  #keyMap: Map<string, CryptoKey> = new Map();
+
   constructor() { /* this protocol depends on channel and recipient only */ }
-  encryptionKey(msg: SBMessage): Promise<CryptoKey> {
-    return new Promise(async (resolve, _reject) => {
-      await msg.channel.ready;
-      const channelId = msg.channel.channelId!;
-      _sb_assert(channelId, "Internal Error (L2565)")
-      const sendTo = msg.options.sendTo
-        ? msg.options.sendTo
-        : msg.channel.channelData.ownerPublicKey;
-      const key = channelId + "_" + sendTo;
-      if (!this.#keyMap.has(key)) {
-        const newKey = await crypto.subtle.deriveKey(
-          {
-            name: 'ECDH',
-            public: (await new SB384(sendTo).ready).publicKey
-          },
-          msg.channel.privateKey,
-          { name: 'AES-GCM', length: 256 },
-          true,
-          ['encrypt', 'decrypt']);
-        this.#keyMap.set(key, newKey);
-        if (DBG2) console.log("++++ Protocol_ECDH.key() - newKey:", newKey)
-      }
-      const res = this.#keyMap.get(key);
-      _sb_assert(res, "Internal Error (L2584)")
-      if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res)
-      resolve(res!);
-    });
+
+  async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
+    await msg.channel.ready;
+    const channelId = msg.channel.channelId!;
+    _sb_assert(channelId, "Internal Error (L2565)");
+    const sendTo = msg.options.sendTo ? msg.options.sendTo : msg.channel.channelData.ownerPublicKey;
+    return this.#getKey(channelId, sendTo, msg.channel.privateKey);
   }
-  decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
-    // todo: refactor, we have overlapping code w/ encrypt
-    return new Promise(async (resolve, _reject) => {
-      if (DBG2) console.log("CALLING Protocol_ECDH.key() - msg:", msg)
-      await channel.ready;
-      const channelId = channel.channelId!;
-      _sb_assert(channelId, "Internal Error (L2594)")
-      const sentFrom = channel.visitors.get(msg.f)!; // full pub key (not just hash)
-      if (!sentFrom) {
-        if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown")
-        return undefined
-      }
-      const key = channelId + "_" + sentFrom;
-      if (!this.#keyMap.has(key)) {
-        const newKey = await crypto.subtle.deriveKey(
-          {
-            name: 'ECDH',
-            public: (await new SB384(sentFrom).ready).publicKey
-          },
-          channel.privateKey,
-          { name: 'AES-GCM', length: 256 },
-          true,
-          ['encrypt', 'decrypt']);
-        this.#keyMap.set(key, newKey);
-      }
-      const res = this.#keyMap.get(key);
-      _sb_assert(res, "Internal Error (L2611)")
-      if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res)
-      resolve(res!);
-    });
-  
+
+  async decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
+    await channel.ready;
+    const channelId = channel.channelId!;
+    _sb_assert(channelId, "Internal Error (L2594)");
+    const sentFrom = channel.visitors.get(msg.f)!;
+    if (!sentFrom) {
+      if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown");
+      return undefined;
+    }
+    return this.#getKey(channelId, sentFrom, channel.privateKey);
+  }
+
+  async #getKey(channelId: string, publicKey: string, privateKey: CryptoKey): Promise<CryptoKey> {
+    const key = channelId + "_" + publicKey;
+    if (!this.#keyMap.has(key)) {
+      const newKey = await crypto.subtle.deriveKey(
+        {
+          name: 'ECDH',
+          public: (await new SB384(publicKey).ready).publicKey
+        },
+        privateKey,
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+      this.#keyMap.set(key, newKey);
+      if (DBG2) console.log("++++ Protocol_ECDH.key() - newKey:", newKey);
+    }
+    const res = this.#keyMap.get(key);
+    _sb_assert(res, "Internal Error (L2584/2611)");
+    if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res);
+    return res!;
   }
 }
+
+
+
+// export class Protocol_ECDH implements SBProtocol {
+//   #keyMap: Map<string, CryptoKey> = new Map()
+//   constructor() { /* this protocol depends on channel and recipient only */ }
+//   encryptionKey(msg: SBMessage): Promise<CryptoKey> {
+//     return new Promise(async (resolve, _reject) => {
+//       await msg.channel.ready;
+//       const channelId = msg.channel.channelId!;
+//       _sb_assert(channelId, "Internal Error (L2565)")
+//       const sendTo = msg.options.sendTo
+//         ? msg.options.sendTo
+//         : msg.channel.channelData.ownerPublicKey;
+//       const key = channelId + "_" + sendTo;
+//       if (!this.#keyMap.has(key)) {
+//         const newKey = await crypto.subtle.deriveKey(
+//           {
+//             name: 'ECDH',
+//             public: (await new SB384(sendTo).ready).publicKey
+//           },
+//           msg.channel.privateKey,
+//           { name: 'AES-GCM', length: 256 },
+//           true,
+//           ['encrypt', 'decrypt']);
+//         this.#keyMap.set(key, newKey);
+//         if (DBG2) console.log("++++ Protocol_ECDH.key() - newKey:", newKey)
+//       }
+//       const res = this.#keyMap.get(key);
+//       _sb_assert(res, "Internal Error (L2584)")
+//       if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res)
+//       resolve(res!);
+//     });
+//   }
+//   decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
+//     // todo: refactor, we have overlapping code w/ encrypt
+//     return new Promise(async (resolve, _reject) => {
+//       if (DBG2) console.log("CALLING Protocol_ECDH.key() - msg:", msg)
+//       await channel.ready;
+//       const channelId = channel.channelId!;
+//       _sb_assert(channelId, "Internal Error (L2594)")
+//       const sentFrom = channel.visitors.get(msg.f)!; // full pub key (not just hash)
+//       if (!sentFrom) {
+//         if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown")
+//         return undefined
+//       }
+//       const key = channelId + "_" + sentFrom;
+//       if (!this.#keyMap.has(key)) {
+//         const newKey = await crypto.subtle.deriveKey(
+//           {
+//             name: 'ECDH',
+//             public: (await new SB384(sentFrom).ready).publicKey
+//           },
+//           channel.privateKey,
+//           { name: 'AES-GCM', length: 256 },
+//           true,
+//           ['encrypt', 'decrypt']);
+//         this.#keyMap.set(key, newKey);
+//       }
+//       const res = this.#keyMap.get(key);
+//       _sb_assert(res, "Internal Error (L2611)")
+//       if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res)
+//       resolve(res!);
+//     });
+  
+//   }
+// }
 
 /**
  * Join a channel, taking a channel handle. Returns channel object.
@@ -2904,7 +2977,7 @@ class Channel extends SBChannelKeys {
     if (DBG2) console.log("Channel() constructor called with handleOrKey:", handleOrKey)
     super(handleOrKey);
     // this.protocol = protocol ? protocol : new BasicProtocol(this)
-    // if (protocol) this.#protocol = protocol
+    // if (protocol) this.protocol = protocol
     this.channelReady =
       this.sbChannelKeysReady
         .then(() => {
@@ -2964,7 +3037,6 @@ class Channel extends SBChannelKeys {
   //     SBApiFetch(this.channelServer + '/api/v2/channel/' + this.channelId! + path, init)
   //       .then((ret: any) => { resolve(ret) })
   //       .catch((e: Error) => { reject("[Channel.callApi] Error: " + WrapError(e)) })
-
   //     // SBFetch(this.channelServer + '/api/v2/channel/' + this.channelId! + path, init)
   //     //   .then(async (response: Response) => {
   //     //     var retValue: any
@@ -3018,15 +3090,11 @@ class Channel extends SBChannelKeys {
     })
   }
 
-  async deCryptChannelMessage(channel: Channel, id: string, buf: ArrayBuffer): Promise<any> {
-    if (DBG2) console.log("Asked to decrypt:", id, buf)
-    if (!buf) return undefined;
-
+  // async deCryptChannelMessage(channel: Channel, id: string, buf: ArrayBuffer): Promise<any> {
+  async deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<any> {
+    // if (DBG2) console.log("Asked to decrypt:", id, buf)
+    // if (!buf) return undefined;
     try {
-      const msgBuf = extractPayload(buf).payload
-      if (DBG2) console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf)
-      const msgRaw = validate_ChannelMessage(msgBuf)
-      if (DBG2) console.log("++++ deCryptChannelMessage: validated")
       const f = msgRaw.f // protocols may use 'from', so needs to be in channel visitor map
       if (!f) return undefined
       if (!this.visitors.has(f)) {
@@ -3163,7 +3231,12 @@ class Channel extends SBChannelKeys {
       const decryptedMessages = new Map<string, ChannelMessage>()
       for (const [key, value] of messages.entries()) {
         if (!this.protocol) throw new Error("Channel.getMessages(): need protocol to decrypt messages")
-        const decryptedMessage = await this.deCryptChannelMessage(this, key, value)
+        const msgBuf = extractPayload(value).payload
+        if (DBG2) console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf)
+        const msgRaw = validate_ChannelMessage(msgBuf)
+        if (DBG2) console.log("++++ deCryptChannelMessage: validated")
+        // const decryptedMessage = await this.deCryptChannelMessage(this, key, value)
+        const decryptedMessage = await this.deCryptChannelMessage(this, msgRaw)
         if (decryptedMessage) decryptedMessages.set(key, decryptedMessage)
       }
       if (DBG2) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP)
@@ -3492,7 +3565,8 @@ class ChannelSocket extends Channel {
   #ws: WSProtocolOptions
   // #sbServer: SBServer
   #socketServer: string
-  #onMessage = this.#noMessageHandler // the user message handler
+
+  onMessage = (_m: Message): void => { _sb_assert(false, "[ChannelSocket] NO MESSAGE HANDLER"); }
   #ack: Map<string, (value: string | PromiseLike<string>) => void> = new Map()
   #traceSocket: boolean = false // should not be true in production
 
@@ -3508,7 +3582,7 @@ class ChannelSocket extends Channel {
     super(handle) // initialize 'channel' parent
       ; (this as any)[ChannelSocket.ReadyFlag] = false;
     this.#socketServer = handle.channelServer.replace(/^http/, 'ws')
-    this.#onMessage = onMessage
+    this.onMessage = onMessage
     // url = sbServer.channel_ws + '/api/room/' + channelId + '/websocket'
     const url = this.#socketServer + '/api/v2/channel/' + handle.channelId + '/websocket'
     this.#ws = {
@@ -3518,40 +3592,68 @@ class ChannelSocket extends Channel {
       closed: false,
       timeout: 2000
     }
-    // this.channelSocketReady = this.#channelSocketReadyFactory()
     this.channelSocketReady = this.#channelSocketReadyFactory()
-
-    // constructor(sbServerOrHandle: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string) // old interface
-    // constructor(sbServerOrHandle: SBServer | SBChannelHandle, onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string)
-    // constructor(sbServer: SBServer, onMessage: (m: ChannelMessage) => void, key: JsonWebKey, channelId: string) {
-    // if (typeof sbServerOrHandle !== 'object')
-    //   throw new Error("ChannelSocket(): first argument must be SBServer or SBChannelHandle")
-    // distinguish based on what properties the two interfaces have
-    // if (sbServerOrHandle.hasOwnProperty('channelId') && sbServerOrHandle.hasOwnProperty('userKeyString')) {
-    //   // first, SBChannelHandle must have properties 'channelId' and 'userId'
-    //   const handle = sbServerOrHandle as SBChannelHandle
-    //   if (!handle.channelServer) throw new Error("ChannelSocket(): no channel server provided (required)")
-    //   super(handle) // initialize 'channel' parent
-    //   this.#socketServer = handle.channelServer.replace(/^http/, 'ws')
-    // } else if (sbServerOrHandle.hasOwnProperty('channel_server') && sbServerOrHandle.hasOwnProperty('storage_server')) {
-    //   // next, sbServer must have 'channel_server' and 'channel_ws' and 'storage_server'
-    //   const sbServer = sbServerOrHandle as SBServer
-    //   _sb_assert(sbServer.channel_ws, 'ChannelSocket(): no websocket server name provided')
-    //   if (!key) throw new Error("ChannelSocket(): no key provided")
-    //   if (!channelId) throw new Error("ChannelSocket(): no channelId provided")
-    //   super(sbServer, key, channelId /*, identity ? identity : new Identity() */) // initialize 'channel' parent
-    //   this.#socketServer = sbServer.channel_ws
-    //   // this.#sbServer = sbServer
-    // } else {
-    //   throw new Error("ChannelSocket(): first argument must be SBServer or SBChannelHandle")
-    // }
   }
 
-  // catch and call out if this is missing
-  #noMessageHandler(_m: Message): void { _sb_assert(false, "NO MESSAGE HANDLER"); }
+  #processMessage = async (e: MessageEvent<any>) => {
+    if (DBG) console.log("Received socket message:", e)
+    const msg = e.data
+    var message: ChannelMessage | null = null
+    _sb_assert(msg, "[ChannelSocket] received empty message")
+    if (typeof msg === 'string') {
+      console.error("ChannelSocket receiving string (json?) message, this is getting deprecated")
+      message = jsonParseWrapper(msg, "L3589")
+    } else if (msg instanceof ArrayBuffer) {
+      message = extractPayload(msg).payload
+    } else if (msg instanceof Blob) {
+      message = extractPayload(await msg.arrayBuffer()).payload
+    } else {
+      _sb_exception("L3594", "[ChannelSocket] received unknown message type")
+    }
+    _sb_assert(message, "[ChannelSocket] cannot parse message")
 
-  async #processMessage(msg: any) {
-    if (DBG) console.log("Received socket message:", msg)
+    message = validate_ChannelMessage(message!) // throws if there's an issue
+    // TODO: decrypt, validate signature, etc
+    console.log(SEP, "Received socket message:\n", message, "\n", SEP)
+
+    if (!message.channelId) message.channelId = this.channelId
+    _sb_assert(message.channelId === this.channelId, "[ChannelSocket] received message for wrong channel?")
+
+    if (this.#traceSocket) console.log("Received socket message:", message)
+
+    if (!message._id)
+      message._id = composeMessageKey(message.channelId!, message.sts!, message.i2)
+
+    // check if this message is one that we've recently sent
+    const hash = await crypto.subtle.digest('SHA-256', message.c!)
+    const ack_id = arrayBufferToBase64(hash)
+    if (DBG) console.log("Received message with hash:", ack_id)
+    const r = this.#ack.get(ack_id)
+    if (r) {
+      if (DBG || this.#traceSocket) console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`)
+      this.#ack.delete(ack_id)
+      r("success") // we first resolve that outstanding send (and then also deliver message)
+    }
+    
+    // const contents = await this.deCryptChannelMessage(this, message._id, message.c!)
+    const contents = await this.deCryptChannelMessage(this, message)
+
+    // we shuffle around the data into an easier-to-consume format
+    const m: Message = {
+      body: contents,
+      channelId: message.channelId!,
+      sender: message.f!,
+      senderPublicKey: this.visitors.get(message.f!)!,
+      senderTimestamp: message.ts!,
+      serverTimestamp: message.sts!,
+      _id: message._id!,
+    }
+
+    if (DBG) console.log("Repackaged and will deliver 'Message':", m)
+
+    // call user-provided message handler
+    // this.onMessage(contents)
+    this.onMessage(m)
   }
 
   #channelSocketReadyFactory() {
@@ -3559,11 +3661,29 @@ class ChannelSocket extends Channel {
       if (DBG) console.log("++++ STARTED ChannelSocket.readyPromise()")
       const url = this.#ws.url
 
-      if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2)
+      if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
         // either it's new, or it's closed, or it's in the process of closing
-        this.#ws.websocket = new WebSocket(url);
+        // a WebSocket connection is always a 'GET', and there's no way to provide a body
+        const apiBodyBuf = assemblePayload(await this.buildApiBody(url))
+        _sb_assert(apiBodyBuf, "Internal Error [L3598]")
+        // here's the only spot in the code where we actually open the websocket:
+        this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf!))
+      }
 
-      this.#ws.websocket.addEventListener('message', this.#processMessage);
+      this.#ws.websocket.addEventListener('message',
+        (e: MessageEvent<any>) => {
+          if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3618")?.hasOwnProperty('ready')) {
+            // switch to main message processor
+            this.#ws.websocket!.addEventListener('message', this.#processMessage)
+            // we're ready
+            ;(this as any)[ChannelSocket.ReadyFlag] = true;
+            resolve(this)
+          } else {
+            if (DBG) console.log(SEP, "Received non-ready:\n", e.data, "\n", SEP)
+            reject("[ChannelSocket] received something other than 'ready' as first message")
+          }
+        }
+      )
 
       this.#ws.websocket.addEventListener('open', async () => {
         this.#ws.closed = false
@@ -3572,7 +3692,8 @@ class ChannelSocket extends Channel {
         if (DBG) console.log("++++++++ readyPromise() sending init")
         // auth is done on setup, it's not needed for the 'ready' signal;
         // this will prompt server to send backlogged messages
-        this.#ws.websocket!.send(JSON.stringify({ ready: true }))
+        // this.#ws.websocket!.send(JSON.stringify({ ready: true }))
+        this.#ws.websocket!.send(assemblePayload({ ready: true })!)
       });
 
       this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
@@ -3597,14 +3718,15 @@ class ChannelSocket extends Channel {
       // let us set a timeout to catch and make sure this thing resoles within 0.5 seconds
       setTimeout(() => {
         if (!(this as any)[ChannelSocket.ReadyFlag]) {
-          const msg = "ChannelSocket() - this socket is not resolving (waited 10s) ..."
+          const msg = "[ChannelSocket] - this socket is not resolving (waited 10s) ..."
           console.warn(msg); reject(msg);
         } else {
           if (DBG) console.log("ChannelSocket() - this socket resolved", this)
         }
       }, 10000);
-      (this as any)[ChannelSocket.ReadyFlag] = true;
-      resolve(this)
+
+      // (this as any)[ChannelSocket.ReadyFlag] = true;
+      // resolve(this) // nope, we resolve when we get a 'ready' message
     })
   }
 
@@ -3670,10 +3792,7 @@ class ChannelSocket extends Channel {
   //       }
   //     }, 10000)
   //   })
-
   // }
-
-
   // /** @private */
   // async #processMessage(msg: any) {
   //   let m = msg.data
@@ -3724,8 +3843,6 @@ class ChannelSocket extends Channel {
   //             console.log(Object.assign({}, m))
   //           }
   //           // we process 'whispers' here, they're 1-1 messages, and can be skipped if not for us
-
-
   //           this.#onMessage(m)
   //         } catch {
   //           console.warn('Error decrypting message, dropping (ignoring) message')
@@ -3748,12 +3865,10 @@ class ChannelSocket extends Channel {
   //     // unwrapped = await sbCrypto.unwrap(this.keys.lockedKey, message.encrypted_contents, 'string')
   //   }
   // }
-
   // #insideFirstMessageHandler(e: MessageEvent) {
   //   console.warn("WARNING: firstMessageEventHandler() called recursively (?)")
   //   console.warn(e)
   // }
-
   // // we use (bound) message handlers orchestrate who handles first message (and only once)
   // #firstMessageEventHandler(e: MessageEvent) {
   //   if (this.#traceSocket) console.log("FIRST MESSAGE HANDLER CALLED")
@@ -3764,7 +3879,6 @@ class ChannelSocket extends Channel {
   //   // there may be other information in the message (eg motd, roomLocked)
   //   const message = jsonParseWrapper(e.data, 'L2239') as ChannelMessage
   //   if (DBG) console.log("++++++++ readyPromise() received ChannelKeysMessage:", message);
-
   //   // // todo: we should check for 'error' messages
   //   // _sb_assert(message.ready, `got roomKeys but channel reports it is not ready [${message}]`)
   //   // this.motd = message.motd
@@ -3806,8 +3920,8 @@ class ChannelSocket extends Channel {
     }
   }
 
-  set onMessage(f: (m: Message) => void) { this.#onMessage = f }
-  @Ready get onMessage() { return this.#onMessage }
+  // set onMessage(f: (m: Message) => void) { this.#onMessage = f }
+  // @Ready get onMessage() { return this.#onMessage }
 
   /** Enables debug output */
   set enableTrace(b: boolean) {
@@ -3822,7 +3936,8 @@ class ChannelSocket extends Channel {
     * or an error message if it fails.
     */
   @VerifyParameters
-  send(msg: SBMessage | any): Promise<string> {
+  async send(msg: SBMessage | any): Promise<string> {
+    await this.ready
     const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
     _sb_assert(this.#ws.websocket, "ChannelSocket.send() called before ready")
     if (this.#ws.closed) {
@@ -3835,19 +3950,19 @@ class ChannelSocket extends Channel {
       await sbm.ready // message needs to be ready
       await this.ready // and 'we' (channel socket) need to be ready
       if (!this.ChannelSocketReadyFlag) reject("ChannelSocket.send() is confused - ready or not?")
-      switch (this.#ws.websocket!.readyState) {
+      const readyState = this.#ws.websocket!.readyState
+      switch (readyState) {
         case 1: // OPEN
           if (this.#traceSocket)
             console.log("++++++++ ChannelSocket.send() will send message:", Object.assign({}, sbm.message))
           const messagePayload = assemblePayload(sbm.message)
           _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message")
           // we keep track of a hash of things we've sent so we can track when we see them
-          const hash = await crypto.subtle.digest('SHA-256', messagePayload!)
+          // const hash = await crypto.subtle.digest('SHA-256', messagePayload!)
+          const hash = await crypto.subtle.digest('SHA-256', sbm.message.c!)
           const messageHash = arrayBufferToBase64(hash)
-          if (this.#traceSocket) {
-            console.log("++++++++ ChannelSocket.send():Which has hash:")
-            console.log(messageHash)
-          }
+          if (DBG || this.#traceSocket)
+            console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash)
           // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
           this.#ack.set(messageHash, resolve)
 
@@ -3868,12 +3983,15 @@ class ChannelSocket extends Channel {
             }
           }, this.#ws.timeout)
           break
-        case 3: // CLOSED
         case 0: // CONNECTING
         case 2: // CLOSING
-          const errMsg = 'socket not OPEN - either CLOSED or in the state of CONNECTING/CLOSING'
+        case 3: // CLOSED
+          const errMsg = `socket not OPEN - it is ${ readyState === 0 ? 'CONNECTING' : readyState === 2 ? 'CLOSING' : 'CLOSED'}`
           // _sb_exception('ChannelSocket', errMsg)
           reject(errMsg)
+          break
+        default:
+          _sb_exception('ChannelSocket', `socket in unknown state (${readyState})`)
       }
     })
   }
@@ -4753,7 +4871,7 @@ class Snackabra {
       { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.channelServer } }
     if (DBG) console.log("++++ Snackabra.connect() ++++", newChannelHandle)
     if (onMessage)
-      return new ChannelSocket(newChannelHandle, (m: ChannelMessage) => { console.log("MESSAGE (not caught):", m) })
+      return new ChannelSocket(newChannelHandle, onMessage)
     else
       return new Channel(newChannelHandle)
 
