@@ -1,5 +1,15 @@
 declare const version = "2.0.0-alpha.5 (build 61)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
+export declare const SBStorageTokenPrefix = "LM2r";
+export interface SBStorageToken {
+    [SB_STORAGE_TOKEN_SYMBOL]?: boolean;
+    hash: string;
+    size?: number;
+    motherChannel?: SBChannelId;
+    created?: number;
+    used?: boolean;
+}
+export declare function validate_SBStorageToken(data: SBStorageToken): SBStorageToken;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
     channelId: SBChannelId;
@@ -14,7 +24,7 @@ export interface SBChannelData {
     storageToken?: SBStorageToken;
 }
 export declare function validate_SBChannelData(data: any): SBChannelData;
-export type SBStorageToken = string;
+export type SBStorageTokenHash = string;
 export interface Dictionary<T> {
     [index: string]: T;
 }
@@ -71,7 +81,7 @@ export declare function stripChannelMessage(msg: ChannelMessage): ChannelMessage
 export interface ChannelAdminData {
     channelId: SBChannelId;
     channelData: SBChannelData;
-    channelCapacity: number;
+    capacity: number;
     locked: boolean;
     accepted: Set<SBUserId>;
     visitors: Map<SBUserId, SBUserPublicKey>;
@@ -179,6 +189,7 @@ declare const SB_CHANNEL_API_BODY_SYMBOL: unique symbol;
 declare const SB_CHANNEL_HANDLE_SYMBOL: unique symbol;
 declare const SB_MESSAGE_SYMBOL: unique symbol;
 declare const SB_OBJECT_HANDLE_SYMBOL: unique symbol;
+declare const SB_STORAGE_TOKEN_SYMBOL: unique symbol;
 export declare const sbCrypto: SBCrypto;
 declare class SB384 {
     #private;
@@ -279,32 +290,24 @@ declare class Channel extends SBChannelKeys {
     get ready(): Promise<Channel>;
     get ChannelReadyFlag(): boolean;
     get api(): this;
-    create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<SBChannelHandle>;
     deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<any>;
+    create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<SBChannelHandle>;
     getLastMessageTimes(): void;
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
     getMessages(messageKeys: Set<string>): Promise<Map<string, any>>;
     send(msg: SBMessage | any): Promise<string>;
-    getChannelKeys(): Promise<SBChannelData>;
-    getPubKeys(): Promise<Map<SBUserId, SBUserPublicKey>>;
-    updateCapacity(capacity: number): Promise<any>;
+    acceptVisitor(userId: SBUserId): Promise<any>;
     getCapacity(): Promise<any>;
-    getStorageLimit(): Promise<any>;
-    getMother(): Promise<any>;
-    getJoinRequests(): Promise<any>;
-    isLocked(): Promise<boolean>;
-    storageRequest(byteLength: number): Promise<Dictionary<any>>;
     lock(): Promise<{
         success: boolean;
     }>;
-    acceptVisitor(userId: SBUserId): Promise<any>;
-    getStorageToken(size: number): Promise<string>;
-    budd(): Promise<SBChannelHandle>;
-    budd(options: {
-        keys?: JsonWebKey;
-        storage?: number;
-        targetChannel?: SBChannelId;
-    }): Promise<SBChannelHandle>;
+    updateCapacity(capacity: number): Promise<any>;
+    getChannelKeys(): Promise<SBChannelData>;
+    getPubKeys(): Promise<Map<SBUserId, SBUserPublicKey>>;
+    getStorageLimit(): Promise<any>;
+    getStorageToken(size: number): Promise<SBStorageToken>;
+    budd(targetChannel?: SBChannelHandle, size?: number): Promise<SBChannelHandle>;
+    downloadChannel(): void;
 }
 declare class ChannelSocket extends Channel {
     #private;

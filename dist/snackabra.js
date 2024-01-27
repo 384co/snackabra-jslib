@@ -7,6 +7,27 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var _a;
 const version = '2.0.0-alpha.5 (build 61)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
+export const SBStorageTokenPrefix = 'LM2r';
+export function validate_SBStorageToken(data) {
+    if (!data)
+        throw new Error(`invalid SBStorageToken (null or undefined)`);
+    else if (data[SB_STORAGE_TOKEN_SYMBOL])
+        return data;
+    else if (typeof data === 'string' && data.slice(0, 4) === SBStorageTokenPrefix)
+        return { [SB_STORAGE_TOKEN_SYMBOL]: true, hash: data };
+    else if (data.hash && typeof data.hash === 'string' && data.hash.length > 0
+        && (!data.size || Number.isInteger(data.size) && data.size > 0)
+        && (!data.motherChannel || typeof data.motherChannel === 'string')
+        && (!data.created || Number.isInteger(data.created))
+        && (!data.used || typeof data.used === 'boolean')) {
+        return { ...data, [SB_STORAGE_TOKEN_SYMBOL]: true };
+    }
+    else {
+        if (DBG)
+            console.error('invalid SBStorageToken ... trying to ingest:\n', data);
+        throw new Error(`invalid SBStorageToken`);
+    }
+}
 function _checkChannelHandle(data) {
     return (data.channelId && data.channelId.length === 43
         && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
@@ -30,7 +51,7 @@ export function validate_SBChannelHandle(data) {
 function _checkChannelData(data) {
     return (data.channelId && data.channelId.length === 43
         && data.ownerPublicKey && typeof data.ownerPublicKey === 'string' && data.ownerPublicKey.length > 0
-        && (!data.storageToken || data.storageToken.length > 0));
+        && (!data.storageToken || validate_SBStorageToken(data.storageToken)));
 }
 export function validate_SBChannelData(data) {
     if (!data)
@@ -1163,29 +1184,13 @@ function VerifyParameters(_target, _propertyKey, descriptor) {
         };
     }
 }
-function ExceptionReject(target, _propertyKey, descriptor) {
-    if ((descriptor) && (descriptor.value)) {
-        const operation = descriptor.value;
-        descriptor.value = function (...args) {
-            try {
-                return operation.call(this, ...args);
-            }
-            catch (e) {
-                console.log(`ExceptionReject: ${WrapError(e)}`);
-                console.log(target);
-                console.log(_propertyKey);
-                console.log(descriptor);
-                return new Promise((_resolve, reject) => reject(`Reject: ${WrapError(e)}`));
-            }
-        };
-    }
-}
 const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle', 'SBChannelHandle', 'ChannelApiBody'];
 const SB_CHANNEL_MESSAGE_SYMBOL = Symbol('SB_CHANNEL_MESSAGE_SYMBOL');
 const SB_CHANNEL_API_BODY_SYMBOL = Symbol('SB_CHANNEL_API_BODY_SYMBOL');
 const SB_CHANNEL_HANDLE_SYMBOL = Symbol('SBChannelHandle');
 const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage');
 const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle');
+const SB_STORAGE_TOKEN_SYMBOL = Symbol.for('SBStorageToken');
 function isSBClass(s) {
     return typeof s === 'string' && SB_CLASS_ARRAY.includes(s);
 }
@@ -1820,29 +1825,6 @@ class Channel extends SBChannelKeys {
     get ready() { return this.channelReady; }
     get ChannelReadyFlag() { return this[Channel.ReadyFlag]; }
     get api() { return this; }
-    create(storageToken, channelServer) {
-        _sb_assert(storageToken !== null, '[Channel.create] Missing storage token');
-        _sb_assert(channelServer || this.channelServer, '[Channel.create] Missing channel server');
-        channelServer = channelServer ? channelServer : this.channelServer;
-        return new Promise(async (resolve, reject) => {
-            await this.channelReady;
-            this.channelData.storageToken = storageToken;
-            if (DBG)
-                console.log("Will try to create channel with channelData:", this.channelData);
-            this.callApi('/create', this.channelData)
-                .then(() => {
-                this.channelServer = channelServer;
-                _sb_assert(this.channelData && this.channelData.channelId && this.userPrivateKey, 'Internal Error [L2546]');
-                resolve({
-                    [SB_CHANNEL_HANDLE_SYMBOL]: true,
-                    channelId: this.channelData.channelId,
-                    userPrivateKey: this.userPrivateKey,
-                    channelServer: this.channelServer,
-                    channelData: this.channelData
-                });
-            }).catch((e) => { reject("Channel.create() failed: " + WrapError(e)); });
-        });
-    }
     async deCryptChannelMessage(channel, msgRaw) {
         try {
             const f = msgRaw.f;
@@ -1885,14 +1867,37 @@ class Channel extends SBChannelKeys {
             return undefined;
         }
     }
+    create(storageToken, channelServer = this.channelServer) {
+        if (DBG)
+            console.log("==== Channel.create() called with storageToken:", storageToken, "and channelServer:", channelServer);
+        _sb_assert(storageToken !== null, '[Channel.create] Missing storage token');
+        _sb_assert(channelServer, '[Channel.create] Missing channel server');
+        return new Promise(async (resolve, reject) => {
+            await this.channelReady;
+            this.channelData.storageToken = validate_SBStorageToken(storageToken);
+            if (DBG)
+                console.log("Will try to create channel with channelData:", this.channelData);
+            this.callApi('/budd', this.channelData)
+                .then(() => {
+                this.channelServer = channelServer;
+                _sb_assert(this.channelData && this.channelData.channelId && this.userPrivateKey, 'Internal Error [L2546]');
+                resolve({
+                    [SB_CHANNEL_HANDLE_SYMBOL]: true,
+                    channelId: this.channelData.channelId,
+                    userPrivateKey: this.userPrivateKey,
+                    channelServer: this.channelServer,
+                    channelData: this.channelData
+                });
+            }).catch((e) => { reject("Channel.create() failed: " + WrapError(e)); });
+        });
+    }
     getLastMessageTimes() {
         throw new Error("Channel.getLastMessageTimes(): not supported in 2.0 yet");
     }
     getMessageKeys(currentMessagesLength = 100, paginate = false) {
         return new Promise(async (resolve, _reject) => {
             _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)");
-            let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
-            const messages = await this.callApi('/getMessageKeys?currentMessagesLength=' + currentMessagesLength + cursorOption);
+            const messages = await this.callApi('/getMessageKeys', { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined });
             _sb_assert(messages, "Channel.getMessageKeys: no messages (empty/null response)");
             if (DBG2)
                 console.log("getMessageKeys\n", messages);
@@ -1930,76 +1935,73 @@ class Channel extends SBChannelKeys {
         await sbm.ready;
         return this.callApi('/send', sbm.message);
     }
-    getChannelKeys() {
-        return this.callApi('/getChannelKeys');
-    }
-    getPubKeys() {
-        return this.callApi('/getPubKeys');
-    }
-    updateCapacity(capacity) { return this.callApi('/updateRoomCapacity?capacity=' + capacity); }
-    getCapacity() { return (this.callApi('/getRoomCapacity')); }
+    acceptVisitor(userId) { return this.callApi('/acceptVisitor', { userId: userId }); }
+    getCapacity() { return (this.callApi('/getCapacity')); }
+    lock() { return this.callApi('/lockChannel'); }
+    updateCapacity(capacity) { return this.callApi('/setCapacity', { capacity: capacity }); }
+    getChannelKeys() { return this.callApi('/getChannelKeys'); }
+    getPubKeys() { return this.callApi('/getPubKeys'); }
     getStorageLimit() { return (this.callApi('/getStorageLimit')); }
-    getMother() { return (this.callApi('/getMother')); }
-    getJoinRequests() { return this.callApi('/getJoinRequests'); }
-    isLocked() {
-        return new Promise((resolve) => (this.callApi('/roomLocked')).then((d) => {
-            this.locked = (d.locked === true);
-            resolve(this.locked);
-        }));
-    }
-    storageRequest(byteLength) {
-        return this.callApi('/storageRequest?size=' + byteLength);
-    }
-    lock() {
-        return this.callApi('/lockChannel');
-    }
-    acceptVisitor(userId) {
-        return this.callApi('/acceptVisitor', { userId: userId });
-    }
-    async getStorageToken(size) {
-        const storageTokenReq = await this.callApi(`/storageRequest?size=${size}`);
-        _sb_assert(storageTokenReq.hasOwnProperty('token'), `[getStorageToken] cannot parse response ('${JSON.stringify(storageTokenReq)}')`);
-        if (DBG)
-            console.log(`getStorageToken():\n`, storageTokenReq);
-        return storageTokenReq.token;
-    }
-    budd(options) {
-        let { keys, storage, targetChannel } = options ?? {};
+    async getStorageToken(size) { return validate_SBStorageToken(await this.callApi('/getStorageToken', { size: size })); }
+    budd(targetChannel, size = NEW_CHANNEL_MINIMUM_BUDGET) {
         return new Promise(async (resolve, reject) => {
-            if ((options) && (options.hasOwnProperty('storage')) && (options.storage === undefined))
-                reject("If you omit 'storage' it defaults to Infinity, but you cannot set 'storage' to undefined");
+            if (!targetChannel) {
+                targetChannel = (await new Channel().ready).handle;
+                if (DBG)
+                    console.log("\n", SEP, "[budd()]: no target channel provided, using new channel:\n", SEP, targetChannel, "\n", SEP);
+            }
+            else if (this.channelId === targetChannel.channelId) {
+                reject(new Error("[budd()]: source and target channels are the same, probably an error"));
+                return;
+            }
+            if (size !== Infinity && Math.abs(size) > await this.getStorageLimit()) {
+                reject(new Error(`[budd()]: storage amount (${size}) is more than current storage limit`));
+                return;
+            }
+            const targetChannelData = targetChannel.channelData;
+            if (!targetChannelData) {
+                reject(new Error(`[budd()]: target channel has no channel data, probably an error`));
+                return;
+            }
+            if (targetChannelData.storageToken) {
+                reject(new Error(`[budd()]: target channel already has storage token, probably an error`));
+                return;
+            }
             try {
-                if (!storage)
-                    storage = Infinity;
-                if (targetChannel) {
-                    if (this.channelId == targetChannel)
-                        throw new Error("[budd()]: You can't specify the same channel as targetChannel");
-                    if (keys)
-                        throw new Error("[budd()]: You can't specify both a target channel and keys");
-                    resolve(this.callApi(`/budd?targetChannel=${targetChannel}&transferBudget=${storage}`));
+                targetChannelData.storageToken = await this.getStorageToken(size);
+                if (DBG)
+                    console.log(`[budd()]: requested ${size}, got storage token:`, targetChannelData.storageToken);
+                const targetChannelApi = await new Channel(targetChannel).ready;
+                if (!targetChannelApi.channelServer)
+                    targetChannelApi.channelServer = this.channelServer;
+                const newChannelData = validate_SBChannelData(await targetChannelApi.callApi('/budd', targetChannelData));
+                if (targetChannel.channelId !== newChannelData.channelId) {
+                    console.warn("[budd()]: target channel ID changed, should not happen, error somewhere\n", SEP);
+                    console.warn("targetChannel:", targetChannel, "\n", SEP);
+                    console.warn("newChannelData:", newChannelData, "\n", SEP);
+                    reject(new Error(`[budd()]: target channel ID changed, should not happen, error somewhere`));
+                    return;
                 }
-                else {
-                    const theUser = new SB384(keys);
-                    await theUser.ready;
-                    const channelData = {
-                        [SB_CHANNEL_HANDLE_SYMBOL]: true,
-                        userPrivateKey: theUser.userPrivateKey,
-                        channelServer: this.channelServer,
-                        channelId: theUser.hash,
-                    };
-                    let resp = await this.callApi(`/budd?targetChannel=${channelData.channelId}&transferBudget=${storage}`, channelData);
-                    if (resp.success) {
-                        resolve(channelData);
-                    }
-                    else {
-                        reject(JSON.stringify(resp));
-                    }
-                }
+                if (!newChannelData.storageToken)
+                    console.warn("[budd()]: target channel has no storage token, possibly an error, should be returned from server");
+                const newHandle = {
+                    [SB_CHANNEL_HANDLE_SYMBOL]: true,
+                    channelId: newChannelData.channelId,
+                    userPrivateKey: targetChannel.userPrivateKey,
+                    channelServer: this.channelServer,
+                    channelData: newChannelData
+                };
+                if (DBG)
+                    console.log("[budd()]: success, newHandle:", newHandle);
+                resolve(validate_SBChannelHandle(newHandle));
             }
             catch (e) {
-                reject(e);
+                reject('[budd] Could not get storage token from server, are you sure about the size?');
+                return;
             }
         });
+    }
+    downloadChannel() {
     }
 }
 __decorate([
@@ -2010,36 +2012,13 @@ __decorate([
     Ready
 ], Channel.prototype, "send", null);
 __decorate([
-    Ready
-], Channel.prototype, "getChannelKeys", null);
-__decorate([
-    Ready
-], Channel.prototype, "getPubKeys", null);
-__decorate([
     Ready,
     Owner
-], Channel.prototype, "updateCapacity", null);
+], Channel.prototype, "acceptVisitor", null);
 __decorate([
     Ready,
     Owner
 ], Channel.prototype, "getCapacity", null);
-__decorate([
-    Ready
-], Channel.prototype, "getStorageLimit", null);
-__decorate([
-    Ready,
-    Owner
-], Channel.prototype, "getMother", null);
-__decorate([
-    Ready,
-    Owner
-], Channel.prototype, "getJoinRequests", null);
-__decorate([
-    ExceptionReject
-], Channel.prototype, "isLocked", null);
-__decorate([
-    Ready
-], Channel.prototype, "storageRequest", null);
 __decorate([
     Ready,
     Owner
@@ -2047,7 +2026,16 @@ __decorate([
 __decorate([
     Ready,
     Owner
-], Channel.prototype, "acceptVisitor", null);
+], Channel.prototype, "updateCapacity", null);
+__decorate([
+    Ready
+], Channel.prototype, "getChannelKeys", null);
+__decorate([
+    Ready
+], Channel.prototype, "getPubKeys", null);
+__decorate([
+    Ready
+], Channel.prototype, "getStorageLimit", null);
 __decorate([
     Ready
 ], Channel.prototype, "getStorageToken", null);
@@ -2055,6 +2043,9 @@ __decorate([
     Ready,
     Owner
 ], Channel.prototype, "budd", null);
+__decorate([
+    Ready
+], Channel.prototype, "downloadChannel", null);
 class ChannelSocket extends Channel {
     channelSocketReady;
     static ReadyFlag = Symbol('ChannelSocketReadyFlag');
@@ -2516,7 +2507,7 @@ export class StorageApi {
     }
     #_allocateObject(image_id, type) {
         return new Promise((resolve, reject) => {
-            SBFetch(this.storageServer + '/api/v1' + "/storeRequest?name=" + arrayBufferToBase62(image_id) + "&type=" + type)
+            SBFetch(this.storageServer + '/api/v1' + '/storeRequest?name=' + arrayBufferToBase62(image_id) + "&type=" + type)
                 .then((r) => { return r.arrayBuffer(); })
                 .then((b) => {
                 const par = extractPayload(b).payload;
@@ -2534,7 +2525,7 @@ export class StorageApi {
                 const key = await this.#getObjectKey(keyData, salt);
                 const data = await sbCrypto.encrypt(image, key, { iv: iv });
                 const storageToken = await budgetChannel.getStorageToken(data.byteLength);
-                const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data);
+                const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken.hash, data);
                 if (resp_json.error)
                     reject(`storeObject() failed: ${resp_json.error}`);
                 if (resp_json.image_id != image_id)
@@ -2792,11 +2783,8 @@ class Snackabra {
         _sb_assert(budgetChannelOrToken !== null, '[create channel] Invalid parameter (null)');
         return new Promise(async (resolve, reject) => {
             try {
-                let _storageToken;
-                if (typeof budgetChannelOrToken === 'string') {
-                    _storageToken = budgetChannelOrToken;
-                }
-                else if (budgetChannelOrToken instanceof Channel) {
+                var _storageToken;
+                if (budgetChannelOrToken instanceof Channel) {
                     const budget = budgetChannelOrToken;
                     await budget.ready;
                     if (!budget.channelServer)
@@ -2804,7 +2792,13 @@ class Snackabra {
                     _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET);
                 }
                 else {
-                    reject('Invalid parameter to create() - need a token or a budget channel');
+                    try {
+                        _storageToken = validate_SBStorageToken(budgetChannelOrToken);
+                    }
+                    catch (e) {
+                        reject('Invalid parameter to create() - need a token or a budget channel');
+                        return;
+                    }
                 }
                 _sb_assert(_storageToken, '[create channel] Failed to get storage token for the provided channel');
                 const channelKeys = await new Channel().ready;
