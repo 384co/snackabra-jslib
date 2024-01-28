@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a;
-const version = '2.0.0-alpha.5 (build 61)';
+const version = '2.0.0-alpha.5 (build 63)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function validate_SBStorageToken(data) {
@@ -1804,7 +1804,6 @@ class Channel extends SBChannelKeys {
     channelReady;
     static ReadyFlag = Symbol('ChannelReadyFlag');
     locked = false;
-    adminData;
     #cursor = '';
     visitors = new Map();
     constructor(handleOrKey, protocol) {
@@ -1937,14 +1936,26 @@ class Channel extends SBChannelKeys {
     }
     acceptVisitor(userId) { return this.callApi('/acceptVisitor', { userId: userId }); }
     getCapacity() { return (this.callApi('/getCapacity')); }
+    getAdminData() { return this.callApi('/getAdminData'); }
+    getMother() {
+        return this.getAdminData().then((adminData) => {
+            return adminData.motherChannel;
+        });
+    }
+    isLocked() {
+        return this.getAdminData().then((adminData) => {
+            return adminData.locked;
+        });
+    }
     lock() { return this.callApi('/lockChannel'); }
     updateCapacity(capacity) { return this.callApi('/setCapacity', { capacity: capacity }); }
     getChannelKeys() { return this.callApi('/getChannelKeys'); }
     getPubKeys() { return this.callApi('/getPubKeys'); }
     getStorageLimit() { return (this.callApi('/getStorageLimit')); }
     async getStorageToken(size) { return validate_SBStorageToken(await this.callApi('/getStorageToken', { size: size })); }
-    budd(targetChannel, size = NEW_CHANNEL_MINIMUM_BUDGET) {
+    budd(options) {
         return new Promise(async (resolve, reject) => {
+            var { targetChannel, size } = options || {};
             if (!targetChannel) {
                 targetChannel = (await new Channel().ready).handle;
                 if (DBG)
@@ -1954,6 +1965,8 @@ class Channel extends SBChannelKeys {
                 reject(new Error("[budd()]: source and target channels are the same, probably an error"));
                 return;
             }
+            if (!size)
+                size = NEW_CHANNEL_MINIMUM_BUDGET;
             if (size !== Infinity && Math.abs(size) > await this.getStorageLimit()) {
                 reject(new Error(`[budd()]: storage amount (${size}) is more than current storage limit`));
                 return;
@@ -1961,10 +1974,6 @@ class Channel extends SBChannelKeys {
             const targetChannelData = targetChannel.channelData;
             if (!targetChannelData) {
                 reject(new Error(`[budd()]: target channel has no channel data, probably an error`));
-                return;
-            }
-            if (targetChannelData.storageToken) {
-                reject(new Error(`[budd()]: target channel already has storage token, probably an error`));
                 return;
             }
             try {
@@ -2022,13 +2031,26 @@ __decorate([
 __decorate([
     Ready,
     Owner
+], Channel.prototype, "getAdminData", null);
+__decorate([
+    Ready,
+    Owner
+], Channel.prototype, "getMother", null);
+__decorate([
+    Ready,
+    Owner
+], Channel.prototype, "isLocked", null);
+__decorate([
+    Ready,
+    Owner
 ], Channel.prototype, "lock", null);
 __decorate([
     Ready,
     Owner
 ], Channel.prototype, "updateCapacity", null);
 __decorate([
-    Ready
+    Ready,
+    Memoize
 ], Channel.prototype, "getChannelKeys", null);
 __decorate([
     Ready
@@ -2452,11 +2474,15 @@ class SBObjectHandle {
     get type() { return this.#_type; }
 }
 export class StorageApi {
-    storageServer;
-    constructor(storageServer) {
-        _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)');
-        this.storageServer = storageServer;
+    #storageServer;
+    constructor(stringOrPromise) {
+        this.#storageServer = Promise.resolve(stringOrPromise).then((s) => {
+            const storageServer = s;
+            _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)');
+            return storageServer;
+        });
     }
+    async getStorageServer() { return this.#storageServer; }
     #padBuf(buf) {
         const image_size = buf.byteLength;
         let _target;
@@ -2506,8 +2532,8 @@ export class StorageApi {
         });
     }
     #_allocateObject(image_id, type) {
-        return new Promise((resolve, reject) => {
-            SBFetch(this.storageServer + '/api/v1' + '/storeRequest?name=' + arrayBufferToBase62(image_id) + "&type=" + type)
+        return new Promise(async (resolve, reject) => {
+            SBFetch((await this.getStorageServer()) + '/api/v2' + '/storeRequest?name=' + arrayBufferToBase62(image_id) + "&type=" + type)
                 .then((r) => { return r.arrayBuffer(); })
                 .then((b) => {
                 const par = extractPayload(b).payload;
@@ -2525,7 +2551,7 @@ export class StorageApi {
                 const key = await this.#getObjectKey(keyData, salt);
                 const data = await sbCrypto.encrypt(image, key, { iv: iv });
                 const storageToken = await budgetChannel.getStorageToken(data.byteLength);
-                const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken.hash, data);
+                const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data);
                 if (resp_json.error)
                     reject(`storeObject() failed: ${resp_json.error}`);
                 if (resp_json.image_id != image_id)
@@ -2540,19 +2566,19 @@ export class StorageApi {
         });
     }
     storeObject(type, fileId, iv, salt, storageToken, data) {
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             if (typeof type !== 'string') {
                 const errMsg = "NEW in 1.2.x - storeData() and storeObject() have switched places, you probably meant to use storeData()";
                 console.error(errMsg);
                 reject("errMsg");
             }
-            SBFetch(this.storageServer + '/storeData?type=' + type + '&key=' + fileId, {
+            SBFetch((await this.getStorageServer()) + '/api/v2' + '/storeData?type=' + type + '&key=' + fileId, {
                 method: 'POST',
                 body: assemblePayload({
                     iv: iv,
                     salt: salt,
                     image: data,
-                    storageToken: (new TextEncoder()).encode(storageToken),
+                    storageToken: storageToken,
                     vid: crypto.getRandomValues(new Uint8Array(48))
                 })
             })
@@ -2726,7 +2752,7 @@ export class StorageApi {
             if (!h)
                 reject('SBObjectHandle is null or undefined');
             const verificationToken = await h.verification;
-            const useServer = this.storageServer + '/api/v1';
+            const useServer = (await this.getStorageServer()) + '/api/v2';
             if (DBG)
                 console.log("fetchData(), fetching from server: " + useServer);
             const queryString = '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken;
@@ -2742,11 +2768,14 @@ export class StorageApi {
         });
     }
 }
+__decorate([
+    Memoize
+], StorageApi.prototype, "getStorageServer", null);
 class Snackabra {
-    channelServer;
-    storageServer;
+    #channelServer;
     #storage;
     #version = version;
+    #channelServerInfo;
     sbFetch = SBFetch;
     constructor(channelServer, setDBG, setDBG2) {
         console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`);
@@ -2759,17 +2788,38 @@ class Snackabra {
             console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
         if (DBG2)
             console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
-        this.channelServer = channelServer;
-        this.storageServer = "TODO";
-        this.#storage = new StorageApi(this.storageServer);
+        this.#channelServer = channelServer;
+        this.#storage = new StorageApi(new Promise((resolve, reject) => {
+            SBFetch(this.#channelServer + '/api/v2/info')
+                .then((response) => {
+                if (!response.ok) {
+                    reject('response from channel server was not OK');
+                }
+                return response.json();
+            })
+                .then((data) => {
+                if (data.error)
+                    reject(`fetching storage server name failed: ${data.error}`);
+                else {
+                    this.#channelServerInfo = data;
+                    if (DBG)
+                        console.log("Channel server info:", this.#channelServerInfo);
+                }
+                _sb_assert(data.storageServer, 'Channel server did not provide storage server name, cannot initialize');
+                resolve(data.storageServer);
+            })
+                .catch((error) => {
+                reject(error);
+            });
+        }));
     }
     attach(handle) {
         return new Promise((resolve, reject) => {
             if (handle.channelId) {
                 if (!handle.channelServer) {
-                    handle.channelServer = this.channelServer;
+                    handle.channelServer = this.#channelServer;
                 }
-                else if (handle.channelServer !== this.channelServer) {
+                else if (handle.channelServer !== this.#channelServer) {
                     reject('SBChannelHandle channelId does not match channelServer');
                 }
                 resolve(new Channel(handle));
@@ -2788,7 +2838,7 @@ class Snackabra {
                     const budget = budgetChannelOrToken;
                     await budget.ready;
                     if (!budget.channelServer)
-                        budget.channelServer = this.channelServer;
+                        budget.channelServer = this.#channelServer;
                     _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET);
                 }
                 else {
@@ -2802,7 +2852,7 @@ class Snackabra {
                 }
                 _sb_assert(_storageToken, '[create channel] Failed to get storage token for the provided channel');
                 const channelKeys = await new Channel().ready;
-                channelKeys.channelServer = this.channelServer;
+                channelKeys.channelServer = this.#channelServer;
                 channelKeys.create(_storageToken)
                     .then((handle) => { resolve(handle); })
                     .catch((e) => { reject(e); });
@@ -2816,9 +2866,9 @@ class Snackabra {
     }
     connect(handle, onMessage) {
         _sb_assert(handle && handle.channelId && handle.userPrivateKey, '[connect] Invalid parameter (missing info)');
-        if (handle.channelServer && handle.channelServer !== this.channelServer)
+        if (handle.channelServer && handle.channelServer !== this.#channelServer)
             throw new Error('SBChannelHandle channelId does not match channelServer (use a different Snackabra object)');
-        const newChannelHandle = { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.channelServer } };
+        const newChannelHandle = { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.#channelServer } };
         if (DBG)
             console.log("++++ Snackabra.connect() ++++", newChannelHandle);
         if (onMessage)
@@ -2826,10 +2876,9 @@ class Snackabra {
         else
             return new Channel(newChannelHandle);
     }
-    get storage() {
-        if (typeof this.#storage === 'string')
-            throw new Error('StorageApi not initialized');
-        return this.#storage;
+    get storage() { return this.#storage; }
+    async getStorageServer() {
+        return this.#storage.getStorageServer();
     }
     get crypto() {
         return sbCrypto;
@@ -2838,6 +2887,12 @@ class Snackabra {
         return this.#version;
     }
 }
+__decorate([
+    Memoize
+], Snackabra.prototype, "storage", null);
+__decorate([
+    Memoize
+], Snackabra.prototype, "getStorageServer", null);
 export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
 export var SB = {
     Snackabra: Snackabra,

@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 61)";
+declare const version = "2.0.0-alpha.5 (build 63)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -282,7 +282,6 @@ declare class Channel extends SBChannelKeys {
     channelReady: Promise<Channel>;
     static ReadyFlag: symbol;
     locked?: boolean;
-    adminData?: Dictionary<any>;
     visitors: Map<SBUserId, SBUserPrivateKey>;
     constructor();
     constructor(key: SBUserPrivateKey, protocol?: SBProtocol);
@@ -298,6 +297,9 @@ declare class Channel extends SBChannelKeys {
     send(msg: SBMessage | any): Promise<string>;
     acceptVisitor(userId: SBUserId): Promise<any>;
     getCapacity(): Promise<any>;
+    getAdminData(): Promise<ChannelAdminData>;
+    getMother(): Promise<string>;
+    isLocked(): Promise<boolean>;
     lock(): Promise<{
         success: boolean;
     }>;
@@ -306,7 +308,10 @@ declare class Channel extends SBChannelKeys {
     getPubKeys(): Promise<Map<SBUserId, SBUserPublicKey>>;
     getStorageLimit(): Promise<any>;
     getStorageToken(size: number): Promise<SBStorageToken>;
-    budd(targetChannel?: SBChannelHandle, size?: number): Promise<SBChannelHandle>;
+    budd(options?: {
+        targetChannel?: SBChannelHandle;
+        size?: number;
+    }): Promise<SBChannelHandle>;
     downloadChannel(): void;
 }
 declare class ChannelSocket extends Channel {
@@ -350,17 +355,15 @@ declare class SBObjectHandle implements Interfaces.SBObjectHandle_base {
 }
 export declare class StorageApi {
     #private;
-    storageServer: string;
-    constructor(storageServer: string);
-    storeObject(type: string, fileId: Base62Encoded, iv: ArrayBuffer, salt: ArrayBuffer, storageToken: string, data: ArrayBuffer): Promise<Dictionary<any>>;
+    constructor(stringOrPromise: Promise<string> | string);
+    getStorageServer(): Promise<string>;
+    storeObject(type: string, fileId: Base62Encoded, iv: ArrayBuffer, salt: ArrayBuffer, storageToken: SBStorageToken, data: ArrayBuffer): Promise<Dictionary<any>>;
     storeData(buf: BodyInit | Uint8Array, type: SBObjectType, channelOrHandle: SBChannelHandle | Channel): Promise<Interfaces.SBObjectHandle>;
     fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>;
     fetchData(handle: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
 }
 declare class Snackabra {
     #private;
-    channelServer: string;
-    storageServer: string | string;
     sbFetch: typeof SBFetch;
     constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean);
     attach(handle: SBChannelHandle): Promise<Channel>;
@@ -369,6 +372,7 @@ declare class Snackabra {
     connect(handle: SBChannelHandle): Channel;
     connect(handle: SBChannelHandle, onMessage: (m: ChannelMessage) => void): ChannelSocket;
     get storage(): StorageApi;
+    getStorageServer(): Promise<string>;
     get crypto(): SBCrypto;
     get version(): string;
 }

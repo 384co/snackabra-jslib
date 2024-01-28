@@ -3,25 +3,24 @@
 
    "Snackabra" is a registered trademark
 
-   Snackabra SDK - Server
-   See https://snackabra.io for more information.
+   Snackabra SDK - Server See https://snackabra.io for more information.
 
-   This program is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Affero General Public License
-   as published by the Free Software Foundation, either version 3 of
-   the License, or (at your option) any later version.
+   This program is free software: you can redistribute it and/or modify it under
+   the terms of the GNU Affero General Public License as published by the Free
+   Software Foundation, either version 3 of the License, or (at your option) any
+   later version.
 
-   This program is distributed in the hope that it will be useful, but
-   WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-   Affero General Public License for more details.
+   This program is distributed in the hope that it will be useful, but WITHOUT
+   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+   FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License for more
+   details.
 
-   You should have received a copy of the GNU Affero General Public
-   License along with this program.  If not, see www.gnu.org/licenses/
+   You should have received a copy of the GNU Affero General Public License
+   along with this program.  If not, see www.gnu.org/licenses/
 
 */
 
-const version = '2.0.0-alpha.5 (build 61)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 63)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -2967,7 +2966,7 @@ class Channel extends SBChannelKeys {
   static ReadyFlag = Symbol('ChannelReadyFlag'); // see below for '(this as any)[Channel.ReadyFlag] = false;'
   locked?: boolean = false // TODO: need to make sure we're tracking whenever this has changed
   // this is actually info for lock status, and is now available to Owner (no admin status anymore)
-  adminData?: Dictionary<any> // todo: make into getter
+  // adminData?: Dictionary<any> // todo: make into getter
   // verifiedGuest: boolean = false
   #cursor: string = ''; // last (oldest) message key seen
   // #protocol?: SBProtocol
@@ -3147,11 +3146,26 @@ class Channel extends SBChannelKeys {
 
   @Ready @Owner acceptVisitor(userId: SBUserId) { return this.callApi('/acceptVisitor', { userId: userId }) }
   @Ready @Owner getCapacity() { return (this.callApi('/getCapacity')) }
-  // @Ready @Owner getMother() { return (this.callApi('/getMother')) } // use 'getAdminData' instead
+  
+  // admin data, and some related convenience functions
+  @Ready @Owner getAdminData(){ return this.callApi('/getAdminData') as Promise<ChannelAdminData> }
+  // convenience function
+  @Ready @Owner getMother() {
+    return this.getAdminData().then((adminData) => {
+      return adminData.motherChannel
+    });
+  }
+  @Ready @Owner isLocked() {
+    return this.getAdminData().then((adminData) => {
+      return adminData.locked
+    });
+  }
+
   @Ready @Owner lock(): Promise<{ success: boolean }> { return this.callApi('/lockChannel') }
   @Ready @Owner updateCapacity(capacity: number) { return this.callApi('/setCapacity', { capacity: capacity }) }
 
-  @Ready getChannelKeys(): Promise<SBChannelData> { return this.callApi('/getChannelKeys') }
+  // this does not change so we can memoize
+  @Ready @Memoize getChannelKeys(): Promise<SBChannelData> { return this.callApi('/getChannelKeys') }
   @Ready getPubKeys(): Promise<Map<SBUserId, SBUserPublicKey>> { return this.callApi('/getPubKeys') }
   @Ready getStorageLimit() { return (this.callApi('/getStorageLimit')) }
 
@@ -3211,15 +3225,17 @@ class Channel extends SBChannelKeys {
    * storage budget to the target channel. 
    * 
    */
-  @Ready @Owner budd(targetChannel?: SBChannelHandle, size: number = NEW_CHANNEL_MINIMUM_BUDGET) {
+  @Ready @Owner budd(options?: {targetChannel?: SBChannelHandle, size?: number }): Promise<SBChannelHandle> {
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       // in general we code a bit conservatively in budd(), to make sure we're returning a valid channel
+      var { targetChannel, size } = options || {}
       if (!targetChannel) {
         targetChannel = (await new Channel().ready).handle
         if (DBG) console.log("\n", SEP, "[budd()]: no target channel provided, using new channel:\n", SEP, targetChannel, "\n", SEP)
       } else if (this.channelId === targetChannel.channelId) {
         reject(new Error("[budd()]: source and target channels are the same, probably an error")); return
       }
+      if (!size) size = NEW_CHANNEL_MINIMUM_BUDGET
       if (size !== Infinity && Math.abs(size) > await this.getStorageLimit()) {
         // server will of course enforce this but it's convenient to catch it earlier
         reject(new Error(`[budd()]: storage amount (${size}) is more than current storage limit`)); return
@@ -3227,9 +3243,6 @@ class Channel extends SBChannelKeys {
       const targetChannelData = targetChannel.channelData
       if (!targetChannelData) {
         reject(new Error(`[budd()]: target channel has no channel data, probably an error`)); return
-      }
-      if (targetChannelData.storageToken) {
-        reject(new Error(`[budd()]: target channel already has storage token, probably an error`)); return
       }
       try {
         targetChannelData.storageToken = await this.getStorageToken(size);
@@ -3884,11 +3897,18 @@ class SBObjectHandle implements Interfaces.SBObjectHandle_base {
  * StorageAPI
  */
 export class StorageApi {
-  storageServer: string;
-  constructor(storageServer: string) {
-    _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)')
-    this.storageServer = storageServer
+  #storageServer: Promise<string>;
+  // we use a promise so that asynchronicity can be handled interally in StorageApi,
+  // eg so users don't have to do things like ''(await SB.storage).fetchObject(...)''
+  constructor(stringOrPromise: Promise<string> | string) {
+    this.#storageServer = Promise.resolve(stringOrPromise).then((s) => {
+      const storageServer = s
+      _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)')
+      return storageServer
+    })
   }
+
+  @Memoize async getStorageServer(): Promise<string> { return this.#storageServer }
 
   /**
    * Pads object up to closest permitted size boundaries;
@@ -3960,9 +3980,9 @@ export class StorageApi {
    * get "permission" to store in the form of a token
    */
   #_allocateObject(image_id: ArrayBuffer, type: SBObjectType): Promise<{ salt: ArrayBuffer, iv: Uint8Array }> {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       // todo?: when/if should storage server switch to binary apibody?
-      SBFetch(this.storageServer + '/api/v1' + '/storeRequest?name=' + arrayBufferToBase62(image_id) + "&type=" + type)
+      SBFetch((await this.getStorageServer()) + '/api/v2' + '/storeRequest?name=' + arrayBufferToBase62(image_id) + "&type=" + type)
         .then((r) => { /* console.log('got storage reply:'); console.log(r); */ return r.arrayBuffer(); })
         .then((b) => {
           const par = extractPayload(b).payload
@@ -3990,7 +4010,7 @@ export class StorageApi {
         const key = await this.#getObjectKey(keyData, salt)
         const data = await sbCrypto.encrypt(image, key, { iv: iv })
         const storageToken = await budgetChannel.getStorageToken(data.byteLength)
-        const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken.hash, data)
+        const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data)
         if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
         if (resp_json.image_id != image_id) reject(`received imageId ${resp_json.image_id} but expected ${image_id}`)
         resolve(resp_json.verification_token)
@@ -4013,10 +4033,10 @@ export class StorageApi {
     fileId: Base62Encoded,
     iv: ArrayBuffer,
     salt: ArrayBuffer,
-    storageToken: string,
+    storageToken: SBStorageToken,
     data: ArrayBuffer): Promise<Dictionary<any>> {
     // async function uploadImage(storageToken, encrypt_data, type, image_id, data)
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       // if the first parameter is NOT of type string, then the callee probably meant to use storeData()
       if (typeof type !== 'string') {
         const errMsg = "NEW in 1.2.x - storeData() and storeObject() have switched places, you probably meant to use storeData()"
@@ -4024,13 +4044,13 @@ export class StorageApi {
         reject("errMsg")
       }
 
-      SBFetch(this.storageServer + '/storeData?type=' + type + '&key=' + fileId, {
+      SBFetch((await this.getStorageServer()) + '/api/v2' + '/storeData?type=' + type + '&key=' + fileId, {
         method: 'POST',
         body: assemblePayload({
           iv: iv,
           salt: salt,
           image: data,
-          storageToken: (new TextEncoder()).encode(storageToken),
+          storageToken: storageToken, // (new TextEncoder()).encode(storageToken)
           vid: crypto.getRandomValues(new Uint8Array(48))
         })
       })
@@ -4246,7 +4266,7 @@ export class StorageApi {
       if (!h) reject('SBObjectHandle is null or undefined')
       const verificationToken = await h.verification
       // const useServer = h.shardServer ? h.shardServer + '/api/v1' : (this.shardServer ? this.shardServer : this.server)
-      const useServer = this.storageServer + '/api/v1'
+      const useServer = (await this.getStorageServer()) + '/api/v2'
       if (DBG) console.log("fetchData(), fetching from server: " + useServer)
       const queryString = '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken
       // SBFetch(useServer + '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken, { method: 'GET' })
@@ -4354,11 +4374,10 @@ export class StorageApi {
   * debug output mode.
  */
 class Snackabra {
-  channelServer: string
-  // ToDo - these must all be set up in constructor:
-  storageServer: string | string
-  #storage: StorageApi | string
+  #channelServer: string
+  #storage: StorageApi
   #version = version
+  #channelServerInfo: any
   sbFetch = SBFetch // future: will allow overriding network fetch
 
   constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean) {
@@ -4370,31 +4389,35 @@ class Snackabra {
     if (DBG) console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
     if (DBG2) console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
 
-    this.channelServer = channelServer
-
-    // TODO: fetch '/info' and storage server name from channel server
-    this.storageServer = "TODO"
-    this.#storage = new StorageApi(this.storageServer)
-
-    // constructor(sbServerOrChannelServer: SBServer | string, setDBG?: boolean, setDBG2?: boolean)
-
-    // if (typeof sbServerOrChannelServer === 'object') {
-    //   // backwards compatibility
-    //   const sbServer = sbServerOrChannelServer as SBServer
-    //   _sb_assert(sbServer.channel_server && sbServer.storage_server, "Snackabra() ERROR: missing channel_server or storage_server")
-    //   this.channelServer = sbServer.channel_server
-    //   this.storageServer = sbServer.storage_server
-    //   // this.#preferredServer = Object.assign({}, sbServer)
-    //   // this.#storage = new StorageApi(sbServer)
-    // } else
+    this.#channelServer = channelServer
+    // (eventually) fetch storage server name from channel server; StorageApi knows how to handle this
+    this.#storage = new StorageApi(new Promise((resolve, reject) => {
+      SBFetch(this.#channelServer + '/api/v2/info')
+        .then((response: Response) => {
+          if (!response.ok) { reject('response from channel server was not OK') }
+          return response.json()
+        })
+        .then((data) => {
+          if (data.error) reject(`fetching storage server name failed: ${data.error}`)
+          else {
+            this.#channelServerInfo = data
+            if (DBG) console.log("Channel server info:", this.#channelServerInfo)
+          }
+          _sb_assert(data.storageServer, 'Channel server did not provide storage server name, cannot initialize')
+          resolve(data.storageServer)
+        })
+        .catch((error: Error) => {
+          reject(error)
+        });
+    }));
   }
 
   attach(handle: SBChannelHandle): Promise<Channel> {
     return new Promise((resolve, reject) => {
       if (handle.channelId) {
         if (!handle.channelServer) {
-          handle.channelServer = this.channelServer
-        } else if (handle.channelServer !== this.channelServer) {
+          handle.channelServer = this.#channelServer
+        } else if (handle.channelServer !== this.#channelServer) {
           reject('SBChannelHandle channelId does not match channelServer')
         }
         resolve(new Channel(handle))
@@ -4435,7 +4458,7 @@ class Snackabra {
         if (budgetChannelOrToken instanceof Channel) {
           const budget = budgetChannelOrToken as Channel
           await budget.ready // make sure it's ready
-          if (!budget.channelServer) budget.channelServer = this.channelServer
+          if (!budget.channelServer) budget.channelServer = this.#channelServer
           _storageToken = await budget.getStorageToken(NEW_CHANNEL_MINIMUM_BUDGET)
         } else {
           // try to read it as a storage token
@@ -4450,7 +4473,7 @@ class Snackabra {
 
         // create a fresh channel (set of keys)
         const channelKeys = await new Channel().ready
-        channelKeys.channelServer = this.channelServer
+        channelKeys.channelServer = this.#channelServer
         channelKeys.create(_storageToken!)
           .then((handle) => { resolve(handle) })
           .catch((e) => { reject(e) })
@@ -4495,11 +4518,11 @@ class Snackabra {
   connect(handle: SBChannelHandle, onMessage: (m: ChannelMessage) => void): ChannelSocket
   connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): Channel | ChannelSocket {
     _sb_assert(handle && handle.channelId && handle.userPrivateKey, '[connect] Invalid parameter (missing info)')
-    if (handle.channelServer && handle.channelServer !== this.channelServer)
+    if (handle.channelServer && handle.channelServer !== this.#channelServer)
       throw new Error('SBChannelHandle channelId does not match channelServer (use a different Snackabra object)')
 
     const newChannelHandle: SBChannelHandle =
-      { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.channelServer } }
+      { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.#channelServer } }
     if (DBG) console.log("++++ Snackabra.connect() ++++", newChannelHandle)
     if (onMessage)
       return new ChannelSocket(newChannelHandle, onMessage)
@@ -4542,9 +4565,10 @@ class Snackabra {
   /**
    * Returns the storage API.
    */
-  get storage(): StorageApi {
-    if (typeof this.#storage === 'string') throw new Error('StorageApi not initialized')
-    return this.#storage;
+  @Memoize get storage(): StorageApi { return this.#storage; }
+
+  @Memoize async getStorageServer(): Promise<string> {
+    return this.#storage.getStorageServer()
   }
 
   /**
