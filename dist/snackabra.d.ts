@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 64)";
+declare const version = "2.0.0-alpha.5 (build 67)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -98,15 +98,15 @@ export interface EncryptParams {
 declare function setDebugLevel(dbg1: boolean, dbg2?: boolean): void;
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
-export type SBObjectType = 'f' | 'p' | 'b' | 't';
+export type SBObjectType = 'f' | 'p' | 'b' | 't' | '_' | 'T';
 export type SBObjectHandleVersions = '1' | '2' | '3';
 export interface SBObjectHandle {
     [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
     version: SBObjectHandleVersions;
     type?: SBObjectType;
     id: Base62Encoded;
-    key: Base62Encoded;
-    verification: Promise<string> | string;
+    key?: Base62Encoded;
+    verification?: Promise<string> | string;
     iv?: Uint8Array | Base62Encoded;
     salt?: ArrayBuffer | Base62Encoded;
     storageServer?: string;
@@ -116,10 +116,11 @@ export interface SBObjectHandle {
     lastModified?: number;
     actualSize?: number;
     savedSize?: number;
-    data?: WeakRef<ArrayBuffer>;
+    data?: WeakRef<ArrayBuffer> | ArrayBuffer;
     payload?: any;
 }
 export declare function validate_SBObjectHandle(h: SBObjectHandle): SBObjectHandle;
+export declare function stringify_SBObjectHandle(h: SBObjectHandle): Promise<SBObjectHandle>;
 export type SB384Hash = string;
 export type SBUserId = SB384Hash;
 export type SBChannelId = SB384Hash;
@@ -326,7 +327,7 @@ export declare class StorageApi {
     static storeObject(storageServer: string, fileId: Base62Encoded, iv: ArrayBuffer, salt: ArrayBuffer, storageToken: SBStorageToken, data: ArrayBuffer): Promise<Dictionary<any>>;
     storeData(buf: ArrayBuffer | Uint8Array, type: SBObjectType, channelOrHandle: SBChannelHandle | Channel): Promise<SBObjectHandle>;
     fetchData(handle: SBObjectHandle): Promise<SBObjectHandle>;
-    static getData(handle: SBObjectHandle): ArrayBuffer | null;
+    static getData(handle: SBObjectHandle): ArrayBuffer | undefined;
 }
 declare class Snackabra {
     #private;
