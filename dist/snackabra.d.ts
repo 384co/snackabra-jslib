@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 63)";
+declare const version = "2.0.0-alpha.5 (build 64)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -99,36 +99,27 @@ declare function setDebugLevel(dbg1: boolean, dbg2?: boolean): void;
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
 export type SBObjectType = 'f' | 'p' | 'b' | 't';
-export type SBObjectHandleVersions = '1' | '2';
-export declare namespace Interfaces {
-    interface SBObjectHandle_base {
-        [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
-        version?: SBObjectHandleVersions;
-        type?: SBObjectType;
-        verification?: Promise<string> | string;
-        iv?: Uint8Array | string;
-        salt?: ArrayBuffer | string;
-        fileName?: string;
-        dateAndTime?: string;
-        fileType?: string;
-        lastModified?: number;
-        actualSize?: number;
-        savedSize?: number;
-    }
-    interface SBObjectHandle_v1 extends SBObjectHandle_base {
-        version: '1';
-        id: string;
-        key: string;
-        id32?: Base62Encoded;
-        key32?: Base62Encoded;
-    }
-    interface SBObjectHandle_v2 extends SBObjectHandle_base {
-        version: '2';
-        id: Base62Encoded;
-        key: Base62Encoded;
-    }
-    type SBObjectHandle = SBObjectHandle_v1 | SBObjectHandle_v2;
+export type SBObjectHandleVersions = '1' | '2' | '3';
+export interface SBObjectHandle {
+    [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
+    version: SBObjectHandleVersions;
+    type?: SBObjectType;
+    id: Base62Encoded;
+    key: Base62Encoded;
+    verification: Promise<string> | string;
+    iv?: Uint8Array | Base62Encoded;
+    salt?: ArrayBuffer | Base62Encoded;
+    storageServer?: string;
+    fileName?: string;
+    dateAndTime?: string;
+    fileType?: string;
+    lastModified?: number;
+    actualSize?: number;
+    savedSize?: number;
+    data?: WeakRef<ArrayBuffer>;
+    payload?: any;
 }
+export declare function validate_SBObjectHandle(h: SBObjectHandle): SBObjectHandle;
 export type SB384Hash = string;
 export type SBUserId = SB384Hash;
 export type SBChannelId = SB384Hash;
@@ -145,10 +136,10 @@ export declare function jsonParseWrapper(str: string | null, loc?: string, reviv
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
 export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
 declare function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-declare function base64ToArrayBuffer(str: string): Uint8Array;
-declare function arrayBufferToBase64(buffer: BufferSource | ArrayBuffer | Uint8Array | null, variant?: 'b64' | 'url'): string;
-export declare function encodeB64Url(input: string): string;
-export declare function decodeB64Url(input: string): string;
+export declare function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any>;
+export declare const base64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+declare function arrayBufferToBase64url(buffer: ArrayBuffer | Uint8Array): string;
+declare function base64ToArrayBuffer(s: string): Uint8Array;
 export type Base62Encoded = string & {
     _brand?: 'Base62Encoded';
 };
@@ -326,41 +317,16 @@ declare class ChannelSocket extends Channel {
     set enableTrace(b: boolean);
     send(msg: SBMessage | any): Promise<string>;
 }
-declare class SBObjectHandle implements Interfaces.SBObjectHandle_base {
-    #private;
-    version: SBObjectHandleVersions;
-    shardServer?: string;
-    iv?: Uint8Array | string;
-    salt?: ArrayBuffer | string;
-    fileName?: string;
-    dateAndTime?: string;
-    fileType?: string;
-    lastModified?: number;
-    actualSize?: number;
-    savedSize?: number;
-    constructor(options: Interfaces.SBObjectHandle);
-    set id_binary(value: ArrayBuffer);
-    set key_binary(value: ArrayBuffer);
-    set id(value: ArrayBuffer | string | Base62Encoded);
-    set key(value: ArrayBuffer | string | Base62Encoded);
-    get id(): string;
-    get key(): string;
-    get id64(): string;
-    get id32(): Base62Encoded;
-    get key64(): string;
-    get key32(): Base62Encoded;
-    set verification(value: Promise<string> | string);
-    get verification(): Promise<string> | string;
-    get type(): SBObjectType;
-}
 export declare class StorageApi {
     #private;
     constructor(stringOrPromise: Promise<string> | string);
     getStorageServer(): Promise<string>;
-    storeObject(type: string, fileId: Base62Encoded, iv: ArrayBuffer, salt: ArrayBuffer, storageToken: SBStorageToken, data: ArrayBuffer): Promise<Dictionary<any>>;
-    storeData(buf: BodyInit | Uint8Array, type: SBObjectType, channelOrHandle: SBChannelHandle | Channel): Promise<Interfaces.SBObjectHandle>;
-    fetchData(handle: Interfaces.SBObjectHandle, returnType: 'string'): Promise<string>;
-    fetchData(handle: Interfaces.SBObjectHandle, returnType?: 'arrayBuffer'): Promise<ArrayBuffer>;
+    static padBuf(buf: ArrayBuffer): ArrayBuffer;
+    static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey>;
+    static storeObject(storageServer: string, fileId: Base62Encoded, iv: ArrayBuffer, salt: ArrayBuffer, storageToken: SBStorageToken, data: ArrayBuffer): Promise<Dictionary<any>>;
+    storeData(buf: ArrayBuffer | Uint8Array, type: SBObjectType, channelOrHandle: SBChannelHandle | Channel): Promise<SBObjectHandle>;
+    fetchData(handle: SBObjectHandle): Promise<SBObjectHandle>;
+    static getData(handle: SBObjectHandle): ArrayBuffer | null;
 }
 declare class Snackabra {
     #private;
@@ -376,14 +342,14 @@ declare class Snackabra {
     get crypto(): SBCrypto;
     get version(): string;
 }
-export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
+export { SB384, SBMessage, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
 export declare var SB: {
     Snackabra: typeof Snackabra;
     SBMessage: typeof SBMessage;
     Channel: typeof Channel;
     SBCrypto: typeof SBCrypto;
     SB384: typeof SB384;
-    arrayBufferToBase64: typeof arrayBufferToBase64;
+    arrayBufferToBase64url: typeof arrayBufferToBase64url;
     base64ToArrayBuffer: typeof base64ToArrayBuffer;
     arrayBufferToBase62: typeof arrayBufferToBase62;
     base62ToArrayBuffer: typeof base62ToArrayBuffer;

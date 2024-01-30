@@ -4,8 +4,8 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-var _a;
-const version = '2.0.0-alpha.5 (build 63)';
+var _a, _b;
+const version = '2.0.0-alpha.5 (build 64)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function validate_SBStorageToken(data) {
@@ -208,7 +208,27 @@ function setDebugLevel(dbg1, dbg2) {
 }
 export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 14400, 129600, 864000, -1, -1, -1, -1, -1, Infinity];
 export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One minute', 'Five minutes', 'Thirty minutes', 'Four hours', '36 hours', '10 days', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)'];
-const currentSBOHVersion = '2';
+const currentSBOHVersion = '3';
+export function validate_SBObjectHandle(h) {
+    if (!h)
+        throw new Error(`invalid SBObjectHandle (null or undefined)`);
+    else if (h[SB_OBJECT_HANDLE_SYMBOL])
+        return h;
+    else if (h.version && typeof h.version === 'string' && h.version.length === 1
+        && (!h.type || (typeof h.type === 'string' && h.type.length === 1))
+        && h.id && typeof h.id === 'string' && h.id.length === 43
+        && h.key && typeof h.key === 'string' && h.key.length === 43
+        && h.verification && (typeof h.verification === 'string' || typeof h.verification === 'object')
+        && (!h.iv || typeof h.iv === 'string' || h.iv instanceof Uint8Array)
+        && (!h.salt || typeof h.salt === 'string' || h.salt instanceof ArrayBuffer)) {
+        return { ...h, [SB_OBJECT_HANDLE_SYMBOL]: true };
+    }
+    else {
+        if (DBG)
+            console.error('invalid SBObjectHandle ... trying to ingest:\n', h);
+        throw new Error(`invalid SBObjectHandle`);
+    }
+}
 export class MessageBus {
     bus = {};
     #select(event) {
@@ -251,6 +271,9 @@ export function jsonParseWrapper(str, loc, reviver) {
     }
     return str;
 }
+const bs2dv = (bs) => bs instanceof ArrayBuffer
+    ? new DataView(bs)
+    : new DataView(bs.buffer, bs.byteOffset, bs.byteLength);
 export function compareBuffers(a, b) {
     if (typeof a != typeof b)
         return false;
@@ -302,7 +325,7 @@ function SBFetch(input, init) {
         }
     });
 }
-function SBApiFetch(input, init) {
+export function SBApiFetch(input, init) {
     return new Promise((resolve, reject) => {
         SBFetch(input, init)
             .then(async (response) => {
@@ -375,141 +398,35 @@ function _appendBuffer(buffer1, buffer2) {
     tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
     return tmp.buffer;
 }
-const b64Regex = /^([A-Za-z0-9+/_\-=]*)$/;
-const b64lookup = [];
-const urlLookup = [];
-const revLookup = [];
-const CODE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-const CODE_B64 = CODE + '+/';
-const CODE_URL = CODE + '-_';
-const PAD = '=';
-const MAX_CHUNK_LENGTH = 16383;
-for (let i = 0, len = CODE_B64.length; i < len; ++i) {
-    b64lookup[i] = CODE_B64[i];
-    urlLookup[i] = CODE_URL[i];
-    revLookup[CODE_B64.charCodeAt(i)] = i;
-}
-revLookup['-'.charCodeAt(0)] = 62;
-revLookup['_'.charCodeAt(0)] = 63;
-function getLens(b64) {
-    const len = b64.length;
-    let validLen = b64.indexOf(PAD);
-    if (validLen === -1)
-        validLen = len;
-    const placeHoldersLen = validLen === len ? 0 : 4 - (validLen % 4);
-    return [validLen, placeHoldersLen];
-}
-function _byteLength(validLen, placeHoldersLen) {
-    return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen;
-}
-function base64ToArrayBuffer(str) {
-    if (!b64Regex.test(str))
-        throw new Error(`invalid character in string '${str}'`);
-    let tmp;
-    switch (str.length % 4) {
-        case 2:
-            str += '==';
-            break;
-        case 3:
-            str += '=';
-            break;
+export const base64url = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const b64urlRegex = /^([A-Za-z0-9\-_]*)(={0,2})$/;
+function arrayBufferToBase64url(buffer) {
+    const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+    let result = '';
+    for (let i = 0; i < bytes.length; i += 3) {
+        const b1 = bytes[i], b2 = bytes[i + 1], b3 = bytes[i + 2];
+        result += base64url[b1 >> 2] +
+            base64url[((b1 & 0x03) << 4) | (b2 >> 4)] +
+            (b2 !== undefined ? base64url[((b2 & 0x0f) << 2) | (b3 >> 6)] : '') +
+            (b3 !== undefined ? base64url[b3 & 0x3f] : '');
     }
-    const [validLen, placeHoldersLen] = getLens(str);
-    const arr = new Uint8Array(_byteLength(validLen, placeHoldersLen));
-    let curByte = 0;
-    const len = placeHoldersLen > 0 ? validLen - 4 : validLen;
-    let i;
-    for (i = 0; i < len; i += 4) {
-        const r0 = revLookup[str.charCodeAt(i)];
-        const r1 = revLookup[str.charCodeAt(i + 1)];
-        const r2 = revLookup[str.charCodeAt(i + 2)];
-        const r3 = revLookup[str.charCodeAt(i + 3)];
-        tmp = (r0 << 18) | (r1 << 12) | (r2 << 6) | (r3);
-        arr[curByte++] = (tmp >> 16) & 0xff;
-        arr[curByte++] = (tmp >> 8) & 0xff;
-        arr[curByte++] = (tmp) & 0xff;
-    }
-    if (placeHoldersLen === 2) {
-        const r0 = revLookup[str.charCodeAt(i)];
-        const r1 = revLookup[str.charCodeAt(i + 1)];
-        tmp = (r0 << 2) | (r1 >> 4);
-        arr[curByte++] = tmp & 0xff;
-    }
-    if (placeHoldersLen === 1) {
-        const r0 = revLookup[str.charCodeAt(i)];
-        const r1 = revLookup[str.charCodeAt(i + 1)];
-        const r2 = revLookup[str.charCodeAt(i + 2)];
-        tmp = (r0 << 10) | (r1 << 4) | (r2 >> 2);
-        arr[curByte++] = (tmp >> 8) & 0xff;
-        arr[curByte++] = tmp & 0xff;
-    }
-    return arr;
+    return result;
 }
-function tripletToBase64(lookup, num) {
-    return (lookup[num >> 18 & 0x3f] +
-        lookup[num >> 12 & 0x3f] +
-        lookup[num >> 6 & 0x3f] +
-        lookup[num & 0x3f]);
-}
-function encodeChunk(lookup, view, start, end) {
-    let tmp;
-    const output = new Array((end - start) / 3);
-    for (let i = start, j = 0; i < end; i += 3, j++) {
-        tmp =
-            ((view.getUint8(i) << 16) & 0xff0000) +
-                ((view.getUint8(i + 1) << 8) & 0x00ff00) +
-                (view.getUint8(i + 2) & 0x0000ff);
-        output[j] = tripletToBase64(lookup, tmp);
+function base64ToArrayBuffer(s) {
+    s = s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    if (!b64urlRegex.test(s))
+        throw new Error(`invalid character in b64 string (after cleanup: '${s}')`);
+    const len = s.length;
+    const bytes = new Uint8Array(len * 3 / 4);
+    for (let i = 0, p = 0; i < len; i += 4) {
+        const [a, b, c, d] = [s[i], s[i + 1], s[i + 2], s[i + 3]].map(ch => base64url.indexOf(ch));
+        bytes[p++] = (a << 2) | (b >> 4);
+        if (c !== -1)
+            bytes[p++] = ((b & 15) << 4) | (c >> 2);
+        if (d !== -1)
+            bytes[p++] = ((c & 3) << 6) | d;
     }
-    return output.join('');
-}
-const bs2dv = (bs) => bs instanceof ArrayBuffer
-    ? new DataView(bs)
-    : new DataView(bs.buffer, bs.byteOffset, bs.byteLength);
-function arrayBufferToBase64(buffer, variant = 'url') {
-    if (buffer == null) {
-        _sb_exception('L893', 'arrayBufferToBase64() -> null paramater');
-        return '';
-    }
-    else {
-        const view = bs2dv(buffer);
-        const len = view.byteLength;
-        const extraBytes = len % 3;
-        const len2 = len - extraBytes;
-        const parts = new Array(Math.floor(len2 / MAX_CHUNK_LENGTH) + Math.sign(extraBytes));
-        const lookup = variant == 'url' ? urlLookup : b64lookup;
-        const pad = '';
-        let j = 0;
-        for (let i = 0; i < len2; i += MAX_CHUNK_LENGTH) {
-            parts[j++] = encodeChunk(lookup, view, i, (i + MAX_CHUNK_LENGTH) > len2 ? len2 : (i + MAX_CHUNK_LENGTH));
-        }
-        if (extraBytes === 1) {
-            const tmp = view.getUint8(len - 1);
-            parts[j] = (lookup[tmp >> 2] +
-                lookup[(tmp << 4) & 0x3f] +
-                pad + pad);
-        }
-        else if (extraBytes === 2) {
-            const tmp = (view.getUint8(len - 2) << 8) + view.getUint8(len - 1);
-            parts[j] = (lookup[tmp >> 10] +
-                lookup[(tmp >> 4) & 0x3f] +
-                lookup[(tmp << 2) & 0x3f] +
-                pad);
-        }
-        return parts.join('');
-    }
-}
-export function encodeB64Url(input) {
-    return input.replaceAll('+', '-').replaceAll('/', '_');
-}
-export function decodeB64Url(input) {
-    input = input.replaceAll('-', '+').replaceAll('_', '/');
-    const pad = input.length % 4;
-    if (pad) {
-        _sb_assert(pad !== 1, 'InvalidLengthError: Input base64url string is the wrong length to determine padding');
-        input += new Array(5 - pad).join('=');
-    }
-    return input;
+    return bytes;
 }
 export const base62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const base62zero = base62[0];
@@ -575,7 +492,7 @@ function base62ToArrayBuffer(s) {
     }
 }
 export function base62ToBase64(s) {
-    return arrayBufferToBase64(base62ToArrayBuffer(s));
+    return arrayBufferToBase64url(base62ToArrayBuffer(s));
 }
 export function base64ToBase62(s) {
     return arrayBufferToBase62(base64ToArrayBuffer(s));
@@ -611,6 +528,8 @@ function getType(value) {
         return 't';
     if (typeof value === 'string')
         return 's';
+    if (value instanceof WeakRef)
+        return 'w';
     if (typeof value === 'object' && typeof value.then === 'function')
         console.error("[getType] Trying to serialize a Promise - did you forget an 'await'?");
     else
@@ -694,6 +613,7 @@ function _assemblePayload(data) {
                             throw new Error(`Failed to assemble payload for ${key}`);
                         BufferList.push(setPayload);
                         break;
+                    case 'w':
                     case '0':
                         BufferList.push(new ArrayBuffer(0));
                         break;
@@ -846,8 +766,8 @@ function parseSB384string(input) {
                                 return undefined;
                             const yBytes = combined.slice(48, 96);
                             return {
-                                x: arrayBufferToBase64(combined.slice(0, 48)),
-                                y: arrayBufferToBase64(yBytes),
+                                x: arrayBufferToBase64url(combined.slice(0, 48)),
+                                y: arrayBufferToBase64url(yBytes),
                                 ySign: ySign(yBytes)
                             };
                         }
@@ -857,7 +777,7 @@ function parseSB384string(input) {
                             const xBuf = base62ToArrayBuffer(data);
                             if (xBuf.byteLength !== 48)
                                 return undefined;
-                            const { x: xBase64, y: yBase64 } = decompressP384(arrayBufferToBase64(xBuf), ySign);
+                            const { x: xBase64, y: yBase64 } = decompressP384(arrayBufferToBase64url(xBuf), ySign);
                             return {
                                 x: xBase64,
                                 y: yBase64,
@@ -879,10 +799,10 @@ function parseSB384string(input) {
                                 return undefined;
                             const yBytes = combined.slice(48, 96);
                             return {
-                                x: arrayBufferToBase64(combined.slice(0, 48)),
-                                y: arrayBufferToBase64(yBytes),
+                                x: arrayBufferToBase64url(combined.slice(0, 48)),
+                                y: arrayBufferToBase64url(yBytes),
                                 ySign: ySign(yBytes),
-                                d: arrayBufferToBase64(combined.slice(96, 144))
+                                d: arrayBufferToBase64url(combined.slice(96, 144))
                             };
                         }
                         case KeySubPrefix.CompressedEven:
@@ -892,12 +812,12 @@ function parseSB384string(input) {
                             if (combined.byteLength !== (48 * 2))
                                 return undefined;
                             const xBuf = combined.slice(0, 48);
-                            const { x: xBase64, y: yBase64 } = decompressP384(arrayBufferToBase64(xBuf), ySign);
+                            const { x: xBase64, y: yBase64 } = decompressP384(arrayBufferToBase64url(xBuf), ySign);
                             return {
                                 x: xBase64,
                                 y: yBase64,
                                 ySign: ySign,
-                                d: arrayBufferToBase64(combined.slice(48, 96))
+                                d: arrayBufferToBase64url(combined.slice(48, 96))
                             };
                         }
                         case KeySubPrefix.Dehydrated: {
@@ -951,7 +871,7 @@ export function hydrateKey(privKey, pubKey) {
                         const privKeyData = privKey.slice(4);
                         const combined = base62ToArrayBuffer(privKeyData);
                         const dBytes = combined.slice(0, 48);
-                        const d = arrayBufferToBase64(dBytes);
+                        const d = arrayBufferToBase64url(dBytes);
                         const jwk = parseSB384string(pubKey);
                         if (!jwk || !jwk.x || jwk.ySign === undefined) {
                             console.error("hydrateKey() - failed to parse public key");
@@ -1023,12 +943,14 @@ export class SBCrypto {
         catch (e) {
             const msg = `... importKey() error: ${e}:`;
             if (DBG) {
+                console.log(SEP, SEP);
                 console.error(msg);
                 console.log(format);
                 console.log(key);
                 console.log(type);
                 console.log(extractable);
                 console.log(keyUsages);
+                console.log(SEP, SEP);
             }
             throw new Error(msg);
         }
@@ -1202,7 +1124,7 @@ function SBValidateObject(obj, type) {
         default: return false;
     }
 }
-const SB_CACHE_DB_NAME = "SBMessageCache";
+const SB_MESSAGE_CACHE_DB_NAME = "SBMessageCache";
 class SBMessageCache {
     dbName;
     readyPromise;
@@ -1211,7 +1133,7 @@ class SBMessageCache {
         this.dbName = dbName;
         this.readyPromise = new Promise((resolve, reject) => {
             if (!('indexedDB' in globalThis)) {
-                console.warn("IndexedDB is not supported in this environment. SBCache will not be functional.");
+                console.warn("IndexedDB is not supported in this environment. SBMessageCache will not be functional.");
                 reject("IndexedDB not supported");
                 return;
             }
@@ -1224,8 +1146,8 @@ class SBMessageCache {
         if (!name)
             name = this.dbName;
         _sb_assert(this.db, "Internal Error [L2009]");
-        const transaction = this.db?.transaction(SB_CACHE_DB_NAME, mode);
-        const objectStore = transaction?.objectStore(SB_CACHE_DB_NAME);
+        const transaction = this.db?.transaction(SB_MESSAGE_CACHE_DB_NAME, mode);
+        const objectStore = transaction?.objectStore(SB_MESSAGE_CACHE_DB_NAME);
         _sb_assert(objectStore, "Internal Error [L2013]");
         return objectStore;
     }
@@ -1279,8 +1201,9 @@ class SBMessageCache {
         });
     }
 }
-if ('indexedDB' in globalThis)
-    globalThis.sbMessageCache = new SBMessageCache(SB_CACHE_DB_NAME, 1);
+if ('indexedDB' in globalThis) {
+    globalThis.sbMessageCache = new SBMessageCache(SB_MESSAGE_CACHE_DB_NAME, 1);
+}
 export const sbCrypto = new SBCrypto();
 const SEP = "============================================================\n";
 function modPow(base, exponent, modulus) {
@@ -1306,7 +1229,7 @@ function decompressP384(xBase64, signY) {
         y = prime - y;
     const yHex = y.toString(16).padStart(96, '0');
     const yBytes = new Uint8Array(yHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-    const yBase64 = arrayBufferToBase64(yBytes);
+    const yBase64 = arrayBufferToBase64url(yBytes);
     return { x: xBase64, y: yBase64 };
 }
 class SB384 {
@@ -2125,7 +2048,7 @@ class ChannelSocket extends Channel {
         if (!message._id)
             message._id = composeMessageKey(message.channelId, message.sts, message.i2);
         const hash = await crypto.subtle.digest('SHA-256', message.c);
-        const ack_id = arrayBufferToBase64(hash);
+        const ack_id = arrayBufferToBase64url(hash);
         if (DBG)
             console.log("Received message with hash:", ack_id);
         const r = this.#ack.get(ack_id);
@@ -2250,7 +2173,7 @@ class ChannelSocket extends Channel {
                     const messagePayload = assemblePayload(sbm.message);
                     _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message");
                     const hash = await crypto.subtle.digest('SHA-256', sbm.message.c);
-                    const messageHash = arrayBufferToBase64(hash);
+                    const messageHash = arrayBufferToBase64url(hash);
                     if (DBG || this.#traceSocket)
                         console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash);
                     this.#ack.set(messageHash, resolve);
@@ -2285,194 +2208,6 @@ _a = ChannelSocket;
 __decorate([
     VerifyParameters
 ], ChannelSocket.prototype, "send", null);
-class SBObjectHandle {
-    version = currentSBOHVersion;
-    #_type = 'b';
-    #id_binary;
-    #key_binary;
-    #verification;
-    shardServer;
-    iv;
-    salt;
-    fileName;
-    dateAndTime;
-    fileType;
-    lastModified;
-    actualSize;
-    savedSize;
-    constructor(options) {
-        const { version, type, id, key, verification, iv, salt, fileName, dateAndTime, fileType, lastModified, actualSize, savedSize, } = options;
-        if (type)
-            this.#_type = type;
-        if (version) {
-            this.version = version;
-        }
-        else {
-            if ((key) && (id)) {
-                if (isBase62Encoded(key) && isBase62Encoded(id)) {
-                    this.version = '2';
-                }
-                else if (b64Regex.test(key) && b64Regex.test(id)) {
-                    this.version = '1';
-                }
-                else {
-                    throw new Error('Unable to determine version from key and id');
-                }
-            }
-            else {
-                this.version = '2';
-            }
-        }
-        if (id)
-            this.id = id;
-        if (key)
-            this.key = key;
-        if (verification)
-            this.verification = verification;
-        this.iv = iv;
-        this.salt = salt;
-        this.fileName = fileName;
-        this.dateAndTime = dateAndTime;
-        this.fileType = fileType;
-        this.lastModified = lastModified;
-        this.actualSize = actualSize;
-        this.savedSize = savedSize;
-    }
-    set id_binary(value) {
-        if (!value)
-            throw new Error('Invalid id_binary');
-        if (value.byteLength !== 32)
-            throw new Error('Invalid id_binary length');
-        this.#id_binary = value;
-        Object.defineProperty(this, 'id64', {
-            get: () => {
-                return arrayBufferToBase64(this.#id_binary);
-            },
-            enumerable: false,
-            configurable: false
-        });
-        Object.defineProperty(this, 'id32', {
-            get: () => {
-                return arrayBufferToBase62(this.#id_binary);
-            },
-            enumerable: false,
-            configurable: false
-        });
-    }
-    set key_binary(value) {
-        if (!value)
-            throw new Error('Invalid key_binary');
-        if (value.byteLength !== 32)
-            throw new Error('Invalid key_binary length');
-        this.#key_binary = value;
-        Object.defineProperty(this, 'key64', {
-            get: () => {
-                return arrayBufferToBase64(this.#key_binary);
-            },
-            enumerable: false,
-            configurable: false
-        });
-        Object.defineProperty(this, 'key32', {
-            get: () => {
-                return arrayBufferToBase62(this.#key_binary);
-            },
-            enumerable: false,
-            configurable: false
-        });
-    }
-    set id(value) {
-        if (typeof value === 'string') {
-            if (this.version === '1') {
-                if (b64Regex.test(value)) {
-                    this.id_binary = base64ToArrayBuffer(value);
-                }
-                else {
-                    throw new Error('Requested version 1, but id is not b64');
-                }
-            }
-            else if (this.version === '2') {
-                if (isBase62Encoded(value)) {
-                    this.id_binary = base62ToArrayBuffer(value);
-                }
-                else {
-                    throw new Error('Requested version 2, but id is not b62');
-                }
-            }
-        }
-        else if (value instanceof ArrayBuffer) {
-            if (value.byteLength !== 32)
-                throw new Error('Invalid ID length');
-            this.id_binary = value;
-        }
-        else {
-            throw new Error('Invalid ID type');
-        }
-    }
-    set key(value) {
-        if (typeof value === 'string') {
-            if (this.version === '1') {
-                if (b64Regex.test(value)) {
-                    this.#key_binary = base64ToArrayBuffer(value);
-                }
-                else {
-                    throw new Error('Requested version 1, but key is not b64');
-                }
-            }
-            else if (this.version === '2') {
-                if (isBase62Encoded(value)) {
-                    this.#key_binary = base62ToArrayBuffer(value);
-                }
-                else {
-                    throw new Error('Requested version 2, but key is not b62');
-                }
-            }
-        }
-        else if (value instanceof ArrayBuffer) {
-            if (value.byteLength !== 32)
-                throw new Error('Invalid key length');
-            this.#key_binary = value;
-        }
-        else {
-            throw new Error('Invalid key type');
-        }
-    }
-    get id() {
-        _sb_assert(this.#id_binary, 'object handle id is undefined');
-        if (this.version === '1') {
-            return arrayBufferToBase64(this.#id_binary);
-        }
-        else if (this.version === '2') {
-            return arrayBufferToBase62(this.#id_binary);
-        }
-        else {
-            throw new Error('Invalid or missing version (internal error, should not happen)');
-        }
-    }
-    get key() {
-        _sb_assert(this.#key_binary, 'object handle key is undefined');
-        if (this.version === '1') {
-            return arrayBufferToBase64(this.#key_binary);
-        }
-        else if (this.version === '2') {
-            return arrayBufferToBase62(this.#key_binary);
-        }
-        else {
-            throw new Error('Invalid or missing version (internal error, should not happen)');
-        }
-    }
-    get id64() { throw new Error('Invalid id_binary'); }
-    get id32() { throw new Error('Invalid id_binary'); }
-    get key64() { throw new Error('Invalid key_binary'); }
-    get key32() { throw new Error('Invalid key_binary'); }
-    set verification(value) {
-        this.#verification = value;
-    }
-    get verification() {
-        _sb_assert(this.#verification, 'object handle verification is undefined');
-        return this.#verification;
-    }
-    get type() { return this.#_type; }
-}
 export class StorageApi {
     #storageServer;
     constructor(stringOrPromise) {
@@ -2483,7 +2218,7 @@ export class StorageApi {
         });
     }
     async getStorageServer() { return this.#storageServer; }
-    #padBuf(buf) {
+    static padBuf(buf) {
         const image_size = buf.byteLength;
         let _target;
         if ((image_size + 4) < 4096)
@@ -2495,7 +2230,7 @@ export class StorageApi {
         let finalArray = _appendBuffer(buf, (new Uint8Array(_target - image_size)).buffer);
         (new DataView(finalArray)).setUint32(_target - 4, image_size);
         if (DBG2)
-            console.log("#padBuf bytes:", finalArray.slice(-4));
+            console.log("padBuf bytes:", finalArray.slice(-4));
         return finalArray;
     }
     #unpadData(data_buffer) {
@@ -2512,7 +2247,7 @@ export class StorageApi {
         }
         return data_buffer.slice(0, _size);
     }
-    #getObjectKey(fileHashBuffer, salt) {
+    static getObjectKey(fileHashBuffer, salt) {
         return new Promise((resolve, reject) => {
             try {
                 sbCrypto.importKey('raw', fileHashBuffer, 'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
@@ -2531,111 +2266,51 @@ export class StorageApi {
             }
         });
     }
-    #_allocateObject(image_id, type) {
+    static storeObject(storageServer, fileId, iv, salt, storageToken, data) {
         return new Promise(async (resolve, reject) => {
-            SBFetch((await this.getStorageServer()) + '/api/v2' + '/storeRequest?name=' + arrayBufferToBase62(image_id) + "&type=" + type)
-                .then((r) => { return r.arrayBuffer(); })
-                .then((b) => {
-                const par = extractPayload(b).payload;
-                resolve({ salt: par.salt, iv: par.iv });
-            })
-                .catch((e) => {
-                console.warn(`**** ERROR: ${e}`);
-                reject(e);
-            });
-        });
-    }
-    async #_storeObject(image, image_id, keyData, type, budgetChannel, iv, salt) {
-        return new Promise(async (resolve, reject) => {
-            try {
-                const key = await this.#getObjectKey(keyData, salt);
-                const data = await sbCrypto.encrypt(image, key, { iv: iv });
-                const storageToken = await budgetChannel.getStorageToken(data.byteLength);
-                const resp_json = await this.storeObject(type, image_id, iv, salt, storageToken, data);
-                if (resp_json.error)
-                    reject(`storeObject() failed: ${resp_json.error}`);
-                if (resp_json.image_id != image_id)
-                    reject(`received imageId ${resp_json.image_id} but expected ${image_id}`);
-                resolve(resp_json.verification_token);
-            }
-            catch (e) {
-                const msg = `storeObject() failed: ${e}`;
-                console.error(msg);
-                reject(msg);
-            }
-        });
-    }
-    storeObject(type, fileId, iv, salt, storageToken, data) {
-        return new Promise(async (resolve, reject) => {
-            if (typeof type !== 'string') {
-                const errMsg = "NEW in 1.2.x - storeData() and storeObject() have switched places, you probably meant to use storeData()";
-                console.error(errMsg);
-                reject("errMsg");
-            }
-            SBFetch((await this.getStorageServer()) + '/api/v2' + '/storeData?type=' + type + '&key=' + fileId, {
-                method: 'POST',
-                body: assemblePayload({
-                    iv: iv,
-                    salt: salt,
-                    image: data,
-                    storageToken: storageToken,
-                    vid: crypto.getRandomValues(new Uint8Array(48))
-                })
-            })
-                .then((response) => {
-                if (!response.ok) {
-                    reject('response from storage server was not OK');
-                }
-                return response.json();
-            })
-                .then((data) => {
-                resolve(data);
-            }).catch((error) => {
-                reject(error);
-            });
+            const query = storageServer + '/api/v2/storeData?key=' + fileId;
+            const body = assemblePayload({ iv: iv, salt: salt, image: data, storageToken: storageToken, vid: crypto.getRandomValues(new Uint8Array(48)) });
+            const resp_json = await SBApiFetch(query, { method: 'POST', body: body });
+            if (resp_json.error)
+                reject(`storeObject() failed: ${resp_json.error}`);
+            if (resp_json.image_id != fileId)
+                reject(`received imageId ${resp_json.image_id} but expected ${fileId}`);
+            resolve(resp_json);
         });
     }
     storeData(buf, type, channelOrHandle) {
-        return new Promise((resolve, reject) => {
-            if (typeof buf === 'string') {
-                const errMsg = "NEW in 1.2.x - storeData() and storeObject() have switched places, you probably meant to use storeObject()";
-                console.error(errMsg);
-                reject("errMsg");
-            }
-            if (buf instanceof Uint8Array) {
-                if (DBG2)
-                    console.log('converting Uint8Array to ArrayBuffer');
-                buf = new Uint8Array(buf).buffer;
-            }
-            if (!(buf instanceof ArrayBuffer) && buf.constructor.name != 'ArrayBuffer') {
-                if (DBG2)
-                    console.log('buf must be an ArrayBuffer:');
-                console.log(buf);
-                reject('buf must be an ArrayBuffer');
-            }
+        return new Promise(async (resolve, reject) => {
+            buf = buf instanceof Uint8Array ? buf.buffer : buf;
             const bufSize = buf.byteLength;
-            const channel = (channelOrHandle instanceof Channel) ? channelOrHandle : new Channel(channelOrHandle);
-            const paddedBuf = this.#padBuf(buf);
-            sbCrypto.generateIdKey(paddedBuf).then((fullHash) => {
-                this.#_allocateObject(fullHash.id_binary, type)
-                    .then((p) => {
-                    const id32 = arrayBufferToBase62(fullHash.id_binary);
-                    const key32 = arrayBufferToBase62(fullHash.key_material);
-                    const r = {
-                        [SB_OBJECT_HANDLE_SYMBOL]: true,
-                        version: currentSBOHVersion,
-                        type: type,
-                        id: id32,
-                        key: key32,
-                        iv: p.iv,
-                        salt: p.salt,
-                        actualSize: bufSize,
-                        verification: this.#_storeObject(paddedBuf, id32, fullHash.key_material, type, channel, p.iv, p.salt)
-                    };
-                    resolve(r);
-                })
-                    .catch((e) => reject(e));
-            });
+            const channel = channelOrHandle instanceof Channel ? channelOrHandle : new Channel(channelOrHandle);
+            const paddedBuf = _b.padBuf(buf);
+            const fullHash = await sbCrypto.generateIdKey(paddedBuf);
+            const storageServer = await this.getStorageServer();
+            const query = storageServer + '/api/v2/storeRequest?name=' + arrayBufferToBase62(fullHash.id_binary);
+            const keyInfo = await SBApiFetch(query);
+            if (!keyInfo.salt || !keyInfo.iv)
+                throw new Error('Failed to get key info (salt, nonce) from storage server');
+            const id = arrayBufferToBase62(fullHash.id_binary);
+            const key = await _b.getObjectKey(fullHash.key_material, keyInfo.salt);
+            const data = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv });
+            const storageToken = await channel.getStorageToken(data.byteLength);
+            const resp_json = await _b.storeObject(type, id, keyInfo.iv, keyInfo.salt, storageToken, data);
+            if (resp_json.error)
+                reject(`storeObject() failed: ${resp_json.error}`);
+            if (resp_json.image_id != id)
+                reject(`received imageId ${resp_json.image_id} but expected ${id}`);
+            const r = {
+                [SB_OBJECT_HANDLE_SYMBOL]: true,
+                version: currentSBOHVersion,
+                type: type,
+                id: id,
+                key: arrayBufferToBase62(fullHash.key_material),
+                iv: keyInfo.iv,
+                salt: keyInfo.salt,
+                actualSize: bufSize,
+                verification: resp_json.verification_token
+            };
+            resolve(r);
         });
     }
     #processData(payload, h) {
@@ -2660,8 +2335,8 @@ export class StorageApi {
                 if ((handleIV) && (!compareBuffers(iv, handleIV))) {
                     console.error("WARNING: nonce from server differs from local copy");
                     console.log(`object ID: ${h.id}`);
-                    console.log(` local iv: ${arrayBufferToBase64(handleIV)}`);
-                    console.log(`server iv: ${arrayBufferToBase64(data.iv)}`);
+                    console.log(` local iv: ${arrayBufferToBase64url(handleIV)}`);
+                    console.log(`server iv: ${arrayBufferToBase64url(data.iv)}`);
                 }
                 if ((handleSalt) && (!compareBuffers(salt, handleSalt))) {
                     console.error("WARNING: salt from server differs from local copy (will use server)");
@@ -2675,31 +2350,31 @@ export class StorageApi {
                     else {
                         console.log("h.salt is in arrayBuffer or Uint8Array");
                         console.log("h.salt as b64:");
-                        console.log(arrayBufferToBase64(h.salt));
+                        console.log(arrayBufferToBase64url(h.salt));
                         console.log("h.salt unprocessed:");
                         console.log(h.salt);
                     }
                     console.log("handleSalt as b64:");
-                    console.log(arrayBufferToBase64(handleSalt));
+                    console.log(arrayBufferToBase64url(handleSalt));
                     console.log("handleSalt unprocessed:");
                     console.log(handleSalt);
                 }
                 if (DBG2) {
                     console.log("will use nonce and salt of:");
-                    console.log(`iv: ${arrayBufferToBase64(iv)}`);
-                    console.log(`salt : ${arrayBufferToBase64(salt)}`);
+                    console.log(`iv: ${arrayBufferToBase64url(iv)}`);
+                    console.log(`salt : ${arrayBufferToBase64url(salt)}`);
                 }
                 var h_key_material;
                 if (h.version === '1') {
                     h_key_material = base64ToArrayBuffer(h.key);
                 }
-                else if (h.version === '2') {
+                else if (h.version === '2' || h.version === '3') {
                     h_key_material = base62ToArrayBuffer(h.key);
                 }
                 else {
                     throw new Error('Invalid or missing version (internal error, should not happen)');
                 }
-                this.#getObjectKey(h_key_material, salt).then((image_key) => {
+                _b.getObjectKey(h_key_material, salt).then((image_key) => {
                     const encrypted_image = data.image;
                     if (DBG2) {
                         console.log("data.image:      ");
@@ -2719,7 +2394,7 @@ export class StorageApi {
             }
         });
     }
-    async #_fetchData(useServer, url, h, returnType) {
+    async #_fetchData(useServer, url, h) {
         const body = { method: 'GET' };
         return new Promise(async (resolve, _reject) => {
             SBFetch(useServer + url, body)
@@ -2736,8 +2411,6 @@ export class StorageApi {
                 .then((payload) => {
                 if (payload === null)
                     resolve(null);
-                if (returnType === 'string')
-                    resolve(sbCrypto.ab2str(new Uint8Array(payload)));
                 else
                     resolve(payload);
             })
@@ -2746,28 +2419,44 @@ export class StorageApi {
             });
         });
     }
-    fetchData(handle, returnType = 'arrayBuffer') {
+    fetchData(handle) {
         return new Promise(async (resolve, reject) => {
-            const h = new SBObjectHandle(handle);
-            if (!h)
-                reject('SBObjectHandle is null or undefined');
+            const h = validate_SBObjectHandle(handle);
+            if (h.data?.deref()) {
+                resolve(h);
+                return;
+            }
             const verificationToken = await h.verification;
+            const server1 = h.storageServer ? h.storageServer : null;
+            const server2 = 'http://localhost:3841';
+            const server3 = await this.getStorageServer();
             const useServer = (await this.getStorageServer()) + '/api/v2';
-            if (DBG)
-                console.log("fetchData(), fetching from server: " + useServer);
-            const queryString = '/fetchData?id=' + h.id + '&type=' + h.type + '&verification_token=' + verificationToken;
-            const result = await this.#_fetchData(useServer, queryString, h, returnType);
-            if (result !== null) {
+            for (const server in [server1, server2, server3]) {
                 if (DBG)
-                    console.log(`[fetchData] success: fetched from '${useServer}'`, result);
-                resolve(result);
+                    console.log("fetchData(), trying server: " + server);
+                const queryString = '/api/v2/fetchData?id=' + h.id + '&verification_token=' + verificationToken;
+                const result = await this.#_fetchData(useServer, queryString, h);
+                if (result !== null) {
+                    if (DBG)
+                        console.log(`[fetchData] success: fetched from '${useServer}'`, result);
+                    h.data = new WeakRef(result);
+                    resolve(h);
+                    return;
+                }
             }
-            else {
-                reject('fetchData() failed');
-            }
+            reject(`[fetchData] failed to fetch from any server`);
         });
     }
+    static getData(handle) {
+        const h = validate_SBObjectHandle(handle);
+        const dref = h.data?.deref();
+        if (dref)
+            return dref;
+        else
+            return null;
+    }
 }
+_b = StorageApi;
 __decorate([
     Memoize
 ], StorageApi.prototype, "getStorageServer", null);
@@ -2893,14 +2582,14 @@ __decorate([
 __decorate([
     Memoize
 ], Snackabra.prototype, "getStorageServer", null);
-export { SB384, SBMessage, Channel, ChannelSocket, SBObjectHandle, Snackabra, arrayBufferToBase64, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
+export { SB384, SBMessage, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
 export var SB = {
     Snackabra: Snackabra,
     SBMessage: SBMessage,
     Channel: Channel,
     SBCrypto: SBCrypto,
     SB384: SB384,
-    arrayBufferToBase64: arrayBufferToBase64,
+    arrayBufferToBase64url: arrayBufferToBase64url,
     base64ToArrayBuffer: base64ToArrayBuffer,
     arrayBufferToBase62: arrayBufferToBase62,
     base62ToArrayBuffer: base62ToArrayBuffer,
