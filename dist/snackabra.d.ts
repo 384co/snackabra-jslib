@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 67)";
+declare const version = "2.0.0-alpha.5 (build 68)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -98,12 +98,11 @@ export interface EncryptParams {
 declare function setDebugLevel(dbg1: boolean, dbg2?: boolean): void;
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
-export type SBObjectType = 'f' | 'p' | 'b' | 't' | '_' | 'T';
 export type SBObjectHandleVersions = '1' | '2' | '3';
 export interface SBObjectHandle {
     [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
     version: SBObjectHandleVersions;
-    type?: SBObjectType;
+    type?: string;
     id: Base62Encoded;
     key?: Base62Encoded;
     verification?: Promise<string> | string;
@@ -132,6 +131,9 @@ export declare class MessageBus {
     subscribe(event: string, handler: CallableFunction): void;
     unsubscribe(event: string, handler: CallableFunction): void;
     publish(event: string, ...args: unknown[]): void;
+}
+export declare class SBError extends Error {
+    constructor(message: string);
 }
 export declare function jsonParseWrapper(str: string | null, loc?: string, reviver?: (this: any, key: string, value: any) => any): any;
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
@@ -162,15 +164,16 @@ export declare enum KeyPrefix {
 export declare function hydrateKey(privKey: SBUserPrivateKey, pubKey?: SBUserPrivateKey): SBUserPrivateKey | undefined;
 export declare class SBCrypto {
     generateIdKey(buf: ArrayBuffer): Promise<{
-        id_binary: ArrayBuffer;
-        key_material: ArrayBuffer;
+        idBinary: ArrayBuffer;
+        keyMaterial: ArrayBuffer;
     }>;
     generateKeys(): Promise<CryptoKeyPair>;
     importKey(format: KeyFormat, key: BufferSource | JsonWebKey, type: 'ECDH' | 'AES' | 'PBKDF2', extractable: boolean, keyUsages: KeyUsage[]): Promise<CryptoKey>;
     exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey | undefined>;
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer>;
     wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, salt: ArrayBuffer, signingKey: CryptoKey, options?: MessageOptions): Promise<ChannelMessage>;
-    unwrap(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
+    unwrapMessage(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
+    unwrapShard(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
     sign(signKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
     str2ab(string: string): Uint8Array;
@@ -304,7 +307,6 @@ declare class Channel extends SBChannelKeys {
         targetChannel?: SBChannelHandle;
         size?: number;
     }): Promise<SBChannelHandle>;
-    downloadChannel(): void;
 }
 declare class ChannelSocket extends Channel {
     #private;
@@ -324,10 +326,10 @@ export declare class StorageApi {
     getStorageServer(): Promise<string>;
     static padBuf(buf: ArrayBuffer): ArrayBuffer;
     static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey>;
-    static storeObject(storageServer: string, fileId: Base62Encoded, iv: ArrayBuffer, salt: ArrayBuffer, storageToken: SBStorageToken, data: ArrayBuffer): Promise<Dictionary<any>>;
-    storeData(buf: ArrayBuffer | Uint8Array, type: SBObjectType, channelOrHandle: SBChannelHandle | Channel): Promise<SBObjectHandle>;
+    storeData(contents: any, channelOrHandle: SBChannelHandle | Channel): Promise<SBObjectHandle>;
     fetchData(handle: SBObjectHandle): Promise<SBObjectHandle>;
     static getData(handle: SBObjectHandle): ArrayBuffer | undefined;
+    static getPayload(handle: SBObjectHandle): any;
 }
 declare class Snackabra {
     #private;

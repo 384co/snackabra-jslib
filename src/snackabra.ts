@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 67)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 68)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -40,7 +40,7 @@ export interface SBStorageToken {
 }
 
 export function validate_SBStorageToken(data: SBStorageToken): SBStorageToken {
-  if (!data) throw new Error(`invalid SBStorageToken (null or undefined)`)
+  if (!data) throw new SBError(`invalid SBStorageToken (null or undefined)`)
   else if (data[SB_STORAGE_TOKEN_SYMBOL]) return data as SBStorageToken
   else if (typeof data === 'string' && (data as string).slice(0, 4) === SBStorageTokenPrefix)
     // if at runtime we get just the hash, we 'upgrade' the type to help caller
@@ -55,7 +55,7 @@ export function validate_SBStorageToken(data: SBStorageToken): SBStorageToken {
     return { ...data, [SB_STORAGE_TOKEN_SYMBOL]: true } as SBStorageToken
   } else {
     if (DBG) console.error('invalid SBStorageToken ... trying to ingest:\n', data)
-    throw new Error(`invalid SBStorageToken`)
+    throw new SBError(`invalid SBStorageToken`)
   }
 }
 
@@ -92,13 +92,13 @@ function _checkChannelHandle(data: SBChannelHandle) {
   )
 }
 export function validate_SBChannelHandle(data: SBChannelHandle): SBChannelHandle {
-  if (!data) throw new Error(`invalid SBChannelHandle (null or undefined)`)
+  if (!data) throw new SBError(`invalid SBChannelHandle (null or undefined)`)
   else if (data[SB_CHANNEL_HANDLE_SYMBOL]) return data as SBChannelHandle
   else if (_checkChannelHandle(data)) {
     return { ...data, [SB_CHANNEL_HANDLE_SYMBOL]: true } as SBChannelHandle
   } else {
     if (DBG2) console.error('invalid SBChannelHandle ... trying to ingest:\n', data)
-    throw new Error(`invalid SBChannelHandle`)
+    throw new SBError(`invalid SBChannelHandle`)
   }
 }
 
@@ -124,12 +124,12 @@ function _checkChannelData(data: SBChannelData) {
 }
 
 export function validate_SBChannelData(data: any): SBChannelData {
-  if (!data) throw new Error(`invalid SBChannelData (null or undefined)`)
+  if (!data) throw new SBError(`invalid SBChannelData (null or undefined)`)
   else if (_checkChannelData(data)) {
     return data as SBChannelData
   } else {
     if (DBG) console.error('invalid SBChannelData ... trying to ingest:\n', data)
-    throw new Error(`invalid SBChannelData`)
+    throw new SBError(`invalid SBChannelData`)
   }
 }
 
@@ -207,7 +207,7 @@ export interface Message {
 }
 
 export function validate_Message(data: Message): Message {
-  if (!data) throw new Error(`invalid Message (null or undefined)`)
+  if (!data) throw new SBError(`invalid Message (null or undefined)`)
   else if (
     data.body && typeof data.body === 'object'
     && data.channelId && typeof data.channelId === 'string' && data.channelId.length === 43
@@ -220,7 +220,7 @@ export function validate_Message(data: Message): Message {
     return data as Message
   } else {
     if (DBG) console.error('invalid Message ... trying to ingest:\n', data)
-    throw new Error(`invalid Message`)
+    throw new SBError(`invalid Message`)
   }
 }
 
@@ -245,7 +245,7 @@ export interface ChannelApiBody {
 // return self if it matches shape, otherwise throw
 // extraneous properties are ignored
 export function validate_ChannelApiBody(body: any): ChannelApiBody {
-  if (!body) throw new Error(`invalid ChannelApiBody (null or undefined)`)
+  if (!body) throw new SBError(`invalid ChannelApiBody (null or undefined)`)
   else if (body[SB_CHANNEL_API_BODY_SYMBOL]) return body as ChannelApiBody
   else if (
     body.channelId && body.channelId.length === 43
@@ -260,7 +260,7 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
     return { ...body, [SB_CHANNEL_API_BODY_SYMBOL]: true } as ChannelApiBody
   } else {
     if (DBG) console.error('invalid ChannelApiBody ... trying to ingest:\n', body)
-    throw new Error(`invalid ChannelApiBody`)
+    throw new SBError(`invalid ChannelApiBody`)
   }
 }
 
@@ -343,7 +343,7 @@ export interface ChannelMessage {
 }
 
 export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
-  if (!body) throw new Error(`invalid ChannelMessage (null or undefined)`)
+  if (!body) throw new SBError(`invalid ChannelMessage (null or undefined)`)
   else if (body[SB_CHANNEL_MESSAGE_SYMBOL]) return body as ChannelMessage
   else if (
     // these are minimally required
@@ -369,7 +369,7 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
     return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true } as ChannelMessage
   } else {
     if (DBG2) console.error('invalid ChannelMessage ... trying to ingest:\n', body)
-    throw new Error(`invalid ChannelMessage`)
+    throw new SBError(`invalid ChannelMessage`)
   }
 }
 
@@ -377,13 +377,13 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
 export function stripChannelMessage(msg: ChannelMessage): ChannelMessage {
   if (DBG) console.log('stripping message:\n', msg)
   const ret: ChannelMessage = {}
-  if (msg.f !== undefined) ret.f = msg.f; else throw new Error("ERROR: missing 'f' ('from') in message")
-  if (msg.c !== undefined) ret.c = msg.c; else throw new Error("ERROR: missing 'ec' ('encrypted contents') in message")
-  if (msg.iv !== undefined) ret.iv = msg.iv; else throw new Error("ERROR: missing 'iv' ('nonce') in message")
-  if (msg.salt !== undefined) ret.salt = msg.salt; else throw new Error("ERROR: missing 'salt' in message")
-  if (msg.s !== undefined) ret.s = msg.s; else throw new Error("ERROR: missing 's' ('signature') in message")
-  if (msg.ts !== undefined) ret.ts = msg.ts; else throw new Error("ERROR: missing 'ts' ('timestamp') in message")
-  if (msg.sts !== undefined) ret.sts = msg.sts; else throw new Error("ERROR: missing 'sts' ('servertimestamp') in message")
+  if (msg.f !== undefined) ret.f = msg.f; else throw new SBError("ERROR: missing 'f' ('from') in message")
+  if (msg.c !== undefined) ret.c = msg.c; else throw new SBError("ERROR: missing 'ec' ('encrypted contents') in message")
+  if (msg.iv !== undefined) ret.iv = msg.iv; else throw new SBError("ERROR: missing 'iv' ('nonce') in message")
+  if (msg.salt !== undefined) ret.salt = msg.salt; else throw new SBError("ERROR: missing 'salt' in message")
+  if (msg.s !== undefined) ret.s = msg.s; else throw new SBError("ERROR: missing 's' ('signature') in message")
+  if (msg.ts !== undefined) ret.ts = msg.ts; else throw new SBError("ERROR: missing 'ts' ('timestamp') in message")
+  if (msg.sts !== undefined) ret.sts = msg.sts; else throw new SBError("ERROR: missing 'sts' ('servertimestamp') in message")
   if (msg.ttl !== undefined && msg.ttl !== 0xF) ret.ttl = msg.ttl; // optional, and we strip if set to default value
   if (msg.t !== undefined) ret.t = msg.t; // 'to', optional but if present is kept
   if (msg.i2 !== undefined && msg.i2 !== '____') ret.i2 = msg.i2; // optional, also we strip out default value
@@ -463,7 +463,7 @@ function setDebugLevel(dbg1: boolean, dbg2?: boolean) {
 export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 14400, 129600, 864000, -1, -1, -1, -1, -1, Infinity]
 export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One minute', 'Five minutes', 'Thirty minutes', 'Four hours', '36 hours', '10 days', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)']
 
-export type SBObjectType = 'f' | 'p' | 'b' | 't' | '_' | 'T'
+// export type SBObjectType = 'f' | 'p' | 'b' | 't' | '_' | 'T'
 export type SBObjectHandleVersions = '1' | '2' | '3'
 const currentSBOHVersion: SBObjectHandleVersions = '3'
 
@@ -479,18 +479,6 @@ const currentSBOHVersion: SBObjectHandleVersions = '3'
  *   - '1' : version 1 (legacy)
  *   - '2' : version 2 (legacy)
  *   - '3' : version 3 (current)
- *
- * - type is a single character string that indicates the type of object.
- *   Currently, the following types are supported:
- *
- *   - 'f' : full object (e.g. image, this is the most common)
- *   - 'p' : preview object (e.g. thumbnail)
- *   - 'b' : block/binary object (e.g. 64KB block)
- *   - 't' : test object (for testing purposes)
- *   - '_' : untyped (we're migrating to this)
- *   - 'T' : (used internally by storage server))
- *
- *   You should not expect the 't' type to stick around
  *
  * - id is a 43 character base62 string that identifies the object. It is used
  *   to retrieve the object from the storage server.
@@ -513,7 +501,7 @@ const currentSBOHVersion: SBObjectHandleVersions = '3'
 export interface SBObjectHandle {
   [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
   version: SBObjectHandleVersions,
-  type?: SBObjectType,
+  type?: string, // for some backwards compatibility, no longer used
 
   id: Base62Encoded,
   key?: Base62Encoded,
@@ -536,11 +524,10 @@ export interface SBObjectHandle {
 }
 
 export function validate_SBObjectHandle(h: SBObjectHandle) {
-  if (!h) throw new Error(`invalid SBObjectHandle (null or undefined)`)
+  if (!h) throw new SBError(`invalid SBObjectHandle (null or undefined)`)
   else if (h[SB_OBJECT_HANDLE_SYMBOL]) return h as SBObjectHandle
   else if (
     h.version && typeof h.version === 'string' && h.version.length === 1
-    && (!h.type || (typeof h.type === 'string' && h.type.length === 1))
     && h.id && typeof h.id === 'string' && h.id.length === 43
     && (!h.key || (typeof h.key === 'string' && h.key.length === 43))
     && (!h.verification || typeof h.verification === 'string' || typeof h.verification === 'object')
@@ -550,7 +537,7 @@ export function validate_SBObjectHandle(h: SBObjectHandle) {
     return { ...h, [SB_OBJECT_HANDLE_SYMBOL]: true } as SBObjectHandle
   } else {
     if (DBG) console.error('invalid SBObjectHandle ... trying to ingest:\n', h)
-    throw new Error(`invalid SBObjectHandle`)
+    throw new SBError(`invalid SBObjectHandle`)
   }
 }
 
@@ -645,6 +632,33 @@ export class MessageBus {
 /******************************************************************************************************/
 //#region - Utility functions (exported)
 
+export class SBError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = this.constructor.name;
+    if (Error.captureStackTrace)
+      Error.captureStackTrace(this, this.constructor);
+    else
+      this.stack = (new Error(message)).stack;
+    if (DBG) {
+      let atLine = null
+      if (this.stack) {
+        const stackLines = this.stack!.split("\n");
+        for (let i = 1; i < stackLines.length; i++) {
+          if (stackLines[i].trim().startsWith("at")) {
+            atLine = `${stackLines[i].trim()}`
+            break;
+          }
+        }
+      }
+      if (atLine !== null)
+        console.log('\n', SEP, 'SBError():\n', "'" + message + "'", '\n', atLine, '\n', SEP)
+      else
+        console.log('\n', SEP, 'SBError():\n', message, '\n', SEP)
+    }
+  }
+}
+
 /**
  * Adding a more resilient wrapper around JSON.parse. The 'loc' parameter is typically (file) line number.
  */
@@ -653,12 +667,11 @@ export function jsonParseWrapper(str: string | null, loc?: string, reviver?: (th
     try {
       str = JSON.parse(str, reviver) // handle nesting
     } catch (e) {
-      throw new Error(`JSON.parse() error${loc ? ` at ${loc}` : ''}: ${e}\nString (possibly nested) was: ${str}`)
+      throw new SBError(`JSON.parse() error${loc ? ` at ${loc}` : ''}: ${e}\nString (possibly nested) was: ${str}`)
     }
   }
   return str as any
 }
-
 
 const bs2dv = (bs: BufferSource) => bs instanceof ArrayBuffer
   ? new DataView(bs)
@@ -713,69 +726,117 @@ export function getRandomValues(buffer: Uint8Array) {
 //#region - Internal utility functions
 
 // Centralized path for fetch()
-function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    try {
-      fetch(input, init ?? { method: 'GET', headers: { 'Content-Type': 'application/json' } },)
-        .then((response) => {
-          resolve(response); // we don't check for status here, we'll do that in the caller
-        }).catch((error) => { throw error; })
-    } catch (e) {
-      const msg = `[SBFetch] Error (fetch exception, might be normal operation): ${e}`;
+function SBFetch(input: RequestInfo | URL, init?: RequestInit) {
+  return fetch(input, init ?? { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+    .then((response) => {
+      return (response); // we don't check for status here, we'll do that in the caller
+    }).catch((error) => {
+      const msg = `[SBFetch] Error performing fetch() (this might be normal): ${error}`;
       console.warn(msg); // not necessarily an error but helps trace up through callee
-      reject(msg);
-    }
-  });
+      throw new SBError(msg);
+    });
 }
 
 /**
- * Safe 'fetch' that appplies SB calling conventions on both sides of the call;
- * it will return whatever data structure the server returns, or throw an error.
+ * Wrapper to SBFetch that applies SB API calling conventions on both sides of
+ * the call; it will return whatever data structure the server returns, note
+ * that it will extract the reply (either from json or from payload). if there
+ * are any issues or if the reply contains an error message, it will throw an
+ * error.
  */
-export function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any> {
-  // sorry about all this code ... but everything that can go wrong here eventually does
-  return new Promise((resolve, reject) => {
-    SBFetch(input, init)
-      .then(async (response: Response) => {
-        var retValue: any
-        if (!response || !response.ok) {
-          // read the json error message if it's there
-          const json = await response.json()
-          let msg = '[SBApiFetch] Server responded with error\n'
-          if (response.statusText) msg += `Status text: ('${response.statusText}')\n`
-          if (json.error) msg +=          `Error msg:   ('${json.error}')\n`
-          if (DBG) console.log(msg)
-          reject(msg); return;
-        }
-        const contentType = response.headers.get('content-type');
-        if (!contentType) {
-          reject("[SBApiFetch] Server response missing content-type header (?)"); return;
-        } else if (contentType.indexOf("application/json") !== -1) {
-          const json = await response.json()
-          if (DBG2) console.log(`[SBApiFetch] json ('${json}'):\n`, json)
-          retValue = jsonParseWrapper(json, "L489");
-        } else if (contentType.indexOf("application/octet-stream") !== -1) {
-          retValue = extractPayload(await response.arrayBuffer()).payload
-        } else {
-          reject("SBApiFetch] Server responded with unknown content-type header (?)"); return;
-        }
-        if (!retValue || retValue.error || (retValue.success && !retValue.success)) {
-          let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response'
-          if (response.status) apiErrorMsg += ' [' + response.status + ']'
-          if (retValue?.error) apiErrorMsg += ': ' + retValue.error
-          if (DBG) console.error("[SBApiFetch] error:\n", apiErrorMsg)
-          reject(new Error(apiErrorMsg))
-        } else {
-          if (DBG2) console.log(
-            "[SBApiFetch] Success:\n",
-            SEP, input, '\n',
-            SEP, retValue, '\n', SEP)
-          resolve(retValue)
-        }
-      }).catch((error) => {
-        reject(error); // SBFetch provides details
-      });
-  });
+// export function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
+//   return SBFetch(input, init)
+//     .then(async (response: Response) => {
+//       var retValue: any
+//       if (!response) throw new SBError("[SBApiFetch] Server did not respond");
+//       // if (!response || !response.ok) {
+//       //   // read the json error message if it's there
+//       //   const json = await response.json()
+//       //   let msg = '[SBApiFetch] Server responded with error\n'
+//       //   if (response.statusText) msg += `Status text: ('${response.statusText}')\n`
+//       //   if (json.error) msg +=          `Error msg:   ('${json.error}')\n`
+//       //   if (DBG) console.log(msg)
+//       //   reject(msg); return;
+//       // }
+//       const contentType = response.headers.get('content-type');
+//       if (!contentType) {
+//         throw new SBError("[SBApiFetch] Server response missing content-type header (?)");
+//       } else if (contentType.indexOf("application/json") !== -1) {
+//         const json = await response.json()
+//         if (DBG2) console.log(`[SBApiFetch] json ('${json}'):\n`, json)
+//         retValue = jsonParseWrapper(json, "L489");
+//       } else if (contentType.indexOf("application/octet-stream") !== -1) {
+//         retValue = extractPayload(await response.arrayBuffer()).payload
+//       } else {
+//         throw new SBError("[SBApiFetch] Server responded with unknown content-type header (?)");
+//       }
+//       if (!response.ok || !retValue || retValue.error || retValue.success === false) {
+//         let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response'
+//         if (response.status) apiErrorMsg += ' [' + response.status + ']'
+//         if (retValue?.error) apiErrorMsg += ': ' + retValue.error
+//         if (DBG) console.error("[SBApiFetch] error:\n", apiErrorMsg)
+//         throw new SBError(apiErrorMsg)
+//       } else {
+//         if (DBG2) console.log(
+//           "[SBApiFetch] Success:\n",
+//           SEP, input, '\n',
+//           SEP, retValue, '\n', SEP)
+//         return (retValue)
+//       }
+//     });
+// }
+
+export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
+  let response
+  try {
+    response = await SBFetch(input, init)
+    if (!response) throw new SBError("[SBApiFetch] Server did not respond (might be expected)");
+    // if (!response || !response.ok) {
+    //   // read the json error message if it's there
+    //   const json = await response.json()
+    //   let msg = '[SBApiFetch] Server responded with error\n'
+    //   if (response.statusText) msg += `Status text: ('${response.statusText}')\n`
+    //   if (json.error) msg +=          `Error msg:   ('${json.error}')\n`
+    //   if (DBG) console.log(msg)
+    //   reject(msg); return;
+    // }
+    const contentType = response.headers.get('content-type');
+    var retValue: any
+    if (!contentType) {
+      throw new SBError("[SBApiFetch] Server did not respond (might be expected) (no content header)");
+    } else if (contentType.indexOf("application/json") !== -1) {
+      const json = await response.json()
+      if (DBG2) console.log(`[SBApiFetch] json ('${json}'):\n`, json)
+      retValue = jsonParseWrapper(json, "L489");
+    } else if (contentType.indexOf("application/octet-stream") !== -1) {
+      retValue = extractPayload(await response.arrayBuffer()).payload
+    } else {
+      throw new SBError("[SBApiFetch] Server responded with unknown content-type header (?)");
+    }
+    if (!response.ok || !retValue || retValue.error || retValue.success === false) {
+      let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response'
+      if (response.status) apiErrorMsg += ' [' + response.status + ']'
+      if (retValue?.error) apiErrorMsg += ': ' + retValue.error
+      if (DBG) console.error("[SBApiFetch] error:\n", apiErrorMsg)
+      throw new SBError(apiErrorMsg)
+    } else {
+      if (DBG2) console.log(
+        "[SBApiFetch] Success:\n",
+        SEP, input, '\n',
+        SEP, retValue, '\n', SEP)
+      return (retValue)
+    }
+  } catch (e) {
+    if (DBG) console.error(`[SBApiFetch] caught error: ${e}`)
+    if (response && response.body && !response.body.locked) {
+      // occasionally we need to clean up, if the fetch gave a response but some
+      // operation on the response failed (or some other weird stuff happens)
+      if (DBG2) console.log('[SBApiFetch] cancelling response body')
+      await response.body.cancel();
+    }
+    if (e instanceof SBError) throw e
+    else throw new SBError(`[SBApiFetch] caught error: ${e}`)
+  }
 }
 
 // variation on solving this issue:
@@ -794,14 +855,14 @@ function _sb_exception(loc: string, msg: string) {
   const m = '[_sb_exception] << SB lib error (' + loc + ': ' + msg + ') >>';
   // for now disabling this to keep node testing less noisy
   // console.error(m);
-  throw new Error(m);
+  throw new SBError(m);
 }
 
 function _sb_assert(val: unknown, msg: string) {
   if (!(val)) {
     const m = ` <<<<[_sb_assert] assertion failed: '${msg}'>>>> `;
     if (DBG) console.trace(m)
-    throw new Error(m);
+    throw new SBError(m);
   }
 }
 
@@ -864,7 +925,7 @@ function arrayBufferToBase64url(buffer: ArrayBuffer | Uint8Array): string {
  */
 function base64ToArrayBuffer(s: string): Uint8Array {
   s = s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  if (!b64urlRegex.test(s)) throw new Error(`invalid character in b64 string (after cleanup: '${s}')`)
+  if (!b64urlRegex.test(s)) throw new SBError(`invalid character in b64 string (after cleanup: '${s}')`)
   const len = s.length;
   const bytes = new Uint8Array(len * 3 / 4);
   for (let i = 0, p = 0; i < len; i += 4) {
@@ -919,6 +980,7 @@ function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string {
       result = base62[Number(n % 62n)] + result;
     return result.padStart(M.get(c)!, base62zero);
   }
+  if (buffer === null || buffer === undefined) throw new SBError('arrayBufferToBase62: buffer is null or undefined');
   const buf = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer
   let result = '';
   for (let l = buf.byteLength, i = 0, c; l > 0; i += c, l -= c) {
@@ -930,19 +992,19 @@ function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string {
 
 /** Converts a base62 string to matching ArrayBuffer. */
 function base62ToArrayBuffer(s: string): ArrayBuffer {
-  if (!b62regex.test(s)) throw new Error('base62ToArrayBuffer32: must be alphanumeric (0-9A-Za-z).');
+  if (!b62regex.test(s)) throw new SBError('base62ToArrayBuffer32: must be alphanumeric (0-9A-Za-z).');
   function _base62ToArrayBuffer(s: string, t: number): Uint8Array {
     try {
       let n = 0n, buffer = new Uint8Array(t);
       for (let i = 0; i < s.length; i++)
         n = n * 62n + BigInt(base62.indexOf(s[i]));
       if (n > 2n ** BigInt(t * 8) - 1n)
-        throw new Error('base62ToArrayBuffer: Invalid Base62 string.'); // exceeds (t * 8) bits
+        throw new SBError('base62ToArrayBuffer: Invalid Base62 string.'); // exceeds (t * 8) bits
       for (let i = t - 1; i >= 0; i--, n >>= 8n)
         buffer[i] = Number(n & 0xFFn);
       return buffer;
     } catch (e) {
-      throw new Error('base62ToArrayBuffer: Invalid Base62 string.'); // 'NaN' popped up
+      throw new SBError('base62ToArrayBuffer: Invalid Base62 string.'); // 'NaN' popped up
     }
   }
   try {
@@ -1029,7 +1091,7 @@ function getType(value: any) {
     console.error("[getType] Trying to serialize a Promise - did you forget an 'await'?");
   else
     console.error('[getType] Unsupported for object:', value);
-  throw new Error('Unsupported type');
+  throw new SBError('Unsupported type');
 }
 
 function _assemblePayload(data: any): ArrayBuffer | null {
@@ -1046,7 +1108,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
         switch (type) {
           case 'o': // Object (eg structure)
             const payload = _assemblePayload(value);
-            if (!payload) throw new Error(`Failed to assemble payload for ${key}`);
+            if (!payload) throw new SBError(`Failed to assemble payload for ${key}`);
             BufferList.push(payload);
             break;
           case 'n': // Number
@@ -1085,7 +1147,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
               mapValue.push([k, v]);
             });
             const mapPayload = _assemblePayload(mapValue);
-            if (!mapPayload) throw new Error(`Failed to assemble payload for ${key}`);
+            if (!mapPayload) throw new SBError(`Failed to assemble payload for ${key}`);
             BufferList.push(mapPayload);
             break;
           case 'a': // Array
@@ -1094,7 +1156,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
               arrayValue.push(v);
             });
             const arrayPayload = _assemblePayload(arrayValue);
-            if (!arrayPayload) throw new Error(`Failed to assemble payload for ${key}`);
+            if (!arrayPayload) throw new SBError(`Failed to assemble payload for ${key}`);
             BufferList.push(arrayPayload);
             break;
           case 't': // Set
@@ -1103,7 +1165,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
               setValue.push(v);
             });
             const setPayload = _assemblePayload(setValue);
-            if (!setPayload) throw new Error(`Failed to assemble payload for ${key}`);
+            if (!setPayload) throw new SBError(`Failed to assemble payload for ${key}`);
             BufferList.push(setPayload);
             break;
           case 'w': // WeakRefs are treated as 'null'
@@ -1116,7 +1178,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
           case 'v': // Dataview, not supporting for now
           default:
             console.error(`[assemblePayload] Unsupported type: ${type}`);
-            throw new Error(`Unsupported type: ${type}`);
+            throw new SBError(`Unsupported type: ${type}`);
         }
         const size = BufferList[BufferList.length - 1].byteLength;
         keyCount++;
@@ -1146,7 +1208,9 @@ function _assemblePayload(data: any): ArrayBuffer | null {
  */
 export function assemblePayload(data: any): ArrayBuffer | null {
   if (DBG && data instanceof ArrayBuffer) console.warn('[assemblePayload] Warning: data is already an ArrayBuffer, make sure you are not double-encoding');
-  return _assemblePayload({ ver003: true, payload: data })
+  const mainPayload = _assemblePayload({ ver003: true, payload: data })
+if (!mainPayload) return null;
+  return _appendBuffer(new Uint8Array([0xAA, 0xBB, 0xBB, 0xAA]), mainPayload);
 }
 
 function deserializeValue(buffer: ArrayBuffer, type: string): any {
@@ -1165,11 +1229,11 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
       return new TextDecoder().decode(buffer);
     case 'a': // Array
       const arrayPayload = _extractPayload(buffer);
-      if (!arrayPayload) throw new Error(`Failed to assemble payload for ${type}`);
+      if (!arrayPayload) throw new SBError(`Failed to assemble payload for ${type}`);
       return Object.values(arrayPayload);
     case 'm': // Map
       const mapPayload = _extractPayload(buffer);
-      if (!mapPayload) throw new Error(`Failed to assemble payload for ${type}`);
+      if (!mapPayload) throw new SBError(`Failed to assemble payload for ${type}`);
       const map = new Map();
       for (const key in mapPayload) {
         map.set(mapPayload[key][0], mapPayload[key][1]);
@@ -1177,7 +1241,7 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
       return map;
     case 't': // Set
       const setPayload = _extractPayload(buffer);
-      if (!setPayload) throw new Error(`Failed to assemble payload for ${type}`);
+      if (!setPayload) throw new SBError(`Failed to assemble payload for ${type}`);
       const set = new Set();
       for (const key in setPayload) {
         set.add(setPayload[key]);
@@ -1194,12 +1258,13 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
     case 'v':
     case '<unsupported>':
     default:
-      throw new Error(`Unsupported type: ${type}`);
+      throw new SBError(`Unsupported type: ${type}`);
   }
 }
 
 function _extractPayload(payload: ArrayBuffer): any {
   const parsingMsgError = 'Cannot parse metadata, this is not a well-formed payload';
+// if (DBG2) console.log(`[extractPayload] payload: ${payload.byteLength} bytes`)
   try {
     const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
     const decoder = new TextDecoder();
@@ -1208,8 +1273,7 @@ function _extractPayload(payload: ArrayBuffer): any {
     try {
       metadata = jsonParseWrapper(json, "L1290");
     } catch (e) {
-      if (DBG) console.error('[extractPayload] Error parsing metadata for payload: ', json);
-      throw new Error(parsingMsgError);
+            throw new SBError(parsingMsgError);
     }
     const startIndex = 4 + metadataSize;
 
@@ -1231,7 +1295,7 @@ function _extractPayload(payload: ArrayBuffer): any {
   } catch (e) {
     // if it's the exception we threw above, just rethrow it
     if (e instanceof Error && e.message === parsingMsgError) throw e;
-    throw new Error('[extractPayload] exception <<' + e + '>> [/extractPayload]');
+    throw new SBError('[extractPayload] exception <<' + e + '>> [/extractPayload]');
   }
 }
 /**
@@ -1239,8 +1303,10 @@ function _extractPayload(payload: ArrayBuffer): any {
  * to a JS object. This supports a wide range of objects.
  */
 export function extractPayload(value: ArrayBuffer): any {
-  // todo: add hack check for version (must be 003)
-  return _extractPayload(value);
+  const verifySignature = (v: ArrayBuffer) => new Uint32Array(v, 0, 1)[0] === 0xAABBBBAA;
+  if (!verifySignature(value)) throw new SBError('Invalid payload signature (this is not a payload)');
+  // now i need to strip out the first four bytes
+  return _extractPayload(value.slice(4));
 }
 
 //#endregion
@@ -1499,7 +1565,7 @@ export class SBCrypto {  /******************************************************
    * is used to request (salt, iv) pair and then h2 is used for
    * encryption (h2, salt, iv).
    */
-  generateIdKey(buf: ArrayBuffer): Promise<{ id_binary: ArrayBuffer, key_material: ArrayBuffer }> {
+  generateIdKey(buf: ArrayBuffer): Promise<{ idBinary: ArrayBuffer, keyMaterial: ArrayBuffer }> {
     if (!(buf instanceof ArrayBuffer)) throw new TypeError('Input must be an ArrayBuffer');
     return new Promise((resolve, reject) => {
       try {
@@ -1507,8 +1573,8 @@ export class SBCrypto {  /******************************************************
           const _id = digest.slice(0, 32);
           const _key = digest.slice(32);
           resolve({
-            id_binary: _id,
-            key_material: _key
+            idBinary: _id,
+            keyMaterial: _key
           })
         })
       } catch (e) {
@@ -1528,7 +1594,7 @@ export class SBCrypto {  /******************************************************
     try {
       return await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-384' }, true, ['deriveKey']);
     } catch (e) {
-      throw new Error('generateKeys() exception (' + e + ')');
+      throw new SBError('generateKeys() exception (' + e + ')');
     }
   }
 
@@ -1546,7 +1612,7 @@ export class SBCrypto {  /******************************************************
       if (format === 'jwk') {
         // sanity check it's a JsonWebKey and not a BufferSource or something else
         const jsonKey = key as JsonWebKey
-        if (jsonKey.kty === undefined) throw new Error('importKey() - invalid JsonWebKey');
+        if (jsonKey.kty === undefined) throw new SBError('importKey() - invalid JsonWebKey');
         if (jsonKey.alg === 'ECDH')
           jsonKey.alg = undefined; // todo: this seems to be a Deno mismatch w crypto standards?
         importedKey = await crypto.subtle.importKey('jwk', jsonKey, keyAlgorithms[type], extractable, keyUsages)
@@ -1569,7 +1635,7 @@ export class SBCrypto {  /******************************************************
         console.log(keyUsages)
         console.log(SEP, SEP)
       }
-      throw new Error(msg)
+      throw new SBError(msg)
     }
   }
 
@@ -1588,8 +1654,8 @@ export class SBCrypto {  /******************************************************
   }
 
   async encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer> {
-    if (data === null) throw new Error('no contents')
-    if (!params.iv) throw new Error('no nonce')
+    if (data === null) throw new SBError('no contents')
+    if (!params.iv) throw new SBError('no nonce')
     if (!params.name) params.name = 'AES-GCM';
     else _sb_assert(params.name === 'AES-GCM', "Must be AES-GCM (L1951)")
     return crypto.subtle.encrypt(params as AesGcmParams, key, data);
@@ -1627,28 +1693,45 @@ export class SBCrypto {  /******************************************************
     if (options) {
       if (options.sendTo) message.t = options.sendTo
       if (options.ttl) message.ttl = options.ttl
-      if (options.subChannel) throw new Error(`wrapMessage(): subChannel not yet supported`)
+      if (options.subChannel) throw new SBError(`wrapMessage(): subChannel not yet supported`)
     }
     try {
       message = validate_ChannelMessage(message)
     } catch (e) {
       const msg = `wrapMessage(): failed to validate message: ${e}`
       console.error(msg)
-      throw new Error(msg)
+      throw new SBError(msg)
     }
     return message
   }
 
   /** Decrypts a 'wrapped' message, eg decrypts */
-  unwrap(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
+  unwrapMessage(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
     return new Promise(async (resolve, reject) => {
       try {
-        if (!o.ts) throw new Error(`unwrap() - no timestamp in encrypted message`)
+        if (!o.ts) throw new SBError(`unwrap() - no timestamp in encrypted message`)
         const { c: t, iv: iv } = o // encryptedContentsMakeBinary(o)
         _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
         const view = new DataView(new ArrayBuffer(8));
         view.setFloat64(0, o.ts);
         const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t!)
+        resolve(d)
+      } catch (e) {
+        // not an error per se, for example could just be wrong key
+        if (DBG) console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`)
+        if (DBG2) console.log("message was \n", o)
+        reject(e);
+      }
+    });
+  }
+
+  /** Decrypts a 'wrapped' message, eg decrypts */
+  unwrapShard(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const { c: t, iv: iv } = o
+        _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
+        const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t!)
         resolve(d)
       } catch (e) {
         // not an error per se, for example could just be wrong key
@@ -2058,7 +2141,7 @@ class SB384 {
           // we're given a string encoding
 
           const tryParse = parseSB384string(key)
-          if (!tryParse) throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey | SBUserPublicKey | SBUserPrivateKey, or omitted)')
+          if (!tryParse) throw new SBError('ERROR creating SB384 object: invalid key (must be a JsonWebKey | SBUserPublicKey | SBUserPrivateKey, or omitted)')
           const { x, y, d } = tryParse as jwkStruct
           if (d) {
             this.#private = true
@@ -2071,7 +2154,7 @@ class SB384 {
           this.#x = x
           this.#y = y
         } else {
-          throw new Error('ERROR creating SB384 object: invalid key (must be a JsonWebKey, SBUserId, or omitted)')
+          throw new SBError('ERROR creating SB384 object: invalid key (must be a JsonWebKey, SBUserId, or omitted)')
         }
         if (DBG2) console.log("SB384() constructor; x/y/d:\n", this.#x, "\n", this.#y, "\n", this.#d)
         if (this.#private)
@@ -2160,13 +2243,13 @@ class SB384 {
   @Memoize @Ready get ownerChannelId() {
     // error even though there's a #hash, since we know it needs to be private
     // ... update, hm, actually this is still used as "whatif" for non-owner
-    // if (!this.private) throw new Error(`ownerChannelId() - not a private key, cannot be an owner key`)
+    // if (!this.private) throw new SBError(`ownerChannelId() - not a private key, cannot be an owner key`)
     return this.hash
   }
 
   /** @type {CryptoKey} Private key (might not be present, in which case this will throw) */
   @Memoize @Ready get privateKey(): CryptoKey {
-    if (!this.private) throw new Error(`this is a public key, there is no 'privateKey' value`)
+    if (!this.private) throw new SBError(`this is a public key, there is no 'privateKey' value`)
     return this.#privateUserKey!
   }
 
@@ -2259,7 +2342,7 @@ export class SBChannelKeys extends SB384 {
 
   constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey) {
     // undefined (missing) is fine, but 'null' is not
-    if (handleOrKey === null) throw new Error(`SBChannelKeys constructor: you cannot pass 'null'`)
+    if (handleOrKey === null) throw new SBError(`SBChannelKeys constructor: you cannot pass 'null'`)
     if (handleOrKey) {
       if (typeof handleOrKey === 'string') {
         const ownerPrivateKey = handleOrKey as SBUserPrivateKey
@@ -2276,7 +2359,7 @@ export class SBChannelKeys extends SB384 {
         this.#channelId = handle.channelId
         this.#channelData = handle.channelData // which might not be there
       } else {
-        throw new Error(`SBChannelKeys() constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`)
+        throw new SBError(`SBChannelKeys() constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`)
       }
     } else {
       // brand new, state will be derived from SB384 keys
@@ -2298,7 +2381,7 @@ export class SBChannelKeys extends SB384 {
         } else if (!this.#channelData) {
           // we're not owner, and we haven't gotten the ownerPublicKey, so we need to ask the server
           if (!this.channelServer)
-            throw new Error("SBChannelKeys() constructor: either key is owner key, or handle contains channelData, or channelServer is provided ...")
+            throw new SBError("SBChannelKeys() constructor: either key is owner key, or handle contains channelData, or channelServer is provided ...")
           if (DBG) console.log("++++ SBChannelKeys being initialized from server")
           var cpk: SBChannelData = await this.callApi('/getChannelKeys')
           cpk = validate_SBChannelData(cpk) // throws if there's an issue
@@ -2436,7 +2519,7 @@ class SBMessage {
     this.sbMessageReady = new Promise<SBMessage>(async (resolve) => {
       await channel.channelReady
       if (!this.options.protocol) this.options.protocol = channel.protocol
-      if (!this.options.protocol) throw new Error("SBMessage() - no protocol provided")
+      if (!this.options.protocol) throw new SBError("SBMessage() - no protocol provided")
       this.#message = await sbCrypto.wrap(
         this.contents,
         this.channel.userId,
@@ -2670,7 +2753,7 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
 // //   });
 // // }
 // async #genKey(salt: ArrayBuffer): Promise<CryptoKey> {
-//   if (!this.#keyMaterial) throw new Error("Channel key not ready");
+//   if (!this.#keyMaterial) throw new SBError("Channel key not ready");
 //   const channelKey = await this.#keyMaterial;
 //   return crypto.subtle.deriveKey(
 //     {
@@ -2715,7 +2798,7 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
 
 // Encrypt message
 // async #genKey(salt: ArrayBuffer): Promise<CryptoKey> {
-//   if (!this.#keyMaterial) throw new Error("Protocol_AES_GCM_384.key() - encryption key not ready")
+//   if (!this.#keyMaterial) throw new SBError("Protocol_AES_GCM_384.key() - encryption key not ready")
 //   const derivedKey = await crypto.subtle.deriveKey(
 //     {
 //       'name': 'PBKDF2',
@@ -2894,7 +2977,7 @@ class Channel extends SBChannelKeys {
   constructor(key: SBUserPrivateKey, protocol?: SBProtocol)
   constructor(handle: SBChannelHandle, protocol?: SBProtocol)
   constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey, public protocol?: SBProtocol) {
-    if (handleOrKey === null) throw new Error(`Channel() constructor: you cannot pass 'null'`)
+    if (handleOrKey === null) throw new SBError(`Channel() constructor: you cannot pass 'null'`)
     if (DBG2) console.log("Channel() constructor called with handleOrKey:", handleOrKey)
     super(handleOrKey);
     // this.protocol = protocol ? protocol : new BasicProtocol(this)
@@ -2935,7 +3018,7 @@ class Channel extends SBChannelKeys {
       const k = await channel.protocol?.decryptionKey(this, msgRaw)
       if (!k) return undefined
       try {
-        const msgDecrypted = await sbCrypto.unwrap(k!, msgRaw)
+        const msgDecrypted = await sbCrypto.unwrapMessage(k!, msgRaw)
         // const msg = validate_ChannelMessage(extractPayload(msgDecrypted).payload)
         const msg = extractPayload(msgDecrypted).payload
         if (DBG2) console.log("++++ deCryptChannelMessage: decrypted message:\n", msg)
@@ -2982,7 +3065,7 @@ class Channel extends SBChannelKeys {
   /** Disabled for now  */
   getLastMessageTimes() {
     // ToDo: needs a few things fixed, see channel server source code
-    throw new Error("Channel.getLastMessageTimes(): not supported in 2.0 yet")
+    throw new SBError("Channel.getLastMessageTimes(): not supported in 2.0 yet")
   }
 
   getMessageKeys(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Set<string>> {
@@ -3020,7 +3103,7 @@ class Channel extends SBChannelKeys {
 
       const decryptedMessages = new Map<string, ChannelMessage>()
       for (const [key, value] of messages.entries()) {
-        if (!this.protocol) throw new Error("Channel.getMessages(): need protocol to decrypt messages")
+        if (!this.protocol) throw new SBError("Channel.getMessages(): need protocol to decrypt messages")
         const msgBuf = extractPayload(value).payload
         if (DBG2) console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf)
         const msgRaw = validate_ChannelMessage(msgBuf)
@@ -3051,6 +3134,7 @@ class Channel extends SBChannelKeys {
       //   })
     });
   }
+
 
   @Ready async send(msg: SBMessage | any): Promise<string> {
     const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
@@ -3187,70 +3271,6 @@ class Channel extends SBChannelKeys {
       }
     });
   }
-
-  // } else {
-  //   // we are creating a new channel
-  //   const theUser = await new SB384(keys).ready
-  //       const channelData: SBChannelHandle = {
-  //     [SB_CHANNEL_HANDLE_SYMBOL]: true,
-  //     userPrivateKey: theUser.userPrivateKey,
-  //     channelServer: this.channelServer,
-  //     channelId: theUser.hash,
-  //   }
-  //       let resp: Dictionary<any> = await this.callApi('/budd', { targetChannel: channelData.channelId, transferBudget: storage, channelData: channelData })
-  //       if(resp.success) {
-  //   resolve(channelData)
-  // } else {
-  //   reject(JSON.stringify(resp));
-  // }
-
-
-  /** NEEDS REFACTORING */
-  @Ready downloadChannel() {
-
-    //   return new Promise((resolve, reject) => {
-    //     this.callApi('/downloadData')
-    //       .then((data: Dictionary<any>) => {
-    //         console.log("From downloadData:")
-    //         console.log(data);
-    //         Promise.all(Object
-    //           .keys(data)
-    //           .filter((v) => {
-    //             const regex = new RegExp(this.channelId as string);
-    //             if (v.match(regex)) {
-    //               const message = jsonParseWrapper(data[v], "L3318")
-    //               if (message.hasOwnProperty('encrypted_contents')) {
-    //                 if (DBG) console.log("Received message: ", message)
-    //                 return message;
-    //               }
-    //             }
-    //           })
-    //           .map((v) => {
-    //             const message = jsonParseWrapper(data[v], "L3327")
-    //             if (DBG2) console.log(v, message.encrypted_contents, this.keys)
-    //             return this.deCryptChannelMessage(v, message.encrypted_contents)
-    //           }))
-    //           .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v): v is ChannelMessage => Boolean(v)))
-    //           .then((decryptedMessageArray) => {
-    //             let storage: any = {}
-    //             decryptedMessageArray.forEach((message) => {
-    //               if (!message.control && message.imageMetaData!.imageId) {
-    //                 const f_control_msg = decryptedMessageArray.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == message.imageMetaData!.imageId)
-    //                 const p_control_msg = decryptedMessageArray.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == message.imageMetaData!.previewId)
-    //                 storage[`${message.imageMetaData!.imageId}.f`] = f_control_msg?.verification
-    //                 storage[`${message.imageMetaData!.previewId}.p`] = p_control_msg?.verification
-    //               }
-    //             })
-    //             resolve({ storage: storage, channel: data })
-    //           })
-    //       }).catch((error: Error) => {
-    //         reject(error);
-    //       });
-    //   });
-
-  }
-
-
 } /* class Channel */
 
 /**
@@ -3303,9 +3323,9 @@ class ChannelSocket extends Channel {
   constructor(handle: SBChannelHandle, onMessage: (m: Message) => void) {
     _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
     if (!handle.hasOwnProperty('channelId') || !handle.hasOwnProperty('userPrivateKey'))
-      throw new Error("ChannelSocket(): first argument must be valid SBChannelHandle")
+      throw new SBError("ChannelSocket(): first argument must be valid SBChannelHandle")
     if (!handle.channelServer)
-      throw new Error("ChannelSocket(): no channel server provided (required)")
+      throw new SBError("ChannelSocket(): no channel server provided (required)")
     super(handle) // initialize 'channel' parent
       ; (this as any)[ChannelSocket.ReadyFlag] = false;
     this.#socketServer = handle.channelServer.replace(/^http/, 'ws')
@@ -3565,20 +3585,18 @@ interface Shard {
   id: Base62Encoded,
   iv: Uint8Array,
   salt: ArrayBuffer,
-  type: string, // single character, defaults to '_'
-  actualSize: number, // of the image in the shard
+  actualSize: number, // of the data in the shard
   data: ArrayBuffer,
 }
 
 function validate_Shard(s: Shard): Shard {
-  if (!s) throw new Error(`invalid SBObjectHandle (null or undefined)`);
+  if (!s) throw new SBError(`invalid SBObjectHandle (null or undefined)`);
   else if (s.version === '3'
     && (typeof s.id === 'string' && s.id.length === 43 && b62regex.test(s.id))
     && (s.iv instanceof Uint8Array && s.iv.byteLength === 12)
     && (s.salt instanceof ArrayBuffer && s.salt.byteLength === 16)
-    && (typeof s.type === 'string' && s.type.length === 1)
     && (s.data instanceof ArrayBuffer && s.actualSize === s.data.byteLength)) return s
-  else throw new Error(`invalid Shard`);
+  else throw new SBError(`invalid Shard`);
 }
 
 /**
@@ -3602,7 +3620,6 @@ function validate_Shard(s: Shard): Shard {
  * @typedef {Object} SBObjectHandleClass
  * @property {boolean} [SB_OBJECT_HANDLE_SYMBOL] - flag to indicate this is an SBObjectHandle
  * @property {string} version - version of this object
- * @property {SBObjectType} type - type of object
  * @property {string} id - id of object
  * @property {string} key - key of object
  * @property {Base62Encoded} [id32] - optional: array32 format of id
@@ -3651,15 +3668,15 @@ export class StorageApi {
    * of 1 MB, after which it rounds up to closest MB.
    */
   static padBuf(buf: ArrayBuffer) {
-    const image_size = buf.byteLength; let _target
+    const dataSize = buf.byteLength; let _target
     // pick the size to be rounding up to
-    if ((image_size + 4) < 4096) _target = 4096 // smallest size
-    else if ((image_size + 4) < 1048576) _target = 2 ** Math.ceil(Math.log2(image_size + 4)) // in between
-    else _target = (Math.ceil((image_size + 4) / 1048576)) * 1048576 // largest size
+    if ((dataSize + 4) < 4096) _target = 4096 // smallest size
+    else if ((dataSize + 4) < 1048576) _target = 2 ** Math.ceil(Math.log2(dataSize + 4)) // in between
+    else _target = (Math.ceil((dataSize + 4) / 1048576)) * 1048576 // largest size
     // append the padding buffer
-    let finalArray = _appendBuffer(buf, (new Uint8Array(_target - image_size)).buffer);
+    let finalArray = _appendBuffer(buf, (new Uint8Array(_target - dataSize)).buffer);
     // set the (original) size in the last 4 bytes
-    (new DataView(finalArray)).setUint32(_target - 4, image_size)
+    (new DataView(finalArray)).setUint32(_target - 4, dataSize)
     if (DBG2) console.log("padBuf bytes:", finalArray.slice(-4));
     return finalArray
   }
@@ -3707,111 +3724,162 @@ export class StorageApi {
     });
   }
 
-
-
   /**
    * Low level of shard uploading - this needs to have all the details. You would
    * generally not call this directly, but rather use storeData(). But it is 'static',
    * in case you want to use it directly.
    */
-  static storeObject(
-    storageServer: string,
-    fileId: Base62Encoded,
-    iv: ArrayBuffer,
-    salt: ArrayBuffer,
-    storageToken: SBStorageToken,
-    data: ArrayBuffer
-  ): Promise<Dictionary<any>> {
-    return new Promise(async (resolve, reject) => {
-      const query = storageServer + '/api/v2/storeData?id=' + fileId
-      const body = { id: fileId, iv: iv, salt: salt, storageToken: storageToken, image: data }
-      const bodyPayload = assemblePayload(body)
-      const resp_json = await SBApiFetch(query, { method: 'POST', body: bodyPayload })
-      if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
-      if (resp_json.image_id != fileId) reject(`received imageId ${resp_json.image_id} but expected ${fileId}`)
-      resolve(resp_json)
-    });
-  }
+  // static storeObject(
+  //   storageServer: string,
+  //   fileId: Base62Encoded,
+  //   iv: Uint8Array,
+  //   salt: ArrayBuffer,
+  //   storageToken: SBStorageToken,
+  //   data: ArrayBuffer
+  // ): Promise<Dictionary<any>> {
+  //   return new Promise(async (resolve, reject) => {
+  //     const query = storageServer + '/api/v2/storeData?id=' + fileId
+  //     const body = { id: fileId, iv: iv, salt: salt, storageToken: storageToken, data: data }
+  //     const bodyPayload = assemblePayload(body)
+  //     return SBApiFetch(query, { method: 'POST', body: bodyPayload })
+  //   });
+  // }
 
   /**
-   * Main high level work horse: besides buffer and type of data, it only needs
-   * the channel. This will eventually call storeObject().
+   * Store 'contents' as a shard, returns an object handle. Note that 'contents' can be
+   * anything, and is always packaged as a payload before storing.
    */
-  storeData(
-    buf: ArrayBuffer | Uint8Array,
-    type: SBObjectType,
+  async storeData(
+    contents: any,
     channelOrHandle: SBChannelHandle | Channel
-  ): Promise<SBObjectHandle> {
-    return new Promise(async (resolve, reject) => {
-      buf = buf instanceof Uint8Array ? buf.buffer : buf
+  ) {
+    try {
+      const buf = assemblePayload(contents)!
+      if (!buf) throw new SBError("[storeData] failed to assemble payload")
       const bufSize = (buf as ArrayBuffer).byteLength
       const channel = channelOrHandle instanceof Channel ? channelOrHandle : new Channel(channelOrHandle)
 
-      const paddedBuf = StorageApi.padBuf(buf as ArrayBuffer)
+      const paddedBuf = StorageApi.padBuf(buf)
       const fullHash = await sbCrypto.generateIdKey(paddedBuf)
 
-      // get salt and iv from storage server for this object
+      // 'phase 1': get salt and iv from storage server for this object
       const storageServer = await this.getStorageServer()
-      const query = storageServer + '/api/v2/storeRequest?id=' + arrayBufferToBase62(fullHash.id_binary)
-      const keyInfo = await SBApiFetch(query)
+      const requestQuery = storageServer + '/api/v2/storeRequest?id=' + arrayBufferToBase62(fullHash.idBinary)
+      const keyInfo = await SBApiFetch(requestQuery)
       if (!keyInfo.salt || !keyInfo.iv)
-        throw new Error('Failed to get key info (salt, nonce) from storage server')
+        throw new SBError('[storeData] Failed to get key info (salt, nonce) from storage server')
 
-      const id = arrayBufferToBase62(fullHash.id_binary)
+      const id = arrayBufferToBase62(fullHash.idBinary)
 
-      const key = await StorageApi.getObjectKey(fullHash.key_material, keyInfo.salt)
-      const data = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv })
-      const storageToken = await channel.getStorageToken(data.byteLength)
+      const key = await StorageApi.getObjectKey(fullHash.keyMaterial, keyInfo.salt)
+      const encryptedData = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv })
+      const storageToken = await channel.getStorageToken(encryptedData.byteLength)
 
-      const resp_json = await StorageApi.storeObject(type, id, keyInfo.iv, keyInfo.salt, storageToken, data)
+      // static storeObject(
+      //   storageServer: string,
+      //   fileId: Base62Encoded,
+      //   iv: Uint8Array,
+      //   salt: ArrayBuffer,
+      //   storageToken: SBStorageToken,
+      //   data: ArrayBuffer
+      // ): Promise<Dictionary<any>> {
+      //   return new Promise(async (resolve, reject) => {
+      //     const query = storageServer + '/api/v2/storeData?id=' + fileId
+      //     const body = { id: fileId, iv: iv, salt: salt, storageToken: storageToken, data: data }
+      //     const bodyPayload = assemblePayload(body)
+      //     return SBApiFetch(query, { method: 'POST', body: bodyPayload })
+      //   });
+      // }
+      // const resp_json = await StorageApi.storeObject(storageServer, id, keyInfo.iv, keyInfo.salt, storageToken, encryptedData)
 
-      if (resp_json.error) reject(`storeObject() failed: ${resp_json.error}`)
-      if (resp_json.image_id != id) reject(`received imageId ${resp_json.image_id} but expected ${id}`)
+      // 'phase 2': we store the object
+      const storeQuery = storageServer + '/api/v2/storeData?id=' + id
+      const init: RequestInit = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream"',
+        },
+        body: assemblePayload({
+          id: id,
+          iv: keyInfo.iv,
+          salt: keyInfo.salt,
+          storageToken: storageToken,
+          data: encryptedData
+        })
+      }
+      const result = await SBApiFetch(storeQuery, init)
 
       const r: SBObjectHandle = {
         [SB_OBJECT_HANDLE_SYMBOL]: true,
         version: currentSBOHVersion,
-        type: type,
         id: id,
-        key: arrayBufferToBase62(fullHash.key_material),
+        key: arrayBufferToBase62(fullHash.keyMaterial),
         iv: keyInfo.iv,
         salt: keyInfo.salt,
         actualSize: bufSize,
-        verification: resp_json.verification
+        verification: result.verification
       }
-      resolve(r)
-    });
+      return (r)
+    } catch (error) {
+      console.error("[storeData] failed:", error)
+      if (error instanceof SBError) throw error
+      throw new SBError(`[storeData] failed to store data: ${error}`)
+    }
   }
 
-  // unwraps, decrypts, unpads a chunk of data per info in the handle
-  #_processData(payload: ArrayBuffer, h: SBObjectHandle): Promise<ArrayBuffer> {
-    return new Promise(async (resolve, _reject) => {
-      const s = validate_Shard(extractPayload(payload).payload) // throws if there's an issue
+  
+
+  // // unwraps, decrypts, unpads a chunk of data per info in the handle
+  // #_processData(h: SBObjectHandle): Promise<ArrayBuffer> {
+  //   return new Promise(async (resolve, reject) => {
+  //     console.log("[L3764]")
+  //     console.log(h)
+  //     const payload = StorageApi.getData(h)
+  //     if (!payload) { reject("failed to get data from storage server"); return; }
+  //     console.log("[L3710]")
+  //     console.log(payload)
+  //     const s = validate_Shard(extractPayload(payload).payload) // throws if there's an issue
+  //     console.log("[L3712]")
+  //     _sb_assert(h.key, "object handle 'key' is missing, cannot decrypt")
+  //     const h_key = base62ToArrayBuffer(h.key!)
+  //     const decryptionKey = await StorageApi.getObjectKey(h_key, s.salt);
+  //     const encryptedData = s.data;
+  //     if (DBG) console.log("shard.data (encrypted):", s.data)
+  //     const decryptedData = await sbCrypto.unwrap(decryptionKey, { c: encryptedData, iv: s.iv })
+  //     const finalData = this.#unpadData(decryptedData)
+  //     if (DBG) console.log("#processData(), final decrypted and unwrapped data:", finalData)
+  //     resolve(finalData)
+  //   });
+  // }
+
+  // a wrapper: any failure conditions (exceptions) returns 'null', facilitates
+  // trying different servers
+  async #_fetchData(useServer: string, url: string, h: SBObjectHandle): Promise<SBObjectHandle | null> {
+    try {
+      let shard: Shard = await SBApiFetch(useServer + url, { method: 'GET' })
+      shard = validate_Shard(shard)
       _sb_assert(h.key, "object handle 'key' is missing, cannot decrypt")
-      const h_key = base62ToArrayBuffer(h.key!)
-      const decryptionKey = await StorageApi.getObjectKey(h_key, s.salt);
-      const encryptedData = s.data;
-      if (DBG) console.log("shard.data (encrypted):", s.data)
-      const decryptedData = await sbCrypto.unwrap(decryptionKey, { c: encryptedData, iv: s.iv })
-      const finalData = this.#unpadData(decryptedData)
-      if (DBG) console.log("#processData(), final decrypted and unwrapped data:", finalData)
-      resolve(finalData)
-    });
-  }
 
-  // a wrapper: any failure conditions returns 'null', facilitates trying different servers
-  async #_fetchData(useServer: string, url: string, h: SBObjectHandle): Promise<ArrayBuffer | null> {
-    return SBApiFetch(useServer + url, { method: 'GET' })
-      .then(async (response: Response) => {
-        if (!response.ok) return (null)
-        const body = await response.arrayBuffer()
-        if (!body) return (null)
-        return this.#_processData(body, h)
-      })
-      .catch((_error: Error) => {
-        if (DBG) console.log(`fetchData(): trying to get object on '${useServer}' failed: '${_error}'`)
-        return (null)
-      });
+      // we merge shard info into our handle
+      h.iv = shard.iv
+      h.salt = shard.salt
+      h.data = new WeakRef(shard.data)
+      h.actualSize = shard.actualSize
+
+      if (DBG2) console.log("fetchData(), handle (and data) at this point:", h, shard.data)
+
+      const h_key = base62ToArrayBuffer(h.key!)
+      const decryptionKey = await StorageApi.getObjectKey(h_key, h.salt);
+      const decryptedData = await sbCrypto.unwrapShard(decryptionKey, { c: shard.data, iv: h.iv })
+      const buf = this.#unpadData(decryptedData)
+      if (DBG2) console.log("shard.data (decrypted and unpadded):", buf)
+      h.payload = extractPayload(buf).payload
+      h.data = new WeakRef(shard.data) // once we've gotten the payload, we keep ref but we're chill about it
+      return (h)
+    } catch (error) {
+      if (DBG) console.log(`fetchData(): trying to get object on '${useServer}' failed: '${error}'`)
+      return (null)
+    }
   }
 
 
@@ -3858,12 +3926,12 @@ export class StorageApi {
    * stored as a 'weakref', meaning, you can hang on to the handle as your
    * 'cache', and use ''getData()'' to safely retrieve the data.
    */
-  fetchData(handle: SBObjectHandle): Promise<SBObjectHandle> {
-    return new Promise(async (resolve, reject) => {
+  async fetchData(handle: SBObjectHandle) {
       const h = validate_SBObjectHandle(handle) // throws if there's an issue
+      if (DBG) console.log("fetchData(), handle:", h)
 
       // we might be 'caching' as a weakref
-      if (h.data && h.data instanceof WeakRef && h.data.deref()) { resolve(h); return; } // the ref is still good
+      if (h.data && h.data instanceof WeakRef && h.data.deref()) return(h); // the ref is still good
 
       // Note: we don't use any local storage as a cache, since the shards
       // already have a 'namespace' for caching in the browser (regular network
@@ -3872,28 +3940,26 @@ export class StorageApi {
       const verification = await h.verification
 
       // in current design, there are three servers that are checked
-      const server1 = h.storageServer ? h.storageServer : null
+      const server1 = h.storageServer ? h.storageServer : null // todo: this sometimes resolves to '0'??
       const server2 = 'http://localhost:3841' // local mirror
       const server3 = await this.getStorageServer()
-      const useServer = (await this.getStorageServer()) + '/api/v2'
+      // const useServer = (await this.getStorageServer()) + '/api/v2'
 
       // we try the servers in order, and we try to fetch from the server
-      for (const server in [server1, server2, server3]) {
-        if (DBG) console.log("fetchData(), trying server: " + server)
+      for (const server of [server1, server2, server3]) {
+        if (!server) continue
+        if (DBG) console.log('\n', SEP, "fetchData(), trying server: ", server, '\n', SEP)
         const queryString = '/api/v2/fetchData?id=' + h.id + '&verification=' + verification
-        // SBFetch(useServer + '/fetchData?id=' + h.id + '&type=' + h.type + '&verification=' + verification, { method: 'GET' })
-        const result = await this.#_fetchData(useServer, queryString, h)
+                const result = await this.#_fetchData(server, queryString, h)
         if (result !== null) {
-          if (DBG) console.log(`[fetchData] success: fetched from '${useServer}'`, result)
-          h.data = new WeakRef(result)
-          resolve(h)
-          return
+          if (DBG) console.log(`[fetchData] success: fetched from '${server}'`, result)
+          return(result)
         }
       }
       // if these servers don't work, we throw an error
-      reject(`[fetchData] failed to fetch from any server`)
-    });
+      throw new SBError(`[fetchData] failed to fetch from any server`)
   }
+
 
   /**
    * Convenience wrapper for object handles: returns the data if it's present,
@@ -3903,66 +3969,26 @@ export class StorageApi {
     const h = validate_SBObjectHandle(handle)
     if (!h.data) return undefined
     if (h.data instanceof WeakRef) {
-      const dref = h.data?.deref()
+      const dref = h.data!.deref()
       if (dref) return dref
       else return undefined
     } else if (h.data instanceof ArrayBuffer) {
       return h.data
     } else {
-      throw new Error('Invalid data type in handle')
+      throw new SBError('Invalid data type in handle')
     }
   }
 
-
-  // /**
-  //  * StorageApi().retrieveData()
-  //  * retrieves an object from storage
-  //  */
-  // async retrieveImage(
-  //   imageMetaData: ImageMetaData,
-  //   controlMessages: Array<ChannelMessage>,
-  //   imageId?: string,
-  //   imageKey?: string,
-  //   imageType?: SBObjectType,
-  //   imgObjVersion?: SBObjectHandleVersions): Promise<Dictionary<any>> {
-  //   console.trace("retrieveImage()")
-  //   console.log(imageMetaData)
-  //   const id = imageId ? imageId : imageMetaData.previewId;
-  //   const key = imageKey ? imageKey : imageMetaData.previewKey;
-  //   const type = imageType ? imageType : 'p';
-  //   const objVersion = imgObjVersion ? imgObjVersion : (imageMetaData.imgObjVersion ? imageMetaData.imgObjVersion : '2');
-
-  //   const control_msg = controlMessages.find((ctrl_msg) => ctrl_msg.id && ctrl_msg.id == id)
-  //   console.log(control_msg)
-  //   if (control_msg) {
-  //     _sb_assert(control_msg.verification, "retrieveImage(): verification missing (?)")
-  //     _sb_assert(control_msg.id, "retrieveImage(): id missing (?)")
-  //     const obj: Interfaces.SBObjectHandle = {
-  //       type: type,
-  //       version: objVersion,
-  //       id: control_msg.id!,
-  //       key: key!,
-  //       verification: new Promise((resolve, reject) => {
-  //         if (control_msg.verification)
-  //           resolve(control_msg.verification)
-  //         else
-  //           reject("retrieveImage(): verification missing (?)")
-  //       })
-  //     }
-  //     const img = await this.fetchData(obj)
-  //     console.log(img)
-  //     return { 'url': 'data:image/jpeg;base64,' + arrayBufferToBase64url(img, 'b64') };
-  //   } else {
-  //     return { 'error': 'Failed to fetch data - missing control message for that image' };
-  //   }
-  // }
-
-  /* Unused Currently
-  migrateStorage() {
-  }
-  fetchDataMigration() {
-  }
+  /**
+   * Convenience wrapper for object handles: returns the payload.
    */
+    static getPayload(handle: SBObjectHandle): any {
+      const h = validate_SBObjectHandle(handle)
+      if (h.payload) return h.payload
+      const data = StorageApi.getData(h)
+      if (!data) throw new SBError('[getPayload] no data or payload in handle, use fetchData()')
+      return extractPayload(data).payload
+    }
 
 } /* class StorageApi */
 
@@ -4095,31 +4121,6 @@ class Snackabra {
         channelKeys.create(_storageToken!)
           .then((handle) => { resolve(handle) })
           .catch((e) => { reject(e) })
-
-        // const channelData = channelKeys.channelData
-        // channelData.storageToken = _storageToken!
-        // if (DBG) console.log("Will try to create channel with channelData:", channelData)
-        // // const data: Uint8Array = new TextEncoder().encode(JSON.stringify(channelData));
-        // const data = assemblePayload(channelData)
-        // const response = await SBFetch(this.channelServer + '/api/v2/channel/' + channelData.channelId + '/create',
-        //   {
-        //     method: 'POST',
-        //     headers: { 'Content-Type': 'application/octet-stream"' },
-        //     body: data
-        //   });
-        // const resp: any = extractPayload(await response.arrayBuffer())
-        // if (!resp || !resp.success) {
-        //   const msg = `Creating channel did not succeed (${JSON.stringify(resp)})`
-        //   console.error(msg); reject(msg); return;
-        // }
-        // resolve({
-        //   [SB_CHANNEL_HANDLE_SYMBOL]: true,
-        //   channelId: channelData.channelId!,
-        //   userPrivateKey: channelKeys.userPrivateKey,
-        //   // channelPrivateKey: (await new SB384(channelKeys.channelPrivateKey).ready).userPrivateKey,
-        //   channelServer: this.channelServer,
-        //   channelData: channelData
-        // })
       } catch (e) {
         const msg = `Creating channel did not succeed: ${e}`; console.error(msg); reject(msg);
       }
@@ -4137,7 +4138,7 @@ class Snackabra {
   connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): Channel | ChannelSocket {
     _sb_assert(handle && handle.channelId && handle.userPrivateKey, '[connect] Invalid parameter (missing info)')
     if (handle.channelServer && handle.channelServer !== this.#channelServer)
-      throw new Error('SBChannelHandle channelId does not match channelServer (use a different Snackabra object)')
+      throw new SBError('SBChannelHandle channelId does not match channelServer (use a different Snackabra object)')
 
     const newChannelHandle: SBChannelHandle =
       { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.#channelServer } }
@@ -4155,7 +4156,7 @@ class Snackabra {
     // // }
     // return new Promise<ChannelSocket>(async (resolve) => {
     //   // const newUserId = sbCrypto.JWKToUserId(key)
-    //   // if (!newUserId) throw new Error('Unable to determine userId from key (JWKToUserId return empty)')
+    //   // if (!newUserId) throw new SBError('Unable to determine userId from key (JWKToUserId return empty)')
     //   const newChannelHandle: SBChannelHandle = {
     //     [SB_CHANNEL_HANDLE_SYMBOL]: true,
     //     channelId: handle.channelId,
