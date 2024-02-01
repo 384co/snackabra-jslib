@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 68)";
+declare const version = "2.0.0-alpha.5 (build 71)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -319,6 +319,14 @@ declare class ChannelSocket extends Channel {
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set enableTrace(b: boolean);
     send(msg: SBMessage | any): Promise<string>;
+}
+export interface Shard {
+    version: '3';
+    id: Base62Encoded;
+    iv: Uint8Array;
+    salt: ArrayBuffer;
+    actualSize: number;
+    data: ArrayBuffer;
 }
 export declare class StorageApi {
     #private;

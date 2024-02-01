@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 68)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 71)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -744,48 +744,6 @@ function SBFetch(input: RequestInfo | URL, init?: RequestInit) {
  * are any issues or if the reply contains an error message, it will throw an
  * error.
  */
-// export function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
-//   return SBFetch(input, init)
-//     .then(async (response: Response) => {
-//       var retValue: any
-//       if (!response) throw new SBError("[SBApiFetch] Server did not respond");
-//       // if (!response || !response.ok) {
-//       //   // read the json error message if it's there
-//       //   const json = await response.json()
-//       //   let msg = '[SBApiFetch] Server responded with error\n'
-//       //   if (response.statusText) msg += `Status text: ('${response.statusText}')\n`
-//       //   if (json.error) msg +=          `Error msg:   ('${json.error}')\n`
-//       //   if (DBG) console.log(msg)
-//       //   reject(msg); return;
-//       // }
-//       const contentType = response.headers.get('content-type');
-//       if (!contentType) {
-//         throw new SBError("[SBApiFetch] Server response missing content-type header (?)");
-//       } else if (contentType.indexOf("application/json") !== -1) {
-//         const json = await response.json()
-//         if (DBG2) console.log(`[SBApiFetch] json ('${json}'):\n`, json)
-//         retValue = jsonParseWrapper(json, "L489");
-//       } else if (contentType.indexOf("application/octet-stream") !== -1) {
-//         retValue = extractPayload(await response.arrayBuffer()).payload
-//       } else {
-//         throw new SBError("[SBApiFetch] Server responded with unknown content-type header (?)");
-//       }
-//       if (!response.ok || !retValue || retValue.error || retValue.success === false) {
-//         let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response'
-//         if (response.status) apiErrorMsg += ' [' + response.status + ']'
-//         if (retValue?.error) apiErrorMsg += ': ' + retValue.error
-//         if (DBG) console.error("[SBApiFetch] error:\n", apiErrorMsg)
-//         throw new SBError(apiErrorMsg)
-//       } else {
-//         if (DBG2) console.log(
-//           "[SBApiFetch] Success:\n",
-//           SEP, input, '\n',
-//           SEP, retValue, '\n', SEP)
-//         return (retValue)
-//       }
-//     });
-// }
-
 export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
   let response
   try {
@@ -1209,7 +1167,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
 export function assemblePayload(data: any): ArrayBuffer | null {
   if (DBG && data instanceof ArrayBuffer) console.warn('[assemblePayload] Warning: data is already an ArrayBuffer, make sure you are not double-encoding');
   const mainPayload = _assemblePayload({ ver003: true, payload: data })
-if (!mainPayload) return null;
+  if (!mainPayload) return null;
   return _appendBuffer(new Uint8Array([0xAA, 0xBB, 0xBB, 0xAA]), mainPayload);
 }
 
@@ -1264,7 +1222,7 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
 
 function _extractPayload(payload: ArrayBuffer): any {
   const parsingMsgError = 'Cannot parse metadata, this is not a well-formed payload';
-// if (DBG2) console.log(`[extractPayload] payload: ${payload.byteLength} bytes`)
+  // if (DBG2) console.log(`[extractPayload] payload: ${payload.byteLength} bytes`)
   try {
     const metadataSize = new Uint32Array(payload.slice(0, 4))[0];
     const decoder = new TextDecoder();
@@ -1273,7 +1231,7 @@ function _extractPayload(payload: ArrayBuffer): any {
     try {
       metadata = jsonParseWrapper(json, "L1290");
     } catch (e) {
-            throw new SBError(parsingMsgError);
+      throw new SBError(parsingMsgError);
     }
     const startIndex = 4 + metadataSize;
 
@@ -1895,7 +1853,6 @@ function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean 
 //#region - Message Caching
 
 const SB_MESSAGE_CACHE_DB_NAME = "SBMessageCache"
-
 class SBMessageCache {
   readyPromise: Promise<SBMessageCache>
   db?: IDBDatabase
@@ -1995,15 +1952,6 @@ const SEP = "============================================================\n";
 
 /******************************************************************************************************/
 //#region - SB384
-
-// function compressP384(xBase64: string, yBase64:string): SBUserPublicKey {
-//   // Determine prefix based on the parity of the last byte of y-coordinate
-//   const yBytes = new Uint8Array(base64ToArrayBuffer(yBase64));
-//   const prefix = (yBytes[yBytes.length - 1] & 1) === 1
-//     ? KeyPrefix.SBPublicKey_compressed_odd 
-//     : KeyPrefix.SBPublicKey_compressed_even;
-//   return prefix + base64ToBase62(xBase64);
-// }
 
 function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
   if (modulus === 1n) return 0n;
@@ -2657,160 +2605,6 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
   }
 }
 
-// constructor(passphrase: string, keyInfo: Protocol_KeyInfo) {
-//   this.#keyInfo = keyInfo // todo: assert components
-//   this.#masterKey = new Promise(async (resolve, _reject) => {
-//     const salt = this.#keyInfo.salt1!
-//     const iterations = this.#keyInfo.iterations1!
-//     const hash = this.#keyInfo.hash1!
-//     return crypto.subtle.importKey(
-//       'raw',
-//       new TextEncoder().encode(passphrase),
-//       { name: 'PBKDF2' },
-//       false,
-//       ['deriveBits']
-//     )
-//       .then(key => {
-//         const rez = crypto.subtle.deriveBits({
-//           name: 'PBKDF2',
-//           salt: salt,
-//           iterations: iterations,
-//           hash: hash
-//         }, key, 256);
-//         rez.then((masterKeyBuffer) => {
-//           const importedKey = crypto.subtle.importKey(
-//             'raw',
-//             masterKeyBuffer,
-//             {  
-//               name: 'PBKDF2' 
-//             },
-//             false, 
-//             ['deriveBits']
-//           );
-//           importedKey.then((derivedKey) => {
-//             resolve(derivedKey)
-//           })
-//         }
-//         )
-//       })
-//   })
-// }
-
-// #keyMaterial?: Promise<CryptoKey>
-// #channelKey?: Promise<CryptoKey>;
-// constructor(entropy: string, keyInfo: Protocol_KeyInfo) {
-//   this.#keyMaterial = new Promise(async (resolve, _reject) => {
-//     const entropyBuffer = new TextEncoder().encode(entropy);
-//     const baseKeyMaterial = await crypto.subtle.importKey(
-//       "raw",
-//       entropyBuffer,
-//       { name: "PBKDF2" },
-//       false,
-//       ["deriveKey"]
-//     );
-//     _sb_assert(keyInfo.salt && keyInfo.iterations, "Protocol_AES_GCM_256() - iterations not provided");
-//     // Derive a generic secret key using PBKDF2
-//     const channelKey = await crypto.subtle.deriveKey(
-//       {
-//         name: 'PBKDF2',
-//         salt: keyInfo.salt,
-//         iterations: keyInfo.iterations,
-//         hash: 'SHA-256'
-//       },
-//       baseKeyMaterial,
-//       { name: 'HMAC', hash: { name: 'SHA-256' } }, // Generic key for further derivation
-//       false,
-//       ['sign']  // HMAC key, to be used for HKDF in message key derivation
-//     );
-//     resolve(channelKey);
-//   });
-// }
-// // constructor(entropy: string, keyInfo: Protocol_KeyInfo) {
-// //   this.#channelKey = new Promise(async (resolve, _reject) => {
-// //     const entropyBuffer = new TextEncoder().encode(entropy);
-// //     const baseKeyMaterial = await crypto.subtle.importKey(
-// //       "raw",
-// //       entropyBuffer,
-// //       { name: "PBKDF2" },
-// //       false,
-// //       ["deriveKey"]
-// //     );
-// //     _sb_assert(keyInfo.salt && keyInfo.iterations, "Protocol_AES_GCM_256() - iterations not provided");
-// //     const channelKey = await crypto.subtle.deriveKey(
-// //       {
-// //         name: 'PBKDF2',
-// //         salt: keyInfo.salt,
-// //         iterations: keyInfo.iterations,
-// //         hash: 'SHA-256'
-// //       },
-// //       baseKeyMaterial,
-// //       // { name: 'AES-GCM', length: 256 },
-// //       { name: 'HMAC', hash: { name: 'SHA-256' }  },
-// //       false, // Channel key should not be extractable
-// //       ['deriveKey']
-// //     );
-// //     resolve(channelKey);
-// //   });
-// // }
-// async #genKey(salt: ArrayBuffer): Promise<CryptoKey> {
-//   if (!this.#keyMaterial) throw new SBError("Channel key not ready");
-//   const channelKey = await this.#keyMaterial;
-//   return crypto.subtle.deriveKey(
-//     {
-//       name: 'HKDF',
-//       hash: 'SHA-256',
-//       salt: salt,
-//       info: new Uint8Array()  // HKDF info parameter can be empty
-//     },
-//     channelKey,
-//     { name: 'AES-GCM', length: 256 },
-//     true, // Extractable for debugging, set to false in production
-//     ['encrypt', 'decrypt']
-//   );
-// }
-// constructor(entropy: string, keyInfo: Protocol_KeyInfo) {
-//   this.#keyMaterial = new Promise(async (resolve, _reject) => {
-//     const entropyBuffer = new TextEncoder().encode(entropy);
-//     const keyMaterial = await crypto.subtle.importKey(
-//       "raw",
-//       entropyBuffer,
-//       { name: "PBKDF2" },
-//       false,
-//       ["deriveKey", "deriveBits"]
-//     );
-//     _sb_assert(keyInfo.salt && keyInfo.iterations, "Protocol_AES_GCM_256() - iterations not provided")
-//     const derivedKey = await crypto.subtle.deriveKey(
-//       {
-//         'name': 'PBKDF2',
-//         'salt': keyInfo.salt,
-//         'iterations': keyInfo.iterations,
-//         'hash': "SHA-256"
-//       },
-//       keyMaterial,
-//       { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
-//     resolve(derivedKey)
-//   });
-// }
-
-// Derive a master key from the passphrase
-
-
-
-// Encrypt message
-// async #genKey(salt: ArrayBuffer): Promise<CryptoKey> {
-//   if (!this.#keyMaterial) throw new SBError("Protocol_AES_GCM_384.key() - encryption key not ready")
-//   const derivedKey = await crypto.subtle.deriveKey(
-//     {
-//       'name': 'PBKDF2',
-//       'salt': salt,
-//       'iterations': 10000, // on a per-message basis
-//       'hash': "SHA-256"
-//     },
-//     await this.#keyMaterial,
-//     { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
-//   return derivedKey
-// }
-
 /**
  * Implements 'whisper', eg 1:1 public-key based encryption between
  * sender and receiver. It will use as sender the private key used
@@ -2865,71 +2659,6 @@ export class Protocol_ECDH implements SBProtocol {
     return res!;
   }
 }
-
-// export class Protocol_ECDH implements SBProtocol {
-//   #keyMap: Map<string, CryptoKey> = new Map()
-//   constructor() { /* this protocol depends on channel and recipient only */ }
-//   encryptionKey(msg: SBMessage): Promise<CryptoKey> {
-//     return new Promise(async (resolve, _reject) => {
-//       await msg.channel.ready;
-//       const channelId = msg.channel.channelId!;
-//       _sb_assert(channelId, "Internal Error (L2565)")
-//       const sendTo = msg.options.sendTo
-//         ? msg.options.sendTo
-//         : msg.channel.channelData.ownerPublicKey;
-//       const key = channelId + "_" + sendTo;
-//       if (!this.#keyMap.has(key)) {
-//         const newKey = await crypto.subtle.deriveKey(
-//           {
-//             name: 'ECDH',
-//             public: (await new SB384(sendTo).ready).publicKey
-//           },
-//           msg.channel.privateKey,
-//           { name: 'AES-GCM', length: 256 },
-//           true,
-//           ['encrypt', 'decrypt']);
-//         this.#keyMap.set(key, newKey);
-//         if (DBG2) console.log("++++ Protocol_ECDH.key() - newKey:", newKey)
-//       }
-//       const res = this.#keyMap.get(key);
-//       _sb_assert(res, "Internal Error (L2584)")
-//       if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res)
-//       resolve(res!);
-//     });
-//   }
-//   decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
-//     // todo: refactor, we have overlapping code w/ encrypt
-//     return new Promise(async (resolve, _reject) => {
-//       if (DBG2) console.log("CALLING Protocol_ECDH.key() - msg:", msg)
-//       await channel.ready;
-//       const channelId = channel.channelId!;
-//       _sb_assert(channelId, "Internal Error (L2594)")
-//       const sentFrom = channel.visitors.get(msg.f)!; // full pub key (not just hash)
-//       if (!sentFrom) {
-//         if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown")
-//         return undefined
-//       }
-//       const key = channelId + "_" + sentFrom;
-//       if (!this.#keyMap.has(key)) {
-//         const newKey = await crypto.subtle.deriveKey(
-//           {
-//             name: 'ECDH',
-//             public: (await new SB384(sentFrom).ready).publicKey
-//           },
-//           channel.privateKey,
-//           { name: 'AES-GCM', length: 256 },
-//           true,
-//           ['encrypt', 'decrypt']);
-//         this.#keyMap.set(key, newKey);
-//       }
-//       const res = this.#keyMap.get(key);
-//       _sb_assert(res, "Internal Error (L2611)")
-//       if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res)
-//       resolve(res!);
-//     });
-
-//   }
-// }
 
 /**
  * Join a channel, taking a channel handle. Returns channel object.
@@ -3115,23 +2844,7 @@ class Channel extends SBChannelKeys {
       if (DBG2) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP)
       resolve(decryptedMessages)
 
-      // Promise.all(Object
-      //   .keys(messages)
-      //   // .filter((v) => messages[v].hasOwnProperty('encrypted_contents'))
-      //   .map((v) => this.deCryptChannelMessage(v, messages.get(v))))
-      //   .then((unfilteredDecryptedMessageArray) => unfilteredDecryptedMessageArray.filter((v): v is Message => Boolean(v)))
-      //   .then((decryptedMessageArray) => {
-      //     let lastMessage = decryptedMessageArray[decryptedMessageArray.length - 1];
-      //     if (lastMessage)
-      //       this.#cursor = lastMessage._id || /* lastMessage.id || */ '';
-      //     if (DBG) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessageArray, "\n", SEP)
-      //     resolve(decryptedMessageArray)
-      //   })
-      //   .catch((e) => {
-      //     const msg = `Channel.getMessages(): failed to decrypt messages: ${e}`
-      //     console.error(msg)
-      //     reject(msg)
-      //   })
+
     });
   }
 
@@ -3580,7 +3293,7 @@ class ChannelSocket extends Channel {
 // 'Shard' object is the format returned by storage server; this code
 // 'paraphrases' code in the storage server. it is essentially a variation
 // of SBObjectHandle, but (much) more restrictive.
-interface Shard {
+export interface Shard {
   version: '3',
   id: Base62Encoded,
   iv: Uint8Array,
@@ -3724,26 +3437,6 @@ export class StorageApi {
     });
   }
 
-  /**
-   * Low level of shard uploading - this needs to have all the details. You would
-   * generally not call this directly, but rather use storeData(). But it is 'static',
-   * in case you want to use it directly.
-   */
-  // static storeObject(
-  //   storageServer: string,
-  //   fileId: Base62Encoded,
-  //   iv: Uint8Array,
-  //   salt: ArrayBuffer,
-  //   storageToken: SBStorageToken,
-  //   data: ArrayBuffer
-  // ): Promise<Dictionary<any>> {
-  //   return new Promise(async (resolve, reject) => {
-  //     const query = storageServer + '/api/v2/storeData?id=' + fileId
-  //     const body = { id: fileId, iv: iv, salt: salt, storageToken: storageToken, data: data }
-  //     const bodyPayload = assemblePayload(body)
-  //     return SBApiFetch(query, { method: 'POST', body: bodyPayload })
-  //   });
-  // }
 
   /**
    * Store 'contents' as a shard, returns an object handle. Note that 'contents' can be
@@ -3775,23 +3468,6 @@ export class StorageApi {
       const encryptedData = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv })
       const storageToken = await channel.getStorageToken(encryptedData.byteLength)
 
-      // static storeObject(
-      //   storageServer: string,
-      //   fileId: Base62Encoded,
-      //   iv: Uint8Array,
-      //   salt: ArrayBuffer,
-      //   storageToken: SBStorageToken,
-      //   data: ArrayBuffer
-      // ): Promise<Dictionary<any>> {
-      //   return new Promise(async (resolve, reject) => {
-      //     const query = storageServer + '/api/v2/storeData?id=' + fileId
-      //     const body = { id: fileId, iv: iv, salt: salt, storageToken: storageToken, data: data }
-      //     const bodyPayload = assemblePayload(body)
-      //     return SBApiFetch(query, { method: 'POST', body: bodyPayload })
-      //   });
-      // }
-      // const resp_json = await StorageApi.storeObject(storageServer, id, keyInfo.iv, keyInfo.salt, storageToken, encryptedData)
-
       // 'phase 2': we store the object
       const storeQuery = storageServer + '/api/v2/storeData?id=' + id
       const init: RequestInit = {
@@ -3817,8 +3493,10 @@ export class StorageApi {
         iv: keyInfo.iv,
         salt: keyInfo.salt,
         actualSize: bufSize,
-        verification: result.verification
+        verification: result.verification,
+        storageServer: storageServer,
       }
+      if (DBG) console.log("storeData() - success, handle:", r)
       return (r)
     } catch (error) {
       console.error("[storeData] failed:", error)
@@ -3826,31 +3504,6 @@ export class StorageApi {
       throw new SBError(`[storeData] failed to store data: ${error}`)
     }
   }
-
-  
-
-  // // unwraps, decrypts, unpads a chunk of data per info in the handle
-  // #_processData(h: SBObjectHandle): Promise<ArrayBuffer> {
-  //   return new Promise(async (resolve, reject) => {
-  //     console.log("[L3764]")
-  //     console.log(h)
-  //     const payload = StorageApi.getData(h)
-  //     if (!payload) { reject("failed to get data from storage server"); return; }
-  //     console.log("[L3710]")
-  //     console.log(payload)
-  //     const s = validate_Shard(extractPayload(payload).payload) // throws if there's an issue
-  //     console.log("[L3712]")
-  //     _sb_assert(h.key, "object handle 'key' is missing, cannot decrypt")
-  //     const h_key = base62ToArrayBuffer(h.key!)
-  //     const decryptionKey = await StorageApi.getObjectKey(h_key, s.salt);
-  //     const encryptedData = s.data;
-  //     if (DBG) console.log("shard.data (encrypted):", s.data)
-  //     const decryptedData = await sbCrypto.unwrap(decryptionKey, { c: encryptedData, iv: s.iv })
-  //     const finalData = this.#unpadData(decryptedData)
-  //     if (DBG) console.log("#processData(), final decrypted and unwrapped data:", finalData)
-  //     resolve(finalData)
-  //   });
-  // }
 
   // a wrapper: any failure conditions (exceptions) returns 'null', facilitates
   // trying different servers
@@ -3883,26 +3536,6 @@ export class StorageApi {
   }
 
 
-    // const body = { method: 'GET' }
-    // return new Promise(async (resolve, _reject) => {
-    //   SBFetch(useServer + url, body)
-    //     .then((response: Response) => {
-    //       if (!response.ok) return (null)
-    //       return response.arrayBuffer()
-    //     })
-    //     .then((payload: ArrayBuffer | null) => {
-    //       if (payload === null) return (null)
-    //       return this.#processData(payload, h)
-    //     })
-    //     .then((payload) => {
-    //       if (payload === null) resolve(null)
-    //       else resolve(payload)
-    //     })
-    //     .catch((_error: Error) => {
-    //       return (null)
-    //     });
-    // })
-
   /**
    * This assumes you have a complete SBObjectHandle. Note that if you only have
    * the 'id' and 'verification' fields, you can reconstruct / request the rest.
@@ -3927,37 +3560,38 @@ export class StorageApi {
    * 'cache', and use ''getData()'' to safely retrieve the data.
    */
   async fetchData(handle: SBObjectHandle) {
-      const h = validate_SBObjectHandle(handle) // throws if there's an issue
-      if (DBG) console.log("fetchData(), handle:", h)
+    const h = validate_SBObjectHandle(handle) // throws if there's an issue
+    if (DBG) console.log("fetchData(), handle:", h)
 
-      // we might be 'caching' as a weakref
-      if (h.data && h.data instanceof WeakRef && h.data.deref()) return(h); // the ref is still good
+    // we might be 'caching' as a weakref
+    if (h.data && h.data instanceof WeakRef && h.data.deref()) return (h); // the ref is still good
 
-      // Note: we don't use any local storage as a cache, since the shards
-      // already have a 'namespace' for caching in the browser (regular network
-      // operations)
+    // Note: we don't use any local storage as a cache, since the shards
+    // already have a 'namespace' for caching in the browser (regular network
+    // operations)
 
-      const verification = await h.verification
+    const verification = await h.verification
 
-      // in current design, there are three servers that are checked
-      const server1 = h.storageServer ? h.storageServer : null // todo: this sometimes resolves to '0'??
-      const server2 = 'http://localhost:3841' // local mirror
-      const server3 = await this.getStorageServer()
-      // const useServer = (await this.getStorageServer()) + '/api/v2'
+    // in current design, there are three servers that are checked
+    const server1 = h.storageServer ? h.storageServer : null // todo: this sometimes resolves to '0'??
+    const server2 = 'http://localhost:3841' // local mirror
+    const server3 = await this.getStorageServer()
+    // const useServer = (await this.getStorageServer()) + '/api/v2'
 
-      // we try the servers in order, and we try to fetch from the server
-      for (const server of [server1, server2, server3]) {
-        if (!server) continue
-        if (DBG) console.log('\n', SEP, "fetchData(), trying server: ", server, '\n', SEP)
-        const queryString = '/api/v2/fetchData?id=' + h.id + '&verification=' + verification
-                const result = await this.#_fetchData(server, queryString, h)
-        if (result !== null) {
-          if (DBG) console.log(`[fetchData] success: fetched from '${server}'`, result)
-          return(result)
-        }
+    // we try the servers in order, and we try to fetch from the server
+    for (const server of [server1, server2, server3]) {
+      if (!server) continue
+      if (DBG) console.log('\n', SEP, "fetchData(), trying server: ", server, '\n', SEP)
+      const queryString = '/api/v2/fetchData?id=' + h.id + '&verification=' + verification
+      const result = await this.#_fetchData(server, queryString, h)
+      if (result !== null) {
+        if (DBG) console.log(`[fetchData] success: fetched from '${server}'`, result)
+        result.storageServer = server // store the one that worked
+        return (result)
       }
-      // if these servers don't work, we throw an error
-      throw new SBError(`[fetchData] failed to fetch from any server`)
+    }
+    // if these servers don't work, we throw an error
+    throw new SBError(`[fetchData] failed to fetch from any server`)
   }
 
 
@@ -3982,13 +3616,13 @@ export class StorageApi {
   /**
    * Convenience wrapper for object handles: returns the payload.
    */
-    static getPayload(handle: SBObjectHandle): any {
-      const h = validate_SBObjectHandle(handle)
-      if (h.payload) return h.payload
-      const data = StorageApi.getData(h)
-      if (!data) throw new SBError('[getPayload] no data or payload in handle, use fetchData()')
-      return extractPayload(data).payload
-    }
+  static getPayload(handle: SBObjectHandle): any {
+    const h = validate_SBObjectHandle(handle)
+    if (h.payload) return h.payload
+    const data = StorageApi.getData(h)
+    if (!data) throw new SBError('[getPayload] no data or payload in handle, use fetchData()')
+    return extractPayload(data).payload
+  }
 
 } /* class StorageApi */
 
@@ -4148,36 +3782,7 @@ class Snackabra {
     else
       return new Channel(newChannelHandle)
 
-    // // connect(onMessage: (m: ChannelMessage) => void, key?: JsonWebKey, channelId?: string /*, identity?: SB384 */): Promise<ChannelSocket> {
-    // // if (DBG) {
-    // //   console.log("++++ Snackabra.connect() ++++")
-    // //   if (key) console.log(key)
-    // //   if (channelId) console.log(channelId)
-    // // }
-    // return new Promise<ChannelSocket>(async (resolve) => {
-    //   // const newUserId = sbCrypto.JWKToUserId(key)
-    //   // if (!newUserId) throw new SBError('Unable to determine userId from key (JWKToUserId return empty)')
-    //   const newChannelHandle: SBChannelHandle = {
-    //     [SB_CHANNEL_HANDLE_SYMBOL]: true,
-    //     channelId: handle.channelId,
-    //     userId: handle.userId, // newUserId,
-    //     channelServer: this.channelServer
-    //   }
 
-    //   // this.#channel = new ChannelSocket(this.channelServer, onMessage, key, channelId)
-    //   resolve(new ChannelSocket(newChannelHandle, onMessage ? onMessage :
-    //     (m: ChannelMessage) => { console.log("MESSAGE (not caught):", m) }))
-
-    //   // resolve(new ChannelSocket(this.channelServer!, onMessage, key, channelId))
-
-    //   //   if (this.#preferredServer)
-    //   //     // if we have a preferred server then we do not have to wait for 'ready'
-    //   //     resolve(new ChannelSocket(this.channelServer!, onMessage, key, channelId))
-    //   //   else
-    //   //     // otherwise we have to wait for at least one of them to be 'ready', or we won't know which one to use
-    //   //     resolve(Promise.any(SBKnownServers.map((s) => (new ChannelSocket(s, onMessage, key, channelId)).ready)))
-    //   // })
-    // })
 
   }
 

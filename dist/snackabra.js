@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 68)';
+const version = '2.0.0-alpha.5 (build 71)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function validate_SBStorageToken(data) {
@@ -2384,8 +2384,11 @@ export class StorageApi {
                 iv: keyInfo.iv,
                 salt: keyInfo.salt,
                 actualSize: bufSize,
-                verification: result.verification
+                verification: result.verification,
+                storageServer: storageServer,
             };
+            if (DBG)
+                console.log("storeData() - success, handle:", r);
             return (r);
         }
         catch (error) {
@@ -2442,6 +2445,7 @@ export class StorageApi {
             if (result !== null) {
                 if (DBG)
                     console.log(`[fetchData] success: fetched from '${server}'`, result);
+                result.storageServer = server;
                 return (result);
             }
         }
