@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 71)";
+declare const version = "2.0.0-alpha.5 (build 72)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {

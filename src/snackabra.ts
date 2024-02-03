@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 71)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 72)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -3415,28 +3415,28 @@ export class StorageApi {
     return data_buffer.slice(0, _size);
   }
 
-  /** @private */
+  // derives the encryption key for a given object (shard)
   static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey> {
     return new Promise((resolve, reject) => {
       try {
-        sbCrypto.importKey('raw', fileHashBuffer /* base64ToArrayBuffer(decodeURIComponent(fileHash))*/,
+        sbCrypto.importKey('raw',
+          fileHashBuffer,
           'PBKDF2', false, ['deriveBits', 'deriveKey']).then((keyMaterial) => {
-            // todo - Support deriving from PBKDF2 in sbCrypto.deriveKey function
             crypto.subtle.deriveKey({
-              'name': 'PBKDF2', // salt: crypto.getRandomValues(new Uint8Array(16)),
+              'name': 'PBKDF2',
               'salt': salt,
-              'iterations': 100000, // small is fine, we want it snappy
+              'iterations': 100000, // small is fine
               'hash': 'SHA-256'
-            }, keyMaterial, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt']).then((key) => {
-              resolve(key)
-            })
+            }, keyMaterial, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
+              .then((key) => {
+                resolve(key)
+              })
           })
       } catch (e) {
         reject(e);
       }
     });
   }
-
 
   /**
    * Store 'contents' as a shard, returns an object handle. Note that 'contents' can be
@@ -3449,9 +3449,9 @@ export class StorageApi {
     try {
       const buf = assemblePayload(contents)!
       if (!buf) throw new SBError("[storeData] failed to assemble payload")
-      const bufSize = (buf as ArrayBuffer).byteLength
       const channel = channelOrHandle instanceof Channel ? channelOrHandle : new Channel(channelOrHandle)
 
+      const bufSize = (buf as ArrayBuffer).byteLength // before padding
       const paddedBuf = StorageApi.padBuf(buf)
       const fullHash = await sbCrypto.generateIdKey(paddedBuf)
 
@@ -3496,7 +3496,7 @@ export class StorageApi {
         verification: result.verification,
         storageServer: storageServer,
       }
-      if (DBG) console.log("storeData() - success, handle:", r)
+      if (DBG) console.log("storeData() - success, handle:", r, encryptedData)
       return (r)
     } catch (error) {
       console.error("[storeData] failed:", error)
@@ -3781,9 +3781,6 @@ class Snackabra {
       return new ChannelSocket(newChannelHandle, onMessage)
     else
       return new Channel(newChannelHandle)
-
-
-
   }
 
   /**

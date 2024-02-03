@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 71)';
+const version = '2.0.0-alpha.5 (build 72)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function validate_SBStorageToken(data) {
@@ -2333,7 +2333,8 @@ export class StorageApi {
                         'salt': salt,
                         'iterations': 100000,
                         'hash': 'SHA-256'
-                    }, keyMaterial, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt']).then((key) => {
+                    }, keyMaterial, { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
+                        .then((key) => {
                         resolve(key);
                     });
                 });
@@ -2348,8 +2349,8 @@ export class StorageApi {
             const buf = assemblePayload(contents);
             if (!buf)
                 throw new SBError("[storeData] failed to assemble payload");
-            const bufSize = buf.byteLength;
             const channel = channelOrHandle instanceof Channel ? channelOrHandle : new Channel(channelOrHandle);
+            const bufSize = buf.byteLength;
             const paddedBuf = _b.padBuf(buf);
             const fullHash = await sbCrypto.generateIdKey(paddedBuf);
             const storageServer = await this.getStorageServer();
@@ -2388,7 +2389,7 @@ export class StorageApi {
                 storageServer: storageServer,
             };
             if (DBG)
-                console.log("storeData() - success, handle:", r);
+                console.log("storeData() - success, handle:", r, encryptedData);
             return (r);
         }
         catch (error) {
