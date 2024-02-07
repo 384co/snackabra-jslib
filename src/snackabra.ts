@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 72)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 081)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -500,12 +500,15 @@ const currentSBOHVersion: SBObjectHandleVersions = '3'
  */
 export interface SBObjectHandle {
   [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
-  version: SBObjectHandleVersions,
-  type?: string, // for some backwards compatibility, no longer used
 
+  // strictly speaking, only 'id' is required
   id: Base62Encoded,
+
   key?: Base62Encoded,
   verification?: Promise<string> | string,
+
+  version?: SBObjectHandleVersions,
+  type?: string, // for some backwards compatibility, no longer used
 
   iv?: Uint8Array | Base62Encoded,
   salt?: ArrayBuffer | Base62Encoded,
@@ -527,7 +530,7 @@ export function validate_SBObjectHandle(h: SBObjectHandle) {
   if (!h) throw new SBError(`invalid SBObjectHandle (null or undefined)`)
   else if (h[SB_OBJECT_HANDLE_SYMBOL]) return h as SBObjectHandle
   else if (
-    h.version && typeof h.version === 'string' && h.version.length === 1
+       (!h.version || h.version === '3') // anything 'this' code sees needs to be v3
     && h.id && typeof h.id === 'string' && h.id.length === 43
     && (!h.key || (typeof h.key === 'string' && h.key.length === 43))
     && (!h.verification || typeof h.verification === 'string' || typeof h.verification === 'object')
@@ -989,6 +992,62 @@ export function base64ToBase62(s: string): Base62Encoded {
 //#endregion Base62
 
 /******************************************************************************************************/
+//#region Base32mi
+
+// duplicate code from 384lib (strongpin version 0.8)
+
+// parts of strongpin is patented pending by 384, inc. permission to use is granted
+// in conjunction with jslib in GPL-3.0-only context, and not for any other use,
+// as set out in more detail in the LICENSE file in the root of this repository.
+
+const base62mi = "0123456789ADMRTxQjrEywcLBdHpNufk" // "v05.05" (strongpinVersion ^0.6.0)
+const base62Regex = new RegExp(`[${base62mi}.concat(' ')]`); // lenient, allows spaces
+
+// encodes a 19-bit number into a 4-character string
+export function b32encode(num: number): string {
+    const charMap = base62mi;
+    if (num < 0 || num > 0x7ffff)
+        throw new Error('Input number is out of range. Expected a 19-bit integer.');
+    let bitsArr15 = [
+        (num >> 14) & 0x1f,
+        (num >> 9) & 0x1f,
+        (num >> 4) & 0x1f,
+        (num) & 0x0f
+    ];
+    bitsArr15[3] |= (bitsArr15[0] ^ bitsArr15[1] ^ bitsArr15[2]) & 0x10;
+    return bitsArr15.map(val => charMap[val]).join('');
+}
+
+export function b32process(str: string): string {
+    const substitutions: { [key: string]: string } = {
+        "o": "0", "O": "0", "i": "1", "I": "1",
+        "l": "1", "z": "2", "Z": "2", "s": "5",
+        "S": "5", "b": "6", "G": "6", "a": "9",
+        "g": "9", "q": "9", "m": "M", "t": "T",
+        "X": "x", "J": "j", "e": "E", "Y": "y",
+        "W": "w", "C": "c", "P": "p", "n": "N",
+        "h": "N", "U": "u", "v": "u", "V": "u",
+        "F": "f", "K": "k"
+    }
+    let processedStr = '';
+    for (let char of str)
+        processedStr += substitutions[char] || char;
+    return processedStr;
+}
+
+export function b32decode(encoded: string): number | null {
+    if (!base62Regex.test(encoded))
+        throw new Error(`Input string contains invalid characters (${encoded}) - use 'process()'.`);
+    let bin = Array.from(encoded)
+        .map(c => base62mi.indexOf(c))
+    if (bin.reduce((a, b) => (a ^ b)) & 0x10)
+        return null;
+    return (((bin[0] * 32 + bin[1]) * 32 + bin[2]) * 16 + (bin[3] & 0x0f));
+}
+
+//#endregion Base32mi
+
+/******************************************************************************************************/
 //#region Payloads
 
 /**
@@ -1262,7 +1321,11 @@ function _extractPayload(payload: ArrayBuffer): any {
  */
 export function extractPayload(value: ArrayBuffer): any {
   const verifySignature = (v: ArrayBuffer) => new Uint32Array(v, 0, 1)[0] === 0xAABBBBAA;
-  if (!verifySignature(value)) throw new SBError('Invalid payload signature (this is not a payload)');
+  const msg = 'Invalid payload signature (this is not a payload)';
+  if (!verifySignature(value)) {
+    if (DBG) console.error('\n', SEP, msg, '\n', value as any, SEP);
+    throw new SBError(msg);
+  }
   // now i need to strip out the first four bytes
   return _extractPayload(value.slice(4));
 }
@@ -1663,7 +1726,7 @@ export class SBCrypto {  /******************************************************
     return message
   }
 
-  /** Decrypts a 'wrapped' message, eg decrypts */
+  /** Decrypts a 'wrapped' message, including consistency check(s) */
   unwrapMessage(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
     return new Promise(async (resolve, reject) => {
       try {
@@ -1683,22 +1746,21 @@ export class SBCrypto {  /******************************************************
     });
   }
 
-  /** Decrypts a 'wrapped' message, eg decrypts */
-  unwrapShard(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
-    return new Promise(async (resolve, reject) => {
-      try {
-        const { c: t, iv: iv } = o
-        _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
-        const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t!)
-        resolve(d)
-      } catch (e) {
-        // not an error per se, for example could just be wrong key
-        if (DBG) console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`)
-        if (DBG2) console.log("message was \n", o)
-        reject(e);
-      }
-    });
-  }
+  // unwrapShard(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
+  //   return new Promise(async (resolve, reject) => {
+  //     try {
+  //       const { c: t, iv: iv } = o
+  //       _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
+  //       const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, k, t!)
+  //       resolve(d)
+  //     } catch (e) {
+  //       // not an error per se, for example could just be wrong key
+  //       if (DBG) console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`)
+  //       if (DBG2) console.log("message was \n", o)
+  //       reject(e);
+  //     }
+  //   });
+  // }
 
   /** Basic signing */
   sign(signKey: CryptoKey, contents: ArrayBuffer) {
@@ -1732,7 +1794,7 @@ export class SBCrypto {  /******************************************************
 
 // Decorator
 // caches resulting value (after any verifications eg ready pattern)
-function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
+export function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
     let get = descriptor.get
     descriptor.get = function () {
@@ -1751,7 +1813,7 @@ function Memoize(target: any, propertyKey: string /* ClassGetterDecoratorContext
 
 // Decorator
 // asserts that corresponding object is 'ready'; also asserts non-null getter return value
-function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
+export function Ready(target: any, propertyKey: string /* ClassGetterDecoratorContext */, descriptor?: PropertyDescriptor) {
   if ((descriptor) && (descriptor.get)) {
     let get = descriptor.get
     descriptor.get = function () {
@@ -1848,90 +1910,6 @@ function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean 
 }
 
 //#endregion
-
-/******************************************************************************************************/
-//#region - Message Caching
-
-const SB_MESSAGE_CACHE_DB_NAME = "SBMessageCache"
-class SBMessageCache {
-  readyPromise: Promise<SBMessageCache>
-  db?: IDBDatabase
-  constructor(public dbName: string, dbVersion: number = 1) {
-    this.readyPromise = new Promise((resolve, reject) => {
-      if (!('indexedDB' in globalThis)) {
-        console.warn("IndexedDB is not supported in this environment. SBMessageCache will not be functional.");
-        reject("IndexedDB not supported");
-        return;
-      }
-      const request = indexedDB.open(dbName, dbVersion);
-      request.onsuccess = () => { this.db = request.result; resolve(this); };
-      request.onerror = () => { reject(`Database error ('${dbName}): ` + request.error); };
-    });
-  }
-  getObjStore(name?: string, mode: IDBTransactionMode = "readonly"): IDBObjectStore {
-    if (!name) name = this.dbName
-    _sb_assert(this.db, "Internal Error [L2009]")
-    const transaction = this.db?.transaction(SB_MESSAGE_CACHE_DB_NAME, mode);
-    const objectStore = transaction?.objectStore(SB_MESSAGE_CACHE_DB_NAME);
-    _sb_assert(objectStore, "Internal Error [L2013]")
-    return objectStore!
-  }
-  // insert KV entry as { key: key, value: value }
-  async add(key: string, value: any): Promise<void> {
-    return new Promise(async (resolve, reject) => {
-      const objectStore = this.getObjStore("readwrite")
-      const request = objectStore.put({ key: key, value: value }); // overwrites if present
-      request.onsuccess = () => { resolve(); };
-      request.onerror = () => { reject('[add] Received error accessing keys'); };
-    });
-  }
-  // fetch an entry, returning the value
-  async get(key: string): Promise<ChannelMessage | undefined> {
-    return new Promise(async (resolve, reject) => {
-      await this.readyPromise
-      const objectStore = this.getObjStore()
-      const request = objectStore.get(key);
-      request.onsuccess = () => { resolve(request.result?.value); };
-      request.onerror = () => { reject('[get] Received error accessing keys'); };
-    });
-  }
-  getLowerUpper(channelId: SBChannelId, timestampPrefix: string, i2?: string): [string, string] {
-    const upperBound = timestampPrefix.padEnd(26, '3');
-    const sep = i2 ? `_${i2}_` : '______'
-    const lowerBound = channelId + sep + timestampPrefix;
-    return [lowerBound, upperBound]
-  }
-  async getKnownMessageKeys(channelId: SBChannelId, timestampPrefix: string, i2?: string): Promise<Set<ChannelMessage>> {
-    return new Promise(async (resolve, reject) => {
-      await this.readyPromise
-      const objectStore = this.getObjStore()
-      const [lower, upper] = this.getLowerUpper(channelId, timestampPrefix, i2)
-      const keyRange = IDBKeyRange.bound(lower, upper, false, false);
-      const getAllKeysRequest = objectStore?.getAllKeys(keyRange);
-      if (!getAllKeysRequest) resolve(new Set()); // unable to set up query
-      getAllKeysRequest!.onsuccess = () => { resolve(new Set(getAllKeysRequest!.result) as Set<ChannelMessage>); }; // IDBValidKey can be string
-      getAllKeysRequest!.onerror = () => { reject('[getKnownMessageKeys] Received error accessing keys'); };
-    });
-  }
-  async getKnownMessages(channelId: SBChannelId, timestampPrefix: string, i2?: string): Promise<Map<string, any>> {
-    return new Promise(async (resolve, reject) => {
-      await this.readyPromise
-      const objectStore = this.getObjStore()
-      const [lower, upper] = this.getLowerUpper(channelId, timestampPrefix, i2)
-      const keyRange = IDBKeyRange.bound(lower, upper, false, false);
-      const getAllRequest = objectStore?.getAll(keyRange);
-      if (!getAllRequest) resolve(new Map()); // unable to set up query
-      getAllRequest!.onsuccess = () => { resolve(new Map(getAllRequest!.result) as Map<string, any>); };
-      getAllRequest!.onerror = () => { reject('[getKnownMessages] Received error accessing keys'); };
-    });
-  }
-}
-
-if ('indexedDB' in globalThis) {
-  (globalThis as any).sbMessageCache = new SBMessageCache(SB_MESSAGE_CACHE_DB_NAME, 1)
-}
-
-//#endregion - IndexedDb caching
 
 /******************************************************************************************************/
 //#region - SETUP and STARTUP
@@ -2039,6 +2017,7 @@ class SB384 {
   #signKey?: CryptoKey // can sign/verify if private, or just verify
 
   #hash?: SB384Hash // generic 'identifier', see hash getter below
+  #hashB32?: string // base32 version of hash (first 12 sets eg 48 chars)
 
   constructor(key?: CryptoKey | JsonWebKey | SBUserPublicKey | SBUserPrivateKey, forcePrivate?: boolean) {
     (this as any)[SB384.ReadyFlag] = false;
@@ -2135,7 +2114,13 @@ class SB384 {
 
         // can't put in getter since it's async
         const channelBytes = _appendBuffer(base64ToArrayBuffer(this.#x!), base64ToArrayBuffer(this.#y!))
-        this.#hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', channelBytes))
+        const rawHash = await crypto.subtle.digest('SHA-256', channelBytes)
+        this.#hash = arrayBufferToBase62(rawHash)
+
+        // we also create a base32 version of the hash, for use in channel ids (Pages)
+        const hashBigInt = BigInt('0x' + Array.from(new Uint8Array(rawHash)).map(b => b.toString(16).padStart(2, '0')).join('')) >> 28n;
+        this.#hashB32 =  Array.from({ length: 12 }, (_, i) => b32encode(Number((hashBigInt >> BigInt(19 * (11 - i))) & 0x7ffffn))).join('');
+        
         if (DBG2) console.log("SB384() constructor; hash:\n", this.#hash)
 
         this.#ySign = ySign(this.#y!);
@@ -2183,6 +2168,7 @@ class SB384 {
    * you cannot do so in the general case: you need to use sbCrypto.compareHashWithKey()
    */
   @Memoize @Ready get hash(): SB384Hash { return this.#hash! }
+  @Memoize @Ready get hashB32(): SB384Hash { return this.#hashB32! }
 
   // convenience getter
   @Memoize @Ready get userId(): SB384Hash { return this.hash }
@@ -2727,7 +2713,7 @@ class Channel extends SBChannelKeys {
   @Memoize @Ready get api() { return this } // for compatibility
 
   // async deCryptChannelMessage(channel: Channel, id: string, buf: ArrayBuffer): Promise<any> {
-  async deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<any> {
+  async deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<ChannelMessage | undefined> {
     // if (DBG2) console.log("Asked to decrypt:", id, buf)
     // if (!buf) return undefined;
     try {
@@ -2814,11 +2800,20 @@ class Channel extends SBChannelKeys {
     });
   }
 
-  // ToDo: actually, getting the messages, vs decrypting are different things ...
-  //       ... eg to decrypt we provide a protocol, which would apply to a 'subset' of all messages
-  //       ... (where 'all' the messages is just a special case)
-  getMessages(messageKeys: Set<string>): Promise<Map<string, any>> {
-    // todo: add IndexedDB caching - see above
+  async decryptMessage(value: ArrayBuffer): Promise<ChannelMessage | undefined> {
+    if (!this.protocol) throw new SBError("Channel.getMessages(): need protocol to decrypt messages")
+    const msgBuf = extractPayload(value).payload
+    if (DBG2) console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf)
+    const msgRaw = validate_ChannelMessage(msgBuf)
+    if (DBG2) console.log("++++ deCryptChannelMessage: validated")
+    // const decryptedMessage = await this.deCryptChannelMessage(this, key, value)
+    const decryptedMessage = await this.deCryptChannelMessage(this, msgRaw)
+    return decryptedMessage
+  }
+
+  getDecryptedMessages(messageKeys: Set<string>): Promise<Map<string, any>> {
+    if (DBG) console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys)
+    if (messageKeys.size === 0) throw new SBError("Channel.getDecryptedMessages() - no message keys provided")
     return new Promise(async (resolve, _reject) => {
       _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
       const messages: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
@@ -2832,22 +2827,25 @@ class Channel extends SBChannelKeys {
 
       const decryptedMessages = new Map<string, ChannelMessage>()
       for (const [key, value] of messages.entries()) {
-        if (!this.protocol) throw new SBError("Channel.getMessages(): need protocol to decrypt messages")
-        const msgBuf = extractPayload(value).payload
-        if (DBG2) console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf)
-        const msgRaw = validate_ChannelMessage(msgBuf)
-        if (DBG2) console.log("++++ deCryptChannelMessage: validated")
-        // const decryptedMessage = await this.deCryptChannelMessage(this, key, value)
-        const decryptedMessage = await this.deCryptChannelMessage(this, msgRaw)
+        const decryptedMessage = await this.decryptMessage(value)
         if (decryptedMessage) decryptedMessages.set(key, decryptedMessage)
       }
       if (DBG2) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP)
       resolve(decryptedMessages)
-
-
     });
   }
 
+  // same as above except we do not do any decryption and just provide the raw set of messages from the server
+  getMessages(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>> {
+    if (DBG) console.log("Channel.getMessages() called with messageKeys:", messageKeys)
+    if (messageKeys.size === 0) throw new SBError("Channel.getMessages() - no message keys provided")
+    return new Promise(async (resolve, _reject) => {
+      _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
+      const messages: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
+      _sb_assert(messages, "Channel.getMessages: no messages (empty/null response)")
+      resolve(messages)
+    });
+  }
 
   @Ready async send(msg: SBMessage | any): Promise<string> {
     const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
@@ -2855,12 +2853,29 @@ class Channel extends SBChannelKeys {
     return this.callApi('/send', sbm.message)
   }
 
+  @Ready @Owner setPage(page: any) { return this.callApi('/setPage', page) }
+  
+  /**
+   * Note that 'getPage' can be done without any authentication, in which
+   * case have a look at Snackabra.getPage(). If however the Page is locked,
+   * you need to access it through this ChannelApi entry point.
+   * 
+   * But conversely, we don't need a prefix or anything else, since
+   * we know the channel. So .. we can just shoot this off.
+   */
+  @Ready async getPage() {
+    const prefix = this.hashB32 // we know the full prefix
+    if (DBG) console.log(`==== ChannelApi.getPage: calling fetch with: ${prefix}`)
+    return extractPayload(await SBApiFetch(this.channelServer + '/api/v2/page/' + prefix)).payload
+  }
+
   @Ready @Owner acceptVisitor(userId: SBUserId) { return this.callApi('/acceptVisitor', { userId: userId }) }
   @Ready @Owner getCapacity() { return (this.callApi('/getCapacity')) }
 
   // admin data, and some related convenience functions
   @Ready @Owner getAdminData() { return this.callApi('/getAdminData') as Promise<ChannelAdminData> }
-  // convenience function
+
+  // convenience functions wrapping getAdminData()
   @Ready @Owner getMother() {
     return this.getAdminData().then((adminData) => {
       return adminData.motherChannel
@@ -3523,7 +3538,8 @@ export class StorageApi {
 
       const h_key = base62ToArrayBuffer(h.key!)
       const decryptionKey = await StorageApi.getObjectKey(h_key, h.salt);
-      const decryptedData = await sbCrypto.unwrapShard(decryptionKey, { c: shard.data, iv: h.iv })
+      // const decryptedData = await sbCrypto.unwrapShard(decryptionKey, { c: shard.data, iv: h.iv })
+      const decryptedData = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: h.iv }, decryptionKey, shard.data)
       const buf = this.#unpadData(decryptedData)
       if (DBG2) console.log("shard.data (decrypted and unpadded):", buf)
       h.payload = extractPayload(buf).payload
@@ -3688,6 +3704,17 @@ class Snackabra {
           reject(error)
         });
     }));
+  }
+
+
+  /**
+   * "Anonymous" version of fetching a page, since unless it's locked you do not
+   * need to be authenticated to fetch a page (or even know what channel it's
+   * related to).
+   */
+  async getPage(prefix: string) {
+      if (DBG) console.log(`==== Snackabra.getPage: calling fetch with: ${prefix}`)
+      return extractPayload(await SBApiFetch(this.#channelServer + '/api/v2/page/' + prefix))
   }
 
   attach(handle: SBChannelHandle): Promise<Channel> {

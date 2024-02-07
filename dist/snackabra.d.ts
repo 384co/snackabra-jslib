@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 72)";
+declare const version = "2.0.0-alpha.5 (build 081)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -101,11 +101,11 @@ export declare const msgTtlToString: string[];
 export type SBObjectHandleVersions = '1' | '2' | '3';
 export interface SBObjectHandle {
     [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
-    version: SBObjectHandleVersions;
-    type?: string;
     id: Base62Encoded;
     key?: Base62Encoded;
     verification?: Promise<string> | string;
+    version?: SBObjectHandleVersions;
+    type?: string;
     iv?: Uint8Array | Base62Encoded;
     salt?: ArrayBuffer | Base62Encoded;
     storageServer?: string;
@@ -154,6 +154,9 @@ declare function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string;
 declare function base62ToArrayBuffer(s: string): ArrayBuffer;
 export declare function base62ToBase64(s: Base62Encoded): string;
 export declare function base64ToBase62(s: string): Base62Encoded;
+export declare function b32encode(num: number): string;
+export declare function b32process(str: string): string;
+export declare function b32decode(encoded: string): number | null;
 export declare function assemblePayload(data: any): ArrayBuffer | null;
 export declare function extractPayload(value: ArrayBuffer): any;
 export declare enum KeyPrefix {
@@ -173,12 +176,13 @@ export declare class SBCrypto {
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer>;
     wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, salt: ArrayBuffer, signingKey: CryptoKey, options?: MessageOptions): Promise<ChannelMessage>;
     unwrapMessage(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
-    unwrapShard(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
     sign(signKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
     str2ab(string: string): Uint8Array;
     ab2str(buffer: Uint8Array): string;
 }
+export declare function Memoize(target: any, propertyKey: string, descriptor?: PropertyDescriptor): void;
+export declare function Ready(target: any, propertyKey: string, descriptor?: PropertyDescriptor): void;
 declare const SB_CHANNEL_MESSAGE_SYMBOL: unique symbol;
 declare const SB_CHANNEL_API_BODY_SYMBOL: unique symbol;
 declare const SB_CHANNEL_HANDLE_SYMBOL: unique symbol;
@@ -195,6 +199,7 @@ declare class SB384 {
     get ready(): Promise<SB384>;
     get private(): boolean;
     get hash(): SB384Hash;
+    get hashB32(): SB384Hash;
     get userId(): SB384Hash;
     get ownerChannelId(): string;
     get privateKey(): CryptoKey;
@@ -284,12 +289,16 @@ declare class Channel extends SBChannelKeys {
     get ready(): Promise<Channel>;
     get ChannelReadyFlag(): boolean;
     get api(): this;
-    deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<any>;
+    deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<ChannelMessage | undefined>;
     create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<SBChannelHandle>;
     getLastMessageTimes(): void;
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
-    getMessages(messageKeys: Set<string>): Promise<Map<string, any>>;
+    decryptMessage(value: ArrayBuffer): Promise<ChannelMessage | undefined>;
+    getDecryptedMessages(messageKeys: Set<string>): Promise<Map<string, any>>;
+    getMessages(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
     send(msg: SBMessage | any): Promise<string>;
+    setPage(page: any): Promise<any>;
+    getPage(): Promise<any>;
     acceptVisitor(userId: SBUserId): Promise<any>;
     getCapacity(): Promise<any>;
     getAdminData(): Promise<ChannelAdminData>;
@@ -343,6 +352,7 @@ declare class Snackabra {
     #private;
     sbFetch: typeof SBFetch;
     constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean);
+    getPage(prefix: string): Promise<any>;
     attach(handle: SBChannelHandle): Promise<Channel>;
     create(budgetChannel: Channel): Promise<SBChannelHandle>;
     create(storageToken: SBStorageToken): Promise<SBChannelHandle>;
