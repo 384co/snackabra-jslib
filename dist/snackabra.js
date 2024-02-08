@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 081)';
+const version = '2.0.0-alpha.5 (build 082)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function validate_SBStorageToken(data) {
@@ -2528,7 +2528,7 @@ class Snackabra {
                     handle.channelServer = this.#channelServer;
                 }
                 else if (handle.channelServer !== this.#channelServer) {
-                    reject('SBChannelHandle channelId does not match channelServer');
+                    reject('[attach] SBChannelHandle channelId does not match channelServer');
                 }
                 resolve(new Channel(handle));
             }
@@ -2575,7 +2575,7 @@ class Snackabra {
     connect(handle, onMessage) {
         _sb_assert(handle && handle.channelId && handle.userPrivateKey, '[connect] Invalid parameter (missing info)');
         if (handle.channelServer && handle.channelServer !== this.#channelServer)
-            throw new SBError('SBChannelHandle channelId does not match channelServer (use a different Snackabra object)');
+            throw new SBError(`[Snackabra.connect] channel server in handle ('${handle.channelServer}') does not match what SB was set up with ('${this.#channelServer}')`);
         const newChannelHandle = { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.#channelServer } };
         if (DBG)
             console.log("++++ Snackabra.connect() ++++", newChannelHandle);

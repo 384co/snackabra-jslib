@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 081)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 082)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -3723,7 +3723,7 @@ class Snackabra {
         if (!handle.channelServer) {
           handle.channelServer = this.#channelServer
         } else if (handle.channelServer !== this.#channelServer) {
-          reject('SBChannelHandle channelId does not match channelServer')
+          reject('[attach] SBChannelHandle channelId does not match channelServer')
         }
         resolve(new Channel(handle))
       } else {
@@ -3799,7 +3799,7 @@ class Snackabra {
   connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): Channel | ChannelSocket {
     _sb_assert(handle && handle.channelId && handle.userPrivateKey, '[connect] Invalid parameter (missing info)')
     if (handle.channelServer && handle.channelServer !== this.#channelServer)
-      throw new SBError('SBChannelHandle channelId does not match channelServer (use a different Snackabra object)')
+      throw new SBError(`[Snackabra.connect] channel server in handle ('${handle.channelServer}') does not match what SB was set up with ('${this.#channelServer}')`)
 
     const newChannelHandle: SBChannelHandle =
       { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.#channelServer } }
