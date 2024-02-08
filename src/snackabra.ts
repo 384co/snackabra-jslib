@@ -639,8 +639,8 @@ export class SBError extends Error {
   constructor(message: string) {
     super(message);
     this.name = this.constructor.name;
-    if (Error.captureStackTrace)
-      Error.captureStackTrace(this, this.constructor);
+    if (typeof (Error as any).captureStackTrace === 'function')
+      (Error as any).captureStackTrace(this, this.constructor);
     else
       this.stack = (new Error(message)).stack;
     if (DBG) {
