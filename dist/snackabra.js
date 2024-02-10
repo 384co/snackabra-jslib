@@ -6,7 +6,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 };
 var _a, _b;
 const version = '2.0.0-alpha.5 (build 082)';
-export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024;
+export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function validate_SBStorageToken(data) {
     if (!data)
@@ -1819,7 +1819,9 @@ class Channel extends SBChannelKeys {
         if (DBG)
             console.log("==== Channel.create() called with storageToken:", storageToken, "and channelServer:", channelServer);
         _sb_assert(storageToken !== null, '[Channel.create] Missing storage token');
-        _sb_assert(channelServer, '[Channel.create] Missing channel server');
+        if (channelServer)
+            this.channelServer = channelServer;
+        _sb_assert(this.channelServer, '[Channel.create] Missing channel server (neither provided nor in channelKeys)');
         return new Promise(async (resolve, reject) => {
             await this.channelReady;
             this.channelData.storageToken = validate_SBStorageToken(storageToken);

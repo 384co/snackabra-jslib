@@ -25,8 +25,9 @@ const version = '2.0.0-alpha.5 (build 082)' // working on 2.0.0 release
 /******************************************************************************************************/
 //#region Interfaces - Types
 
-// minimum when creating a new channel
-export const NEW_CHANNEL_MINIMUM_BUDGET = 32 * 1024 * 1024; // 32 MB
+// minimum when creating a new channel. channels can be reduced below this, but
+// not created below this.
+export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024; // 8 MB
 
 export const SBStorageTokenPrefix = 'LM2r' // random prefix
 
@@ -2749,12 +2750,12 @@ class Channel extends SBChannelKeys {
     }
   }
 
-
   /** Authorizes/registers this channel on the provided server */
   create(storageToken: SBStorageToken, channelServer: SBChannelId = this.channelServer!): Promise<SBChannelHandle> {
     if (DBG) console.log("==== Channel.create() called with storageToken:", storageToken, "and channelServer:", channelServer)
     _sb_assert(storageToken !== null, '[Channel.create] Missing storage token')
-    _sb_assert(channelServer, '[Channel.create] Missing channel server')
+    if (channelServer) this.channelServer = channelServer;
+    _sb_assert(this.channelServer, '[Channel.create] Missing channel server (neither provided nor in channelKeys)')
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       await this.channelReady
       this.channelData.storageToken = validate_SBStorageToken(storageToken)
@@ -2775,7 +2776,6 @@ class Channel extends SBChannelKeys {
         }).catch((e) => { reject("Channel.create() failed: " + WrapError(e)) })
     })
   }
-
 
   /** Disabled for now  */
   getLastMessageTimes() {
