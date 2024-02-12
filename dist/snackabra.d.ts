@@ -297,7 +297,11 @@ declare class Channel extends SBChannelKeys {
     getDecryptedMessages(messageKeys: Set<string>): Promise<Map<string, any>>;
     getMessages(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
     send(msg: SBMessage | any): Promise<string>;
-    setPage(page: any): Promise<any>;
+    setPage(options: {
+        page: any;
+        prefix?: number;
+        type?: string;
+    }): Promise<any>;
     getPage(): Promise<any>;
     acceptVisitor(userId: SBUserId): Promise<any>;
     getCapacity(): Promise<any>;

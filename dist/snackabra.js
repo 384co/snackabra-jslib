@@ -1905,12 +1905,32 @@ class Channel extends SBChannelKeys {
         await sbm.ready;
         return this.callApi('/send', sbm.message);
     }
-    setPage(page) { return this.callApi('/setPage', page); }
+    setPage(options) {
+        var { page, prefix, type } = options;
+        _sb_assert(page, "Channel.setPage: no page (contents) provided");
+        prefix = prefix || 12;
+        type = type || 'sb384payloadV3';
+        if (type) {
+            return this.callApi('/setPage', {
+                page: page,
+                type: type,
+                prefix: prefix,
+            });
+        }
+        else {
+            return this.callApi('/setPage', page);
+        }
+    }
     async getPage() {
         const prefix = this.hashB32;
         if (DBG)
             console.log(`==== ChannelApi.getPage: calling fetch with: ${prefix}`);
-        return extractPayload(await SBApiFetch(this.channelServer + '/api/v2/page/' + prefix)).payload;
+        const page = await SBFetch(this.channelServer + '/api/v2/page/' + prefix);
+        const contentType = page.headers.get('content-type');
+        if (contentType !== 'sb384payloadV3')
+            throw new SBError("[Channel.getPage] Can only handle 'sb384payloadV3' content type, use 'fetch()'");
+        const buf = await page.arrayBuffer();
+        return extractPayload(buf).payload;
     }
     acceptVisitor(userId) { return this.callApi('/acceptVisitor', { userId: userId }); }
     getCapacity() { return (this.callApi('/getCapacity')); }

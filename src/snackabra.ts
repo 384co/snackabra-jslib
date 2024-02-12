@@ -2647,6 +2647,15 @@ export class Protocol_ECDH implements SBProtocol {
   }
 }
 
+
+// // same as in servers / workers.ts
+// const textLikeMimeTypes: Set<string> = new Set([
+//   "text/plain", "text/html", "text/css", "text/javascript", "text/xml", "text/csv", "application/json",
+//   "application/javascript", "application/xml", "application/xhtml+xml", "application/rss+xml",
+//   "application/atom+xml", "image/svg+xml",
+// ]);
+
+
 /**
  * Join a channel, taking a channel handle. Returns channel object.
  *
@@ -2853,8 +2862,29 @@ class Channel extends SBChannelKeys {
     return this.callApi('/send', sbm.message)
   }
 
-  @Ready @Owner setPage(page: any) { return this.callApi('/setPage', page) }
-  
+  /**
+   * Sets 'page' as the Channel's 'page' response. If type is provided, it will
+   * be used as the 'Content-Type' header in the HTTP request when retrieved;
+   * also, if the type is 'text-like', it will be recoded to UTF-8 before
+   * delivery. Prefix indicates the smallest number of acceptable characters in
+   * the link. Default is 12, shortest is 6. 
+   */
+  @Ready @Owner setPage(options: { page: any, prefix?: number, type?: string }) {
+    var { page, prefix, type } = options
+    _sb_assert(page, "Channel.setPage: no page (contents) provided")
+    prefix = prefix || 12
+    type = type || 'sb384payloadV3'
+    if (type) {
+      return this.callApi('/setPage', {
+        page: page,
+        type: type,
+        prefix: prefix,
+      })
+    } else {
+      return this.callApi('/setPage', page)
+    }
+  }
+
   /**
    * Note that 'getPage' can be done without any authentication, in which
    * case have a look at Snackabra.getPage(). If however the Page is locked,
@@ -2862,11 +2892,21 @@ class Channel extends SBChannelKeys {
    * 
    * But conversely, we don't need a prefix or anything else, since
    * we know the channel. So .. we can just shoot this off.
+   * 
+   * Note that a 'Page' might be mime-typed, in which case you should
+   * use a regular fetch() call and handle results accordingly. This
+   * function is for 'sb384payloadV3' only.
    */
   @Ready async getPage() {
     const prefix = this.hashB32 // we know the full prefix
     if (DBG) console.log(`==== ChannelApi.getPage: calling fetch with: ${prefix}`)
-    return extractPayload(await SBApiFetch(this.channelServer + '/api/v2/page/' + prefix)).payload
+    const page = await SBFetch(this.channelServer + '/api/v2/page/' + prefix)
+    const contentType = page.headers.get('content-type')
+    if (contentType !== 'sb384payloadV3')
+      throw new SBError("[Channel.getPage] Can only handle 'sb384payloadV3' content type, use 'fetch()'")
+    const buf = await page.arrayBuffer()
+    return extractPayload(buf).payload
+    // return extractPayload(await SBApiFetch(this.channelServer + '/api/v2/page/' + prefix)).payload
   }
 
   @Ready @Owner acceptVisitor(userId: SBUserId) { return this.callApi('/acceptVisitor', { userId: userId }) }
@@ -2900,8 +2940,6 @@ class Channel extends SBChannelKeys {
 
 
   /**
-   * ToDo: review this once all testing is working .. details have changed
-   * 
    * "budd" will spin a channel off an existing one that you own,
    * or transfer storage budget to an existing channel.
    * 
