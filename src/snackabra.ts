@@ -644,7 +644,7 @@ export class SBError extends Error {
       (Error as any).captureStackTrace(this, this.constructor);
     else
       this.stack = (new Error(message)).stack;
-    if (DBG) {
+    if (DBG2) {
       let atLine = null
       if (this.stack) {
         const stackLines = this.stack!.split("\n");
@@ -779,7 +779,7 @@ export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
       let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response'
       if (response.status) apiErrorMsg += ' [' + response.status + ']'
       if (retValue?.error) apiErrorMsg += ': ' + retValue.error
-      if (DBG) console.error("[SBApiFetch] error:\n", apiErrorMsg)
+      if (DBG2) console.error("[SBApiFetch] error:\n", apiErrorMsg)
       throw new SBError(apiErrorMsg)
     } else {
       if (DBG2) console.log(
@@ -789,7 +789,7 @@ export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
       return (retValue)
     }
   } catch (e) {
-    if (DBG) console.error(`[SBApiFetch] caught error: ${e}`)
+    if (DBG2) console.error(`[SBApiFetch] caught error: ${e}`)
     if (response && response.body && !response.body.locked) {
       // occasionally we need to clean up, if the fetch gave a response but some
       // operation on the response failed (or some other weird stuff happens)
@@ -804,13 +804,15 @@ export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
 // variation on solving this issue:
 // https://kentcdodds.com/blog/get-a-catch-block-error-message-with-typescript
 function WrapError(e: any) {
-  const pre = ' ***ERRORMSGSTART*** ', post = ' ***ERRORMSGEND*** ';
-  if (e instanceof Error) {
+  const pre = ' *ErrorStart* ', post = ' *ErrorEnd* '; // only for 'unknown' sources
+  if (e instanceof SBError) {
+    return e
+  } else if (e instanceof Error) {
     // could use 'e' here, but some variations of 'e' do not allow 'message' to be accessed
     if (DBG) console.error('[WrapError] Error: \n', e)
-    return new Error(pre + e.message + post)
+    return new SBError(pre + e.message + post)
   }
-  else return new Error(pre + String(e) + post);
+  else return new SBError(pre + String(e) + post);
 }
 
 function _sb_exception(loc: string, msg: string) {
@@ -2402,7 +2404,10 @@ export class SBChannelKeys extends SB384 {
       if (DBG2) console.log("==== ChannelApi.callApi: calling fetch with init:\n", init)
       SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId! + path, init)
         .then((ret: any) => { resolve(ret) })
-        .catch((e: Error) => { reject("[Channel.callApi] Error: " + WrapError(e)) })
+        .catch((e: Error) => {
+          if (e instanceof SBError) reject(e)
+          else reject("[Channel.callApi] Error: " + WrapError(e))
+        })
     })
   }
 

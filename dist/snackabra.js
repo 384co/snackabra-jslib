@@ -275,7 +275,7 @@ export class SBError extends Error {
             Error.captureStackTrace(this, this.constructor);
         else
             this.stack = (new Error(message)).stack;
-        if (DBG) {
+        if (DBG2) {
             let atLine = null;
             if (this.stack) {
                 const stackLines = this.stack.split("\n");
@@ -382,7 +382,7 @@ export async function SBApiFetch(input, init) {
                 apiErrorMsg += ' [' + response.status + ']';
             if (retValue?.error)
                 apiErrorMsg += ': ' + retValue.error;
-            if (DBG)
+            if (DBG2)
                 console.error("[SBApiFetch] error:\n", apiErrorMsg);
             throw new SBError(apiErrorMsg);
         }
@@ -393,7 +393,7 @@ export async function SBApiFetch(input, init) {
         }
     }
     catch (e) {
-        if (DBG)
+        if (DBG2)
             console.error(`[SBApiFetch] caught error: ${e}`);
         if (response && response.body && !response.body.locked) {
             if (DBG2)
@@ -407,14 +407,17 @@ export async function SBApiFetch(input, init) {
     }
 }
 function WrapError(e) {
-    const pre = ' ***ERRORMSGSTART*** ', post = ' ***ERRORMSGEND*** ';
-    if (e instanceof Error) {
+    const pre = ' *ErrorStart* ', post = ' *ErrorEnd* ';
+    if (e instanceof SBError) {
+        return e;
+    }
+    else if (e instanceof Error) {
         if (DBG)
             console.error('[WrapError] Error: \n', e);
-        return new Error(pre + e.message + post);
+        return new SBError(pre + e.message + post);
     }
     else
-        return new Error(pre + String(e) + post);
+        return new SBError(pre + String(e) + post);
 }
 function _sb_exception(loc, msg) {
     const m = '[_sb_exception] << SB lib error (' + loc + ': ' + msg + ') >>';
@@ -1596,7 +1599,12 @@ export class SBChannelKeys extends SB384 {
                 console.log("==== ChannelApi.callApi: calling fetch with init:\n", init);
             SBApiFetch(this.channelServer + '/api/v2/channel/' + this.#channelId + path, init)
                 .then((ret) => { resolve(ret); })
-                .catch((e) => { reject("[Channel.callApi] Error: " + WrapError(e)); });
+                .catch((e) => {
+                if (e instanceof SBError)
+                    reject(e);
+                else
+                    reject("[Channel.callApi] Error: " + WrapError(e));
+            });
         });
     }
 }
