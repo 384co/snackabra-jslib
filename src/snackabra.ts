@@ -26,7 +26,7 @@ const version = '2.0.0-alpha.5 (build 082)' // working on 2.0.0 release
 //#region Interfaces - Types
 
 // minimum when creating a new channel. channels can be reduced below this, but
-// not created below this.
+// not created below this. todo: this should be from a server config.
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024; // 8 MB
 
 export const SBStorageTokenPrefix = 'LM2r' // random prefix
@@ -2387,7 +2387,7 @@ export class SBChannelKeys extends SB384 {
   callApi(path: string): Promise<any>
   callApi(path: string, apiPayload: any): Promise<any>
   callApi(path: string, apiPayload?: any): Promise<any> {
-    _sb_assert(this.channelServer, "[ChannelApi.callApi] channelServer is unknown")
+    _sb_assert(this.channelServer, "[ChannelApi.callApi] channelServer is unknown (you can just set it, eg 'channel.channelServer = ...')")
     if (DBG) console.log("ChannelApi.callApi: calling fetch with path:", path)
     if (DBG2) console.log("... and body:", apiPayload)
     _sb_assert(this.#channelId && path, "Internal Error (L2528)")

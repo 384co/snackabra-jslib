@@ -1581,7 +1581,7 @@ export class SBChannelKeys extends SB384 {
         return validate_ChannelApiBody(apiBody);
     }
     callApi(path, apiPayload) {
-        _sb_assert(this.channelServer, "[ChannelApi.callApi] channelServer is unknown");
+        _sb_assert(this.channelServer, "[ChannelApi.callApi] channelServer is unknown (you can just set it, eg 'channel.channelServer = ...')");
         if (DBG)
             console.log("ChannelApi.callApi: calling fetch with path:", path);
         if (DBG2)
