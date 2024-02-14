@@ -38,6 +38,7 @@ export interface Message {
     body: any;
     channelId: SBChannelId;
     sender: SBUserId;
+    messageTo?: SBUserId;
     senderPublicKey: SBUserPublicKey;
     senderTimestamp: number;
     serverTimestamp: number;
@@ -175,7 +176,6 @@ export declare class SBCrypto {
     exportKey(format: 'jwk', key: CryptoKey): Promise<JsonWebKey | undefined>;
     encrypt(data: BufferSource, key: CryptoKey, params: EncryptParams): Promise<ArrayBuffer>;
     wrap(body: any, sender: SBUserId, encryptionKey: CryptoKey, salt: ArrayBuffer, signingKey: CryptoKey, options?: MessageOptions): Promise<ChannelMessage>;
-    unwrapMessage(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer>;
     sign(signKey: CryptoKey, contents: ArrayBuffer): Promise<ArrayBuffer>;
     verify(verifyKey: CryptoKey, sign: ArrayBuffer, contents: ArrayBuffer): Promise<boolean>;
     str2ab(string: string): Uint8Array;
@@ -289,13 +289,13 @@ declare class Channel extends SBChannelKeys {
     get ready(): Promise<Channel>;
     get ChannelReadyFlag(): boolean;
     get api(): this;
-    deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<ChannelMessage | undefined>;
+    extractMessage(msgRaw: ChannelMessage): Promise<Message | undefined>;
+    extractMessageMap(msgMap: Map<string, ChannelMessage>): Promise<Map<string, Message>>;
     create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<SBChannelHandle>;
     getLastMessageTimes(): void;
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
-    decryptMessage(value: ArrayBuffer): Promise<ChannelMessage | undefined>;
-    getDecryptedMessages(messageKeys: Set<string>): Promise<Map<string, any>>;
-    getMessages(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
+    getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
+    getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>>;
     send(msg: SBMessage | any): Promise<string>;
     setPage(options: {
         page: any;

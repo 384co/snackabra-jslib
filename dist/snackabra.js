@@ -83,13 +83,13 @@ export function deComposeMessageKey(key) {
 export function validate_Message(data) {
     if (!data)
         throw new SBError(`invalid Message (null or undefined)`);
-    else if (data.body && typeof data.body === 'object'
+    else if (data.body !== undefined && data.body !== null
         && data.channelId && typeof data.channelId === 'string' && data.channelId.length === 43
         && data.sender && typeof data.sender === 'string' && data.sender.length === 43
         && data.senderPublicKey && typeof data.senderPublicKey === 'string' && data.senderPublicKey.length > 0
         && data.senderTimestamp && Number.isInteger(data.senderTimestamp)
         && data.serverTimestamp && Number.isInteger(data.serverTimestamp)
-        && data._id && typeof data._id === 'string' && data._id.length === 86) {
+        && data._id && typeof data._id === 'string' && data._id.length === 75) {
         return data;
     }
     else {
@@ -1115,27 +1115,6 @@ export class SBCrypto {
         }
         return message;
     }
-    unwrapMessage(k, o) {
-        return new Promise(async (resolve, reject) => {
-            try {
-                if (!o.ts)
-                    throw new SBError(`unwrap() - no timestamp in encrypted message`);
-                const { c: t, iv: iv } = o;
-                _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)");
-                const view = new DataView(new ArrayBuffer(8));
-                view.setFloat64(0, o.ts);
-                const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t);
-                resolve(d);
-            }
-            catch (e) {
-                if (DBG)
-                    console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`);
-                if (DBG2)
-                    console.log("message was \n", o);
-                reject(e);
-            }
-        });
-    }
     sign(signKey, contents) {
         return crypto.subtle.sign({ name: "ECDSA", hash: { name: "SHA-384" }, }, signKey, contents);
     }
@@ -1781,14 +1760,17 @@ class Channel extends SBChannelKeys {
     get ready() { return this.channelReady; }
     get ChannelReadyFlag() { return this[Channel.ReadyFlag]; }
     get api() { return this; }
-    async deCryptChannelMessage(channel, msgRaw) {
+    async extractMessage(msgRaw) {
+        if (DBG)
+            console.log("[extractMessage] Extracting message:", msgRaw);
         try {
+            msgRaw = validate_ChannelMessage(msgRaw);
             const f = msgRaw.f;
             if (!f)
                 return undefined;
             if (!this.visitors.has(f)) {
                 if (DBG2)
-                    console.log("++++ deCryptChannelMessage: need to update visitor table ...");
+                    console.log("++++ [extractMessage]: need to update visitor table ...");
                 const visitorMap = await this.callApi('/getPubKeys');
                 if (!visitorMap || !(visitorMap instanceof Map))
                     return undefined;
@@ -1796,32 +1778,57 @@ class Channel extends SBChannelKeys {
                     console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP);
                 for (const [k, v] of visitorMap) {
                     if (DBG2)
-                        console.log("++++ deCryptChannelMessage: adding visitor:", k, v);
+                        console.log("++++ [extractMessage]: adding visitor:", k, v);
                     this.visitors.set(k, v);
                 }
             }
             _sb_assert(this.visitors.has(f), `Cannot find sender userId hash ${f} in public key map`);
-            const k = await channel.protocol?.decryptionKey(this, msgRaw);
+            const k = await this.protocol?.decryptionKey(this, msgRaw);
             if (!k)
                 return undefined;
             try {
-                const msgDecrypted = await sbCrypto.unwrapMessage(k, msgRaw);
-                const msg = extractPayload(msgDecrypted).payload;
-                if (DBG2)
-                    console.log("++++ deCryptChannelMessage: decrypted message:\n", msg);
-                return msg;
+                if (!msgRaw.ts)
+                    throw new SBError(`unwrap() - no timestamp in encrypted message`);
+                const { c: t, iv: iv } = msgRaw;
+                _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)");
+                const view = new DataView(new ArrayBuffer(8));
+                view.setFloat64(0, msgRaw.ts);
+                const bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t);
+                if (!msgRaw._id)
+                    msgRaw._id = composeMessageKey(this.channelId, msgRaw.sts, msgRaw.i2);
+                if (msgRaw.ttl !== undefined && msgRaw.ttl !== 15)
+                    console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`);
+                const msg = {
+                    body: extractPayload(bodyBuffer).payload,
+                    channelId: this.channelId,
+                    sender: f,
+                    senderPublicKey: this.visitors.get(f),
+                    senderTimestamp: msgRaw.ts,
+                    serverTimestamp: msgRaw.sts,
+                    _id: msgRaw._id,
+                };
+                return validate_Message(msg);
             }
             catch (e) {
                 if (DBG)
-                    console.error("Message was not a payload of a ChannelMessage:\n");
+                    console.error("[extractMessage] Could not process message [L2766]:", e);
                 return undefined;
             }
         }
         catch (e) {
             if (DBG)
-                console.error("Message was not a payload of a ChannelMessage:\n", e);
+                console.error("[extractMessage] Could not process message [L2771]:", e);
             return undefined;
         }
+    }
+    async extractMessageMap(msgMap) {
+        const ret = new Map();
+        for (const [k, v] of msgMap) {
+            const msg = await this.extractMessage(v);
+            if (msg)
+                ret.set(k, msg);
+        }
+        return ret;
     }
     create(storageToken, channelServer = this.channelServer) {
         if (DBG)
@@ -1862,50 +1869,38 @@ class Channel extends SBChannelKeys {
             resolve(messages);
         });
     }
-    async decryptMessage(value) {
-        if (!this.protocol)
-            throw new SBError("Channel.getMessages(): need protocol to decrypt messages");
-        const msgBuf = extractPayload(value).payload;
-        if (DBG2)
-            console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf);
-        const msgRaw = validate_ChannelMessage(msgBuf);
-        if (DBG2)
-            console.log("++++ deCryptChannelMessage: validated");
-        const decryptedMessage = await this.deCryptChannelMessage(this, msgRaw);
-        return decryptedMessage;
-    }
-    getDecryptedMessages(messageKeys) {
+    getRawMessageMap(messageKeys) {
         if (DBG)
-            console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys);
-        if (messageKeys.size === 0)
-            throw new SBError("Channel.getDecryptedMessages() - no message keys provided");
-        return new Promise(async (resolve, _reject) => {
-            _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)");
-            const messages = await this.callApi('/getMessages', messageKeys);
-            _sb_assert(messages, "Channel.getMessages: no messages (empty/null response)");
-            if (DBG2)
-                console.log(SEP, SEP, "getMessages - here are the raw ones\n", messages, SEP, SEP);
-            const decryptedMessages = new Map();
-            for (const [key, value] of messages.entries()) {
-                const decryptedMessage = await this.decryptMessage(value);
-                if (decryptedMessage)
-                    decryptedMessages.set(key, decryptedMessage);
-            }
-            if (DBG2)
-                console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP);
-            resolve(decryptedMessages);
-        });
-    }
-    getMessages(messageKeys) {
-        if (DBG)
-            console.log("Channel.getMessages() called with messageKeys:", messageKeys);
+            console.log("[getRawMessageMap] called with messageKeys:", messageKeys);
         if (messageKeys.size === 0)
             throw new SBError("Channel.getMessages() - no message keys provided");
         return new Promise(async (resolve, _reject) => {
-            _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)");
-            const messages = await this.callApi('/getMessages', messageKeys);
-            _sb_assert(messages, "Channel.getMessages: no messages (empty/null response)");
-            resolve(messages);
+            _sb_assert(this.channelId, "[getRawMessageMap]  no channel ID (?)");
+            const messagePayloads = await this.callApi('/getMessages', messageKeys);
+            _sb_assert(messagePayloads, "[getRawMessageMap]  no messages (empty/null response)");
+            if (DBG2)
+                console.log(SEP, SEP, "[getRawMessageMap] - here are the raw ones\n", messagePayloads, SEP, SEP);
+            resolve(messagePayloads);
+        });
+    }
+    getMessageMap(messageKeys) {
+        if (DBG)
+            console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys);
+        if (messageKeys.size === 0)
+            throw new SBError("[getMessageMap] no message keys provided");
+        return new Promise(async (resolve, _reject) => {
+            const messagePayloads = await this.callApi('/getMessages', messageKeys);
+            const messages = new Map();
+            for (const [k, v] of messagePayloads) {
+                try {
+                    messages.set(k, validate_ChannelMessage(extractPayload(v).payload));
+                }
+                catch (e) {
+                    if (DBG)
+                        console.warn(SEP, "[getMessageMap] Failed extract and/or to validate message:", SEP, v, SEP, e, SEP);
+                }
+            }
+            resolve(await this.extractMessageMap(messages));
         });
     }
     async send(msg) {
@@ -2130,8 +2125,6 @@ class ChannelSocket extends Channel {
         _sb_assert(message.channelId === this.channelId, "[ChannelSocket] received message for wrong channel?");
         if (this.#traceSocket)
             console.log("Received socket message:", message);
-        if (!message._id)
-            message._id = composeMessageKey(message.channelId, message.sts, message.i2);
         const hash = await crypto.subtle.digest('SHA-256', message.c);
         const ack_id = arrayBufferToBase64url(hash);
         if (DBG)
@@ -2143,19 +2136,16 @@ class ChannelSocket extends Channel {
             this.#ack.delete(ack_id);
             r("success");
         }
-        const contents = await this.deCryptChannelMessage(this, message);
-        const m = {
-            body: contents,
-            channelId: message.channelId,
-            sender: message.f,
-            senderPublicKey: this.visitors.get(message.f),
-            senderTimestamp: message.ts,
-            serverTimestamp: message.sts,
-            _id: message._id,
-        };
-        if (DBG)
-            console.log("Repackaged and will deliver 'Message':", m);
-        this.onMessage(m);
+        const m = await this.extractMessage(message);
+        if (m) {
+            if (DBG)
+                console.log("Repackaged and will deliver 'Message':", m);
+            this.onMessage(m);
+        }
+        else {
+            if (DBG)
+                console.log("Message could not be parsed, will not deliver");
+        }
     };
     #channelSocketReadyFactory() {
         return new Promise(async (resolve, reject) => {

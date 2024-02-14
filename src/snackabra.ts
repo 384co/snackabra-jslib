@@ -193,13 +193,17 @@ export function deComposeMessageKey(key: string) {
 }
 
 /**
- * The "app" level message format, provided to onMessage (by ChannelSocket)
- * Note it will only be forwarded if verified.
+ * The "app" level message format, provided to onMessage (by ChannelSocket), and
+ * similar interfaces. Note it will only be forwarded if verified.
  */
 export interface Message {
+  // this is the actual message, most apps don't need the rest
   body: any;
+
+  // the rest is provided by channel server, or reconstructed by library
   channelId: SBChannelId;
   sender: SBUserId;
+  messageTo?: SBUserId; // implied is userId of channel, but note that all 'private' messages are 'cc' to Owner
   senderPublicKey: SBUserPublicKey;
   senderTimestamp: number;
   serverTimestamp: number; // reconstructed from timestampPrefix
@@ -210,13 +214,14 @@ export interface Message {
 export function validate_Message(data: Message): Message {
   if (!data) throw new SBError(`invalid Message (null or undefined)`)
   else if (
-    data.body && typeof data.body === 'object'
+    // body can be anything, but must be something
+    data.body !== undefined && data.body !== null
     && data.channelId && typeof data.channelId === 'string' && data.channelId.length === 43
     && data.sender && typeof data.sender === 'string' && data.sender.length === 43
     && data.senderPublicKey && typeof data.senderPublicKey === 'string' && data.senderPublicKey.length > 0
     && data.senderTimestamp && Number.isInteger(data.senderTimestamp)
     && data.serverTimestamp && Number.isInteger(data.serverTimestamp)
-    && data._id && typeof data._id === 'string' && data._id.length === 86
+    && data._id && typeof data._id === 'string' && data._id.length === 75 // 86 new v3 format is shorter (base 4)
   ) {
     return data as Message
   } else {
@@ -266,51 +271,51 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
 }
 
 /**
- * SB standard wrapped encrypted messages.
- * 
+ * SB standard wrapped encrypted messages. This is largely 'internal', normal
+ * usage of the library will work at a higher level ('Message' interface).
+ *
  * Encryption is done with AES-GCM, 16 bytes of salt.
- * 
- * Timestamp prefix is fourty-two (26) [0-3] characters.
- * It encodes epoch milliseconds * 4^4 (last four are '0000').
- * 
- * "Everything is optional" as this is used in multiple contexts.
- * Use ``validate_ChannelMessage()`` to validate.
- * 
- * Note that channel server doesn't need userPublicKey on every
- * channel message since it's provided on websocket setup.
- * 
- * Complete channel "_id" is channelId + '_' + subChannel + '_' + timestampPrefix
- * This allows (prefix) searches within time spans on a per channel
- * (and if applicable, subchannel) basis. Special subchannel 'blank'
+ *
+ * Timestamp prefix is fourty-two (26) [0-3] characters. It encodes epoch
+ * milliseconds * 4^4 (last four are '0000').
+ *
+ * "Everything is optional" as this is used in multiple contexts. Use
+ * ``validate_ChannelMessage()`` to validate.
+ *
+ * Note that channel server doesn't need userPublicKey on every channel message
+ * since it's provided on websocket setup.
+ *
+ * Complete channel "_id" is channelId + '_' + subChannel + '_' +
+ * timestampPrefix This allows (prefix) searches within time spans on a per
+ * channel (and if applicable, subchannel) basis. Special subchannel 'blank'
  * (represented as '____') is the default channel and generally the only one
  * that visitors have access to.
- * 
- * A core exception is that all messages with a TTL in the range 1-7
- * (eg range of 1 minute to 72 hours) are duplicated onto subchannels
- * matching the TTLs, namely '___1', '___2', '___3', etc. Thus
- * an oldMessages fetch can for example request '___4' to get all messages
- * that were sent with TTL 4 (eg 1 hour). Which also means that as
- * Owner, if you set TTL on a message then you can't use the fourth character
- * (if you try to while setting a TTL, channel server will reject it).
- * 
+ *
+ * A core exception is that all messages with a TTL in the range 1-7 (eg range
+ * of 1 minute to 72 hours) are duplicated onto subchannels matching the TTLs,
+ * namely '___1', '___2', '___3', etc. Thus an oldMessages fetch can for example
+ * request '___4' to get all messages that were sent with TTL 4 (eg 1 hour).
+ * Which also means that as Owner, if you set TTL on a message then you can't
+ * use the fourth character (if you try to while setting a TTL, channel server
+ * will reject it).
+ *
  * Properties that are generally retained or communicated inside payload
  * packaging have short names (apologies for lack of readability).
  * 'unencryptedContents' has a long and cumbersome name for obvious reasons.
- * 
+ *
  * There are a couple of semantics that are enforced by the channel server;
  * since this is partly a policy issue of the channel server, anything in this
- * jslib documentation might be incomplete. For example, baseline channel
- * server does not allow messages to both be 'infinite ttl' and addressed
- * (eg have a 'to' field value). 
- * 
- * If any protocol wants to do additional or different encryption,
- * it would need to wrap: the core binary format is defined to have room
- * for iv and salt, and prescribes sizes 12 and 16 respectively. 
- * Strictly speaking, the protocol can use these 28 bytes for whatever
- * it wants. A protocol that wants to do something completely different
- * can simply modify the 'c' (contents) buffer and append any binary data
- * it needs.
- * 
+ * jslib documentation might be incomplete. For example, baseline channel server
+ * does not allow messages to both be 'infinite ttl' and addressed (eg have a
+ * 'to' field value). 
+ *
+ * If any protocol wants to do additional or different encryption, it would need
+ * to wrap: the core binary format is defined to have room for iv and salt, and
+ * prescribes sizes 12 and 16 respectively. Strictly speaking, the protocol can
+ * use these 28 bytes for whatever it wants. A protocol that wants to do
+ * something completely different can simply modify the 'c' (contents) buffer
+ * and append any binary data it needs.
+ *
  */
 
 export interface ChannelMessage {
@@ -1729,26 +1734,6 @@ export class SBCrypto {  /******************************************************
     return message
   }
 
-  /** Decrypts a 'wrapped' message, including consistency check(s) */
-  unwrapMessage(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
-    return new Promise(async (resolve, reject) => {
-      try {
-        if (!o.ts) throw new SBError(`unwrap() - no timestamp in encrypted message`)
-        const { c: t, iv: iv } = o // encryptedContentsMakeBinary(o)
-        _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
-        const view = new DataView(new ArrayBuffer(8));
-        view.setFloat64(0, o.ts);
-        const d = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t!)
-        resolve(d)
-      } catch (e) {
-        // not an error per se, for example could just be wrong key
-        if (DBG) console.error(`unwrap(): cannot unwrap/decrypt - rejecting: ${e}`)
-        if (DBG2) console.log("message was \n", o)
-        reject(e);
-      }
-    });
-  }
-
   // unwrapShard(k: CryptoKey, o: ChannelMessage): Promise<ArrayBuffer> {
   //   return new Promise(async (resolve, reject) => {
   //     try {
@@ -2727,41 +2712,89 @@ class Channel extends SBChannelKeys {
   // @Memoize @Ready get protocol() { return this.#protocol }
   @Memoize @Ready get api() { return this } // for compatibility
 
-  // async deCryptChannelMessage(channel: Channel, id: string, buf: ArrayBuffer): Promise<any> {
-  async deCryptChannelMessage(channel: Channel, msgRaw: ChannelMessage): Promise<ChannelMessage | undefined> {
-    // if (DBG2) console.log("Asked to decrypt:", id, buf)
-    // if (!buf) return undefined;
+  /**
+   * Takes a 'ChannelMessage' format and presents it as a 'Message'.
+   * Does a variety of things. If there is any issue, will return 'undefined',
+   * and you should probably just ignore the message. Only requirement
+   * is you extract payload before calling this (sometimes the callee
+   * needs to, or wants to, fill in things in ChannelMessage)
+   */
+  async extractMessage(msgRaw: ChannelMessage): Promise<Message | undefined> {
+    if (DBG) console.log("[extractMessage] Extracting message:", msgRaw)
     try {
+      msgRaw = validate_ChannelMessage(msgRaw)
       const f = msgRaw.f // protocols may use 'from', so needs to be in channel visitor map
       if (!f) return undefined
       if (!this.visitors.has(f)) {
-        if (DBG2) console.log("++++ deCryptChannelMessage: need to update visitor table ...")
+        if (DBG2) console.log("++++ [extractMessage]: need to update visitor table ...")
         const visitorMap = await this.callApi('/getPubKeys')
         if (!visitorMap || !(visitorMap instanceof Map)) return undefined
         if (DBG2) console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP)
         for (const [k, v] of visitorMap) {
-          if (DBG2) console.log("++++ deCryptChannelMessage: adding visitor:", k, v)
+          if (DBG2) console.log("++++ [extractMessage]: adding visitor:", k, v)
           this.visitors.set(k, v)
         }
       }
       _sb_assert(this.visitors.has(f), `Cannot find sender userId hash ${f} in public key map`)
-      const k = await channel.protocol?.decryptionKey(this, msgRaw)
+      const k = await this.protocol?.decryptionKey(this, msgRaw)
       if (!k) return undefined
       try {
-        const msgDecrypted = await sbCrypto.unwrapMessage(k!, msgRaw)
-        // const msg = validate_ChannelMessage(extractPayload(msgDecrypted).payload)
-        const msg = extractPayload(msgDecrypted).payload
-        if (DBG2) console.log("++++ deCryptChannelMessage: decrypted message:\n", msg)
-        return msg
+        // const body = await sbCrypto.extractMessage(k!, msgRaw)
+        // extractMessage(k: CryptoKey, o: ChannelMessage): Promise<any> {
+
+        if (!msgRaw.ts) throw new SBError(`unwrap() - no timestamp in encrypted message`)
+        const { c: t, iv: iv } = msgRaw // encryptedContentsMakeBinary(o)
+        _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
+        const view = new DataView(new ArrayBuffer(8));
+        view.setFloat64(0, msgRaw.ts);
+        const bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t!)
+
+        // const m: Message = {
+        //   body: contents,
+        //   channelId: message.channelId!,
+        //   sender: message.f!,
+        //   senderPublicKey: this.visitors.get(message.f!)!,
+        //   senderTimestamp: message.ts!,
+        //   serverTimestamp: message.sts!,
+        //   _id: message._id!,
+        // }
+
+        if (!msgRaw._id)
+          msgRaw._id = composeMessageKey(this.channelId!, msgRaw.sts!, msgRaw.i2)
+
+        if(msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
+
+        // if (DBG) console.log("++++ [extractMessage]: (ChannelMessage):\n", channelMsg)
+        // TODO: i get channelId and senderId identitical at times ...
+        const msg: Message = {
+          body: extractPayload(bodyBuffer).payload,
+          channelId: this.channelId!,
+          sender: f,
+          senderPublicKey: this.visitors.get(f)!,
+          senderTimestamp: msgRaw.ts!,
+          serverTimestamp: msgRaw.sts!,
+          // eol: msgRaw.eol, // ToDo: various places for TTL/EOL processing
+          _id: msgRaw._id!,
+        }
+        return validate_Message(msg)
       } catch (e) {
-        if (DBG) console.error("Message was not a payload of a ChannelMessage:\n")
+        if (DBG) console.error("[extractMessage] Could not process message [L2766]:", e)
         return undefined
       }
 
     } catch (e) {
-      if (DBG) console.error("Message was not a payload of a ChannelMessage:\n", e)
+      if (DBG) console.error("[extractMessage] Could not process message [L2771]:", e)
       return undefined
     }
+  }
+
+  async extractMessageMap(msgMap: Map<string, ChannelMessage>): Promise<Map<string, Message>> {
+    const ret = new Map<string, Message>()
+    for (const [k, v] of msgMap) {
+      const msg = await this.extractMessage(v)
+      if (msg) ret.set(k, msg)
+    }
+    return ret
   }
 
   /** Authorizes/registers this channel on the provided server */
@@ -2797,6 +2830,9 @@ class Channel extends SBChannelKeys {
     throw new SBError("Channel.getLastMessageTimes(): not supported in 2.0 yet")
   }
 
+  /**
+   * Returns map of message keys from the server corresponding to the request.
+   */
   getMessageKeys(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Set<string>> {
     // todo: add IndexedDB caching - see above
     return new Promise(async (resolve, _reject) => {
@@ -2814,50 +2850,70 @@ class Channel extends SBChannelKeys {
     });
   }
 
-  async decryptMessage(value: ArrayBuffer): Promise<ChannelMessage | undefined> {
-    if (!this.protocol) throw new SBError("Channel.getMessages(): need protocol to decrypt messages")
-    const msgBuf = extractPayload(value).payload
-    if (DBG2) console.log("++++ deCryptChannelMessage: msgBuf:\n", msgBuf)
-    const msgRaw = validate_ChannelMessage(msgBuf)
-    if (DBG2) console.log("++++ deCryptChannelMessage: validated")
-    // const decryptedMessage = await this.deCryptChannelMessage(this, key, value)
-    const decryptedMessage = await this.deCryptChannelMessage(this, msgRaw)
-    return decryptedMessage
-  }
+  // async decryptMessage(value: ArrayBuffer): Promise<Message | undefined> {
+  //   if (!this.protocol) throw new SBError("Channel.getMessages(): need protocol to decrypt messages")
+  //   const msgBuf = extractPayload(value).payload
+  //   if (DBG) console.log("++++ deCryptMessage: msgBuf:\n", msgBuf)
+  //   const msgRaw = validate_ChannelMessage(msgBuf)
+  //   if (DBG) console.log("++++ deCryptChannelMessage: validated")
+  //   // const decryptedMessage = await this.deCryptChannelMessage(this, key, value)
+  //   const msg = await this.extractMessage(msgRaw)
+  //   return msg
+  // }
 
-  getDecryptedMessages(messageKeys: Set<string>): Promise<Map<string, any>> {
-    if (DBG) console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys)
-    if (messageKeys.size === 0) throw new SBError("Channel.getDecryptedMessages() - no message keys provided")
+
+  // get raw set of messages from the server
+  getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>> {
+    if (DBG) console.log("[getRawMessageMap] called with messageKeys:", messageKeys)
+    if (messageKeys.size === 0) throw new SBError("Channel.getMessages() - no message keys provided")
     return new Promise(async (resolve, _reject) => {
-      _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
-      const messages: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
-      _sb_assert(messages, "Channel.getMessages: no messages (empty/null response)")
-      if (DBG2) console.log(SEP, SEP, "getMessages - here are the raw ones\n", messages, SEP, SEP)
+      _sb_assert(this.channelId, "[getRawMessageMap]  no channel ID (?)")
+      const messagePayloads: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
+      _sb_assert(messagePayloads, "[getRawMessageMap]  no messages (empty/null response)")
+      if (DBG2) console.log(SEP, SEP, "[getRawMessageMap] - here are the raw ones\n", messagePayloads, SEP, SEP)
+      resolve(messagePayloads)
+    });
+  }
+  
+  /**
+   * Main function for getting a chunk of messages from the server.
+   */
+  getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>> {
+    if (DBG) console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys)
+    if (messageKeys.size === 0) throw new SBError("[getMessageMap] no message keys provided")
+    return new Promise(async (resolve, _reject) => {
+
+      // _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
+      const messagePayloads: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
+      // _sb_assert(messagePayloads, "Channel.getMessages: no messages (empty/null response)")
+      
 
       // we want to iterate through all the entries in the map, and call 'deCryptChannelMessage' on each
       // one with parameters of the key and the value (which is the encrypted contents). if it failed
       // to decrypt, it will return 'undefined', otherwise we add the returned 'Message' object and
       // add it to a NEW map, which maps from the key to the decrypted message
 
-      const decryptedMessages = new Map<string, ChannelMessage>()
-      for (const [key, value] of messages.entries()) {
-        const decryptedMessage = await this.decryptMessage(value)
-        if (decryptedMessage) decryptedMessages.set(key, decryptedMessage)
-      }
-      if (DBG2) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP)
-      resolve(decryptedMessages)
-    });
-  }
+      // const decryptedMessages = new Map<string, ChannelMessage>()
+      // for (const [key, value] of messages.entries()) {
+      //   const decryptedMessage = await this.decryptMessage(value)
+      //   if (decryptedMessage) decryptedMessages.set(key, decryptedMessage)
+      // }
+      // if (DBG2) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP)
+      // resolve(decryptedMessages)7
 
-  // same as above except we do not do any decryption and just provide the raw set of messages from the server
-  getMessages(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>> {
-    if (DBG) console.log("Channel.getMessages() called with messageKeys:", messageKeys)
-    if (messageKeys.size === 0) throw new SBError("Channel.getMessages() - no message keys provided")
-    return new Promise(async (resolve, _reject) => {
-      _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
-      const messages: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
-      _sb_assert(messages, "Channel.getMessages: no messages (empty/null response)")
-      resolve(messages)
+      // we first have to apply extractPayload().payload to each value, and only
+      // include entries that pass validate_ChannelMessage()
+      const messages = new Map<string, ChannelMessage>()
+      for (const [k, v] of messagePayloads) {
+        try {
+           messages.set(k, validate_ChannelMessage(extractPayload(v).payload))
+        } catch (e) {
+          if (DBG) console.warn(SEP, "[getMessageMap] Failed extract and/or to validate message:", SEP, v, SEP, e, SEP)
+        }
+      }
+
+      resolve(await this.extractMessageMap(messages))
+
     });
   }
 
@@ -3138,10 +3194,10 @@ class ChannelSocket extends Channel {
 
     if (this.#traceSocket) console.log("Received socket message:", message)
 
-    if (!message._id)
-      message._id = composeMessageKey(message.channelId!, message.sts!, message.i2)
+    // if (!message._id)
+    //   message._id = composeMessageKey(message.channelId!, message.sts!, message.i2)
 
-    // check if this message is one that we've recently sent
+    // check if this message is one that we've recently sent (track 'ack')
     const hash = await crypto.subtle.digest('SHA-256', message.c!)
     const ack_id = arrayBufferToBase64url(hash)
     if (DBG) console.log("Received message with hash:", ack_id)
@@ -3152,25 +3208,29 @@ class ChannelSocket extends Channel {
       r("success") // we first resolve that outstanding send (and then also deliver message)
     }
 
-    // const contents = await this.deCryptChannelMessage(this, message._id, message.c!)
-    const contents = await this.deCryptChannelMessage(this, message)
+    // // const contents = await this.deCryptChannelMessage(this, message._id, message.c!)
+    // const contents = await this.deCryptChannelMessage(this, message)
 
-    // we shuffle around the data into an easier-to-consume format
-    const m: Message = {
-      body: contents,
-      channelId: message.channelId!,
-      sender: message.f!,
-      senderPublicKey: this.visitors.get(message.f!)!,
-      senderTimestamp: message.ts!,
-      serverTimestamp: message.sts!,
-      _id: message._id!,
+    // // we shuffle around the data into an easier-to-consume format
+    // const m: Message = {
+    //   body: contents,
+    //   channelId: message.channelId!,
+    //   sender: message.f!,
+    //   senderPublicKey: this.visitors.get(message.f!)!,
+    //   senderTimestamp: message.ts!,
+    //   serverTimestamp: message.sts!,
+    //   _id: message._id!,
+    // }
+
+    const m = await this.extractMessage(message)
+
+    if (m) {
+      if (DBG) console.log("Repackaged and will deliver 'Message':", m)
+      // call user-provided message handler
+      this.onMessage(m)
+    } else {
+      if (DBG) console.log("Message could not be parsed, will not deliver")
     }
-
-    if (DBG) console.log("Repackaged and will deliver 'Message':", m)
-
-    // call user-provided message handler
-    // this.onMessage(contents)
-    this.onMessage(m)
   }
 
   #channelSocketReadyFactory() {
