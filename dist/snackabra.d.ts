@@ -12,8 +12,8 @@ export interface SBStorageToken {
 export declare function validate_SBStorageToken(data: SBStorageToken): SBStorageToken;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
-    channelId: SBChannelId;
     userPrivateKey: SBUserPrivateKey;
+    channelId?: SBChannelId;
     channelServer?: string;
     channelData?: SBChannelData;
 }
@@ -216,7 +216,7 @@ export declare class SBChannelKeys extends SB384 {
     #private;
     sbChannelKeysReady: Promise<SBChannelKeys>;
     static ReadyFlag: symbol;
-    channelServer?: string;
+    channelServer: string;
     constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey);
     get ready(): Promise<SBChannelKeys>;
     get SBChannelKeysReadyFlag(): any;
@@ -247,7 +247,7 @@ declare class SBMessage {
     get ready(): Promise<SBMessage>;
     get SBMessageReadyFlag(): any;
     get message(): ChannelMessage;
-    send(): Promise<string>;
+    send(): Promise<any>;
 }
 export interface SBProtocol {
     encryptionKey(msg: SBMessage): Promise<CryptoKey>;
@@ -296,7 +296,7 @@ declare class Channel extends SBChannelKeys {
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
     getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
     getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>>;
-    send(msg: SBMessage | any): Promise<string>;
+    send(msg: any, options?: MessageOptions): Promise<string>;
     setPage(options: {
         page: any;
         prefix?: number;
@@ -326,7 +326,7 @@ declare class ChannelSocket extends Channel {
     channelSocketReady: Promise<ChannelSocket>;
     static ReadyFlag: symbol;
     onMessage: (_m: Message) => void;
-    constructor(handle: SBChannelHandle, onMessage: (m: Message) => void);
+    constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message) => void);
     get ready(): Promise<ChannelSocket>;
     get ChannelSocketReadyFlag(): boolean;
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
@@ -356,12 +356,12 @@ declare class Snackabra {
     #private;
     sbFetch: typeof SBFetch;
     constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean);
+    static get defaultChannelServer(): string;
     getPage(prefix: string): Promise<any>;
-    attach(handle: SBChannelHandle): Promise<Channel>;
     create(budgetChannel: Channel): Promise<SBChannelHandle>;
     create(storageToken: SBStorageToken): Promise<SBChannelHandle>;
-    connect(handle: SBChannelHandle): Channel;
-    connect(handle: SBChannelHandle, onMessage: (m: ChannelMessage) => void): ChannelSocket;
+    connect(handleOrKey: SBChannelHandle | SBUserPrivateKey): Channel;
+    connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: ChannelMessage) => void): ChannelSocket;
     get storage(): StorageApi;
     getStorageServer(): Promise<string>;
     get crypto(): SBCrypto;

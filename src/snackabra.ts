@@ -61,37 +61,35 @@ export function validate_SBStorageToken(data: SBStorageToken): SBStorageToken {
 }
 
 /** 
- * Complete descriptor of a channel. The channel ID is a hash of the public key
- * of the channel owner. The channel key is the private key with which we are
- * joining the channel.
- *
- * Note: an owner's channel handle can be reconstructed from just having owner
- * private key (SBUserPrivateKey) and channelServer (though channelServer an be
- * ''pinged'' to find it's home).
+ * Channel 'descriptor'. 
  */
 export interface SBChannelHandle {
   [SB_CHANNEL_HANDLE_SYMBOL]?: boolean, // future use for internal validation
 
-  // minimum info is channel id and the key with which we would connect
-  channelId: SBChannelId,
+  // minimum info is the key
   userPrivateKey: SBUserPrivateKey,
 
-  // channel server that hosts this channel
+  // if channelID is omitted, then the key will be treated as the Owner key
+  // (channelId is always derived from owner key)
+  channelId?: SBChannelId,
+
+  // if channel server is omitted, will use default (global) server
   channelServer?: string,
 
-  // server-side channel data; if missing the server can provide it;
-  // if the channel object is independent of a server, this should be in place
+  // server-side channel data; if missing the server can provide it; if the
+  // handle is meant to be 'completely stand-alone', then this is best included
   channelData?: SBChannelData,
 }
 
 function _checkChannelHandle(data: SBChannelHandle) {
   return (
-    data.channelId && data.channelId.length === 43
-    && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
+    data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
+    && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
     && (!data.channelServer || typeof data.channelServer === 'string')
     && (!data.channelData || _checkChannelData(data.channelData))
   )
 }
+
 export function validate_SBChannelHandle(data: SBChannelHandle): SBChannelHandle {
   if (!data) throw new SBError(`invalid SBChannelHandle (null or undefined)`)
   else if (data[SB_CHANNEL_HANDLE_SYMBOL]) return data as SBChannelHandle
@@ -2260,10 +2258,11 @@ export class SBChannelKeys extends SB384 {
   sbChannelKeysReady: Promise<SBChannelKeys>
   static ReadyFlag = Symbol('SBChannelKeysReadyFlag'); // see below for '(this as any)[<class>.ReadyFlag] = false;'
   #channelData?: SBChannelData
-  channelServer?: string // can be read/written freely
+  channelServer: string // can be read/written freely; will always have a value
 
   constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey) {
     // undefined (missing) is fine, but 'null' is not
+    let channelServer: string | undefined
     if (handleOrKey === null) throw new SBError(`SBChannelKeys constructor: you cannot pass 'null'`)
     if (handleOrKey) {
       if (typeof handleOrKey === 'string') {
@@ -2271,13 +2270,8 @@ export class SBChannelKeys extends SB384 {
         super(ownerPrivateKey, true)
       } else if (_checkChannelHandle(handleOrKey)) {
         const handle = validate_SBChannelHandle(handleOrKey)
+        channelServer = handle.channelServer
         super(handle.userPrivateKey, true);
-        if (handle.channelServer) {
-          this.channelServer = handle.channelServer;
-          // make sure there are no trailing '/' in channelServer
-          if (this.channelServer![this.channelServer!.length - 1] === '/')
-            this.channelServer = this.channelServer!.slice(0, -1);
-        }
         this.#channelId = handle.channelId
         this.#channelData = handle.channelData // which might not be there
       } else {
@@ -2287,6 +2281,12 @@ export class SBChannelKeys extends SB384 {
       // brand new, state will be derived from SB384 keys
       super()
     }
+    if (!channelServer) channelServer = Snackabra.defaultChannelServer;
+    // make sure there are no trailing '/' in channelServer
+    if (channelServer![channelServer!.length - 1] === '/')
+      this.channelServer = channelServer!.slice(0, -1);
+    this.channelServer = channelServer!;
+
     (this as any)[SBChannelKeys.ReadyFlag] = false
     this.sbChannelKeysReady = new Promise<SBChannelKeys>(async (resolve, reject) => {
       try {
@@ -2410,7 +2410,7 @@ const MAX_SB_BODY_SIZE = 64 * 1024
 export interface MessageOptions {
   ttl?: number,
   sendTo?: SBUserId,   // 't' in ChannelMessage
-  subChannel?: string, // 'i2' in ChannelMessage
+  subChannel?: string, // 'i2' in ChannelMessage, Owner only
   protocol?: SBProtocol,
 }
 
@@ -2466,7 +2466,9 @@ class SBMessage {
    */
   async send() {
     if (DBG2) console.log("SBMessage.send() - sending message:", this.message)
-    return this.channel.send(this)
+    await this.ready
+    return this.channel.callApi('/send', this.message)
+    // return this.channel.send(this)
   }
 } /* class SBMessage */
 
@@ -2851,7 +2853,7 @@ class Channel extends SBChannelKeys {
   }
 
   // async decryptMessage(value: ArrayBuffer): Promise<Message | undefined> {
-  //   if (!this.protocol) throw new SBError("Channel.getMessages(): need protocol to decrypt messages")
+  //   if (!this.protocol) throw new SBError("Channel.get..Messages(): need protocol to decrypt messages")
   //   const msgBuf = extractPayload(value).payload
   //   if (DBG) console.log("++++ deCryptMessage: msgBuf:\n", msgBuf)
   //   const msgRaw = validate_ChannelMessage(msgBuf)
@@ -2865,11 +2867,11 @@ class Channel extends SBChannelKeys {
   // get raw set of messages from the server
   getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>> {
     if (DBG) console.log("[getRawMessageMap] called with messageKeys:", messageKeys)
-    if (messageKeys.size === 0) throw new SBError("Channel.getMessages() - no message keys provided")
+    if (messageKeys.size === 0) throw new SBError("[getRawMessageMap] no message keys provided")
     return new Promise(async (resolve, _reject) => {
-      _sb_assert(this.channelId, "[getRawMessageMap]  no channel ID (?)")
+      _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)")
       const messagePayloads: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
-      _sb_assert(messagePayloads, "[getRawMessageMap]  no messages (empty/null response)")
+      _sb_assert(messagePayloads, "[getRawMessageMap] no messages (empty/null response)")
       if (DBG2) console.log(SEP, SEP, "[getRawMessageMap] - here are the raw ones\n", messagePayloads, SEP, SEP)
       resolve(messagePayloads)
     });
@@ -2917,10 +2919,14 @@ class Channel extends SBChannelKeys {
     });
   }
 
-  @Ready async send(msg: SBMessage | any): Promise<string> {
-    const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
-    await sbm.ready // message needs to be ready
-    return this.callApi('/send', sbm.message)
+  @Ready async send(msg: any, options?: MessageOptions): Promise<string> {
+    _sb_assert(!(msg instanceof SBMessage), "Channel.send: msg is already an SBMessage")
+    return (new SBMessage(this, msg, options)).send()
+
+    // const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
+    // const sbm: SBMessage = new SBMessage(this, msg, options)
+    // await sbm.ready // message needs to be ready
+    // return this.callApi('/send', sbm.message)
   }
 
   /**
@@ -3006,7 +3012,7 @@ class Channel extends SBChannelKeys {
    * 
    * You need to provide one of the following combinations of info:
    * 
-   * - nothing: creates new channel and transfer all storage budget from 'this' channel
+   * - nothing: creates new channel with minmal permitted budget
    * - just storage amount: creates new channel with that amount, returns new channel
    * - just a target channel: moves a chunk of storage to that channel (see below)
    * - target channel and storage amount: moves that amount to that channel
@@ -3060,7 +3066,7 @@ class Channel extends SBChannelKeys {
       } else if (this.channelId === targetChannel.channelId) {
         reject(new Error("[budd()]: source and target channels are the same, probably an error")); return
       }
-      if (!size) size = NEW_CHANNEL_MINIMUM_BUDGET
+      if (!size) size = NEW_CHANNEL_MINIMUM_BUDGET // if nothing provided, goes with 'minimum'
       if (size !== Infinity && Math.abs(size) > await this.getStorageLimit()) {
         // server will of course enforce this but it's convenient to catch it earlier
         reject(new Error(`[budd()]: storage amount (${size}) is more than current storage limit`)); return
@@ -3147,17 +3153,40 @@ class ChannelSocket extends Channel {
   // #resolveFirstMessage: (value: ChannelSocket | PromiseLike<ChannelSocket>) => void = () => { _sb_exception('L2461', 'this should never be called') }
   // #firstMessageEventHandlerReference: (e: MessageEvent<any>) => void = (_e: MessageEvent<any>) => { _sb_exception('L2462', 'this should never be called') }
 
-  constructor(handle: SBChannelHandle, onMessage: (m: Message) => void) {
-    _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided')
-    if (!handle.hasOwnProperty('channelId') || !handle.hasOwnProperty('userPrivateKey'))
-      throw new SBError("ChannelSocket(): first argument must be valid SBChannelHandle")
-    if (!handle.channelServer)
-      throw new SBError("ChannelSocket(): no channel server provided (required)")
-    super(handle) // initialize 'channel' parent
-      ; (this as any)[ChannelSocket.ReadyFlag] = false;
-    this.#socketServer = handle.channelServer.replace(/^http/, 'ws')
+
+  constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message) => void) {
+    // undefined (missing) is fine, but 'null' is not
+    let channelServer: string | undefined
+
+    if (handleOrKey === null) throw new SBError(`[ChannelSocket] constructor: you cannot pass 'null'`)
+    if (handleOrKey) {
+      // annoying TS limitation that we can't propagate a dual type
+      if (typeof handleOrKey === 'string') {
+        super(handleOrKey as SBUserPrivateKey) // we let super deal with it
+      } else if (_checkChannelHandle(handleOrKey)) {
+        const handle = validate_SBChannelHandle(handleOrKey)
+        channelServer = handle.channelServer // might still be missing
+        super(handle);
+      } else {
+        throw new SBError(`[ChannelSocket] constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`)
+      }
+    } else {
+      throw new SBError("[ChannelSocket] constructor: no handle or key provided (cannot 'create' using 'new ChannelSocket()'")
+    }
+    if (!channelServer) channelServer = Snackabra.defaultChannelServer // might throw
+
+    _sb_assert(onMessage, '[ChannelSocket] constructor: no onMessage handler provided')
+    
+    // if (!handle.hasOwnProperty('channelId') || !handle.hasOwnProperty('userPrivateKey'))
+    //   throw new SBError("ChannelSocket(): first argument must be valid SBChannelHandle")
+    // if (!handle.channelServer)
+    //   throw new SBError("ChannelSocket(): no channel server provided (required)")
+    // super(handleOrKey) // initialize 'channel' parent
+
+    ; (this as any)[ChannelSocket.ReadyFlag] = false;
+    this.#socketServer = channelServer.replace(/^http/, 'ws')
     this.onMessage = onMessage
-    const url = this.#socketServer + '/api/v2/channel/' + handle.channelId + '/websocket'
+    const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket'
     this.#ws = {
       url: url,
       // websocket: new WebSocket(url),
@@ -3750,6 +3779,10 @@ export class StorageApi {
 /******************************************************************************************************/
 //#region Snackabra and exports
 
+const SnackabraDefaults = {
+  channelServer: ''
+}
+
 /**
   * Main class. It corresponds to a single channel server. Most apps
   * will only be talking to one channel server, but it is possible
@@ -3779,14 +3812,14 @@ class Snackabra {
 
   constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean) {
     console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`)
-    _sb_assert(typeof channelServer === 'string', '[Snackabra] Invalid parameter type for constructor')
-
+    _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter')
+    SnackabraDefaults.channelServer = channelServer
     if (setDBG && setDBG === true) DBG = true;
     if (DBG && setDBG2 && setDBG2 === true) DBG2 = true;
     if (DBG) console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
     if (DBG2) console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
 
-    this.#channelServer = channelServer
+    this.#channelServer = channelServer // conceptually, you can have multiple channel servers
     // (eventually) fetch storage server name from channel server; StorageApi knows how to handle this
     this.#storage = new StorageApi(new Promise((resolve, reject) => {
       SBFetch(this.#channelServer + '/api/v2/info')
@@ -3809,6 +3842,13 @@ class Snackabra {
     }));
   }
 
+  static get defaultChannelServer(): string {
+    const s = SnackabraDefaults.channelServer
+    if (s.length > 0) return s
+    else throw new SBError("No default channel server; you need to have 'new Snackabra(...)' somewhere.")
+    // return SnackabraDefaults.channelServer
+  }
+
 
   /**
    * "Anonymous" version of fetching a page, since unless it's locked you do not
@@ -3820,21 +3860,22 @@ class Snackabra {
       return extractPayload(await SBApiFetch(this.#channelServer + '/api/v2/page/' + prefix))
   }
 
-  attach(handle: SBChannelHandle): Promise<Channel> {
-    return new Promise((resolve, reject) => {
-      if (handle.channelId) {
-        if (!handle.channelServer) {
-          handle.channelServer = this.#channelServer
-        } else if (handle.channelServer !== this.#channelServer) {
-          reject('[attach] SBChannelHandle channelId does not match channelServer')
-        }
-        resolve(new Channel(handle))
-      } else {
-        reject('SBChannelHandle missing channelId')
-      }
-    })
+  // // deprecated ... used anywhere?
+  // attach(handle: SBChannelHandle): Promise<Channel> {
+  //   return new Promise((resolve, reject) => {
+  //     if (handle.channelId) {
+  //       if (!handle.channelServer) {
+  //         handle.channelServer = this.#channelServer
+  //       } else if (handle.channelServer !== this.#channelServer) {
+  //         reject('[attach] SBChannelHandle channelId does not match channelServer')
+  //       }
+  //       resolve(new Channel(handle))
+  //     } else {
+  //       reject('SBChannelHandle missing channelId')
+  //     }
+  //   })
 
-  }
+  // }
 
   /**
    * Creates a new channel.
@@ -3897,20 +3938,27 @@ class Snackabra {
    * provided, if onMessage is provided then it returns
    * a ChannelSocket object.
    */
-  connect(handle: SBChannelHandle): Channel
-  connect(handle: SBChannelHandle, onMessage: (m: ChannelMessage) => void): ChannelSocket
-  connect(handle: SBChannelHandle, onMessage?: (m: ChannelMessage) => void): Channel | ChannelSocket {
-    _sb_assert(handle && handle.channelId && handle.userPrivateKey, '[connect] Invalid parameter (missing info)')
+
+  connect(handleOrKey: SBChannelHandle | SBUserPrivateKey): Channel
+  connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: ChannelMessage) => void): ChannelSocket
+  connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage?: (m: ChannelMessage) => void): Channel | ChannelSocket {
+    let handle: SBChannelHandle
+    if (typeof handleOrKey === 'string') {
+      handle = {
+        userPrivateKey: handleOrKey as SBUserPrivateKey
+      }
+    } else {
+      handle = handleOrKey as SBChannelHandle
+    }
+    _sb_assert(handle && handle.userPrivateKey, '[Snackabra.connect] Invalid parameter (at least need owner private key)')
     if (handle.channelServer && handle.channelServer !== this.#channelServer)
       throw new SBError(`[Snackabra.connect] channel server in handle ('${handle.channelServer}') does not match what SB was set up with ('${this.#channelServer}')`)
-
-    const newChannelHandle: SBChannelHandle =
-      { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.#channelServer } }
-    if (DBG) console.log("++++ Snackabra.connect() ++++", newChannelHandle)
+    if (!handle.channelServer) handle.channelServer = this.#channelServer
+    if (DBG) console.log("++++ Snackabra.connect() ++++", handle)
     if (onMessage)
-      return new ChannelSocket(newChannelHandle, onMessage)
+      return new ChannelSocket(handle, onMessage)
     else
-      return new Channel(newChannelHandle)
+      return new Channel(handle)
   }
 
   /**

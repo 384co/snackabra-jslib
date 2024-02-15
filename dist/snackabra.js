@@ -29,8 +29,8 @@ export function validate_SBStorageToken(data) {
     }
 }
 function _checkChannelHandle(data) {
-    return (data.channelId && data.channelId.length === 43
-        && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
+    return (data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
+        && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
         && (!data.channelServer || typeof data.channelServer === 'string')
         && (!data.channelData || _checkChannelData(data.channelData)));
 }
@@ -1466,6 +1466,7 @@ export class SBChannelKeys extends SB384 {
     #channelData;
     channelServer;
     constructor(handleOrKey) {
+        let channelServer;
         if (handleOrKey === null)
             throw new SBError(`SBChannelKeys constructor: you cannot pass 'null'`);
         if (handleOrKey) {
@@ -1475,12 +1476,8 @@ export class SBChannelKeys extends SB384 {
             }
             else if (_checkChannelHandle(handleOrKey)) {
                 const handle = validate_SBChannelHandle(handleOrKey);
+                channelServer = handle.channelServer;
                 super(handle.userPrivateKey, true);
-                if (handle.channelServer) {
-                    this.channelServer = handle.channelServer;
-                    if (this.channelServer[this.channelServer.length - 1] === '/')
-                        this.channelServer = this.channelServer.slice(0, -1);
-                }
                 this.#channelId = handle.channelId;
                 this.#channelData = handle.channelData;
             }
@@ -1491,6 +1488,11 @@ export class SBChannelKeys extends SB384 {
         else {
             super();
         }
+        if (!channelServer)
+            channelServer = Snackabra.defaultChannelServer;
+        if (channelServer[channelServer.length - 1] === '/')
+            this.channelServer = channelServer.slice(0, -1);
+        this.channelServer = channelServer;
         this[SBChannelKeys.ReadyFlag] = false;
         this.sbChannelKeysReady = new Promise(async (resolve, reject) => {
             try {
@@ -1635,7 +1637,8 @@ class SBMessage {
     async send() {
         if (DBG2)
             console.log("SBMessage.send() - sending message:", this.message);
-        return this.channel.send(this);
+        await this.ready;
+        return this.channel.callApi('/send', this.message);
     }
 }
 __decorate([
@@ -1873,11 +1876,11 @@ class Channel extends SBChannelKeys {
         if (DBG)
             console.log("[getRawMessageMap] called with messageKeys:", messageKeys);
         if (messageKeys.size === 0)
-            throw new SBError("Channel.getMessages() - no message keys provided");
+            throw new SBError("[getRawMessageMap] no message keys provided");
         return new Promise(async (resolve, _reject) => {
-            _sb_assert(this.channelId, "[getRawMessageMap]  no channel ID (?)");
+            _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)");
             const messagePayloads = await this.callApi('/getMessages', messageKeys);
-            _sb_assert(messagePayloads, "[getRawMessageMap]  no messages (empty/null response)");
+            _sb_assert(messagePayloads, "[getRawMessageMap] no messages (empty/null response)");
             if (DBG2)
                 console.log(SEP, SEP, "[getRawMessageMap] - here are the raw ones\n", messagePayloads, SEP, SEP);
             resolve(messagePayloads);
@@ -1903,10 +1906,9 @@ class Channel extends SBChannelKeys {
             resolve(await this.extractMessageMap(messages));
         });
     }
-    async send(msg) {
-        const sbm = msg instanceof SBMessage ? msg : new SBMessage(this, msg);
-        await sbm.ready;
-        return this.callApi('/send', sbm.message);
+    async send(msg, options) {
+        _sb_assert(!(msg instanceof SBMessage), "Channel.send: msg is already an SBMessage");
+        return (new SBMessage(this, msg, options)).send();
     }
     setPage(options) {
         var { page, prefix, type } = options;
@@ -2079,17 +2081,33 @@ class ChannelSocket extends Channel {
     onMessage = (_m) => { _sb_assert(false, "[ChannelSocket] NO MESSAGE HANDLER"); };
     #ack = new Map();
     #traceSocket = false;
-    constructor(handle, onMessage) {
-        _sb_assert(onMessage, 'ChannelSocket(): no onMessage handler provided');
-        if (!handle.hasOwnProperty('channelId') || !handle.hasOwnProperty('userPrivateKey'))
-            throw new SBError("ChannelSocket(): first argument must be valid SBChannelHandle");
-        if (!handle.channelServer)
-            throw new SBError("ChannelSocket(): no channel server provided (required)");
-        super(handle);
+    constructor(handleOrKey, onMessage) {
+        let channelServer;
+        if (handleOrKey === null)
+            throw new SBError(`[ChannelSocket] constructor: you cannot pass 'null'`);
+        if (handleOrKey) {
+            if (typeof handleOrKey === 'string') {
+                super(handleOrKey);
+            }
+            else if (_checkChannelHandle(handleOrKey)) {
+                const handle = validate_SBChannelHandle(handleOrKey);
+                channelServer = handle.channelServer;
+                super(handle);
+            }
+            else {
+                throw new SBError(`[ChannelSocket] constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`);
+            }
+        }
+        else {
+            throw new SBError("[ChannelSocket] constructor: no handle or key provided (cannot 'create' using 'new ChannelSocket()'");
+        }
+        if (!channelServer)
+            channelServer = Snackabra.defaultChannelServer;
+        _sb_assert(onMessage, '[ChannelSocket] constructor: no onMessage handler provided');
         this[_a.ReadyFlag] = false;
-        this.#socketServer = handle.channelServer.replace(/^http/, 'ws');
+        this.#socketServer = channelServer.replace(/^http/, 'ws');
         this.onMessage = onMessage;
-        const url = this.#socketServer + '/api/v2/channel/' + handle.channelId + '/websocket';
+        const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket';
         this.#ws = {
             url: url,
             ready: false,
@@ -2494,6 +2512,9 @@ _b = StorageApi;
 __decorate([
     Memoize
 ], StorageApi.prototype, "getStorageServer", null);
+const SnackabraDefaults = {
+    channelServer: ''
+};
 class Snackabra {
     #channelServer;
     #storage;
@@ -2502,7 +2523,8 @@ class Snackabra {
     sbFetch = SBFetch;
     constructor(channelServer, setDBG, setDBG2) {
         console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`);
-        _sb_assert(typeof channelServer === 'string', '[Snackabra] Invalid parameter type for constructor');
+        _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter');
+        SnackabraDefaults.channelServer = channelServer;
         if (setDBG && setDBG === true)
             DBG = true;
         if (DBG && setDBG2 && setDBG2 === true)
@@ -2536,26 +2558,17 @@ class Snackabra {
             });
         }));
     }
+    static get defaultChannelServer() {
+        const s = SnackabraDefaults.channelServer;
+        if (s.length > 0)
+            return s;
+        else
+            throw new SBError("No default channel server; you need to have 'new Snackabra(...)' somewhere.");
+    }
     async getPage(prefix) {
         if (DBG)
             console.log(`==== Snackabra.getPage: calling fetch with: ${prefix}`);
         return extractPayload(await SBApiFetch(this.#channelServer + '/api/v2/page/' + prefix));
-    }
-    attach(handle) {
-        return new Promise((resolve, reject) => {
-            if (handle.channelId) {
-                if (!handle.channelServer) {
-                    handle.channelServer = this.#channelServer;
-                }
-                else if (handle.channelServer !== this.#channelServer) {
-                    reject('[attach] SBChannelHandle channelId does not match channelServer');
-                }
-                resolve(new Channel(handle));
-            }
-            else {
-                reject('SBChannelHandle missing channelId');
-            }
-        });
     }
     create(budgetChannelOrToken) {
         _sb_assert(budgetChannelOrToken !== null, '[create channel] Invalid parameter (null)');
@@ -2592,17 +2605,27 @@ class Snackabra {
             }
         });
     }
-    connect(handle, onMessage) {
-        _sb_assert(handle && handle.channelId && handle.userPrivateKey, '[connect] Invalid parameter (missing info)');
+    connect(handleOrKey, onMessage) {
+        let handle;
+        if (typeof handleOrKey === 'string') {
+            handle = {
+                userPrivateKey: handleOrKey
+            };
+        }
+        else {
+            handle = handleOrKey;
+        }
+        _sb_assert(handle && handle.userPrivateKey, '[Snackabra.connect] Invalid parameter (at least need owner private key)');
         if (handle.channelServer && handle.channelServer !== this.#channelServer)
             throw new SBError(`[Snackabra.connect] channel server in handle ('${handle.channelServer}') does not match what SB was set up with ('${this.#channelServer}')`);
-        const newChannelHandle = { ...handle, ...{ [SB_CHANNEL_HANDLE_SYMBOL]: true, channelServer: this.#channelServer } };
+        if (!handle.channelServer)
+            handle.channelServer = this.#channelServer;
         if (DBG)
-            console.log("++++ Snackabra.connect() ++++", newChannelHandle);
+            console.log("++++ Snackabra.connect() ++++", handle);
         if (onMessage)
-            return new ChannelSocket(newChannelHandle, onMessage);
+            return new ChannelSocket(handle, onMessage);
         else
-            return new Channel(newChannelHandle);
+            return new Channel(handle);
     }
     get storage() { return this.#storage; }
     async getStorageServer() {
