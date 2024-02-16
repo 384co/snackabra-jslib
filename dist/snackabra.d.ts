@@ -284,6 +284,7 @@ declare class Channel extends SBChannelKeys {
     locked?: boolean;
     visitors: Map<SBUserId, SBUserPrivateKey>;
     constructor();
+    constructor(newChannel: null, protocol: SBProtocol);
     constructor(key: SBUserPrivateKey, protocol?: SBProtocol);
     constructor(handle: SBChannelHandle, protocol?: SBProtocol);
     get ready(): Promise<Channel>;
@@ -291,7 +292,7 @@ declare class Channel extends SBChannelKeys {
     get api(): this;
     extractMessage(msgRaw: ChannelMessage): Promise<Message | undefined>;
     extractMessageMap(msgMap: Map<string, ChannelMessage>): Promise<Map<string, Message>>;
-    create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<SBChannelHandle>;
+    create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<Channel>;
     getLastMessageTimes(): void;
     getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
     getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;

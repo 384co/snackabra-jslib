@@ -2691,17 +2691,23 @@ class Channel extends SBChannelKeys {
   visitors: Map<SBUserId, SBUserPrivateKey> = new Map()
 
   /**
-   * Channel
+   * Channel. Note that if you pass null as a first parameter, you're asking for
+   * a brand new channel but one that uses the provided protocol. We're still
+   * debating if creation of a channel should REQUIRE a protocol.
    */
-  constructor()
+  constructor() // requesting a new channel, no protocol
+  constructor(newChannel: null, protocol: SBProtocol) // requesting a new channel
   constructor(key: SBUserPrivateKey, protocol?: SBProtocol)
   constructor(handle: SBChannelHandle, protocol?: SBProtocol)
-  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey, public protocol?: SBProtocol) {
-    if (handleOrKey === null) throw new SBError(`Channel() constructor: you cannot pass 'null'`)
+  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey | null, public protocol?: SBProtocol) {
+    // if (handleOrKey === null) throw new SBError(`Channel() constructor: you cannot pass 'null'`)
     if (DBG2) console.log("Channel() constructor called with handleOrKey:", handleOrKey)
-    super(handleOrKey);
+    if (handleOrKey === null)
+      super()
+    else
+      super(handleOrKey);
     // this.protocol = protocol ? protocol : new BasicProtocol(this)
-    // if (protocol) this.protocol = protocol
+    if (protocol) this.protocol = protocol
     this.channelReady =
       this.sbChannelKeysReady
         .then(() => {
@@ -2803,12 +2809,12 @@ class Channel extends SBChannelKeys {
   }
 
   /** Authorizes/registers this channel on the provided server */
-  create(storageToken: SBStorageToken, channelServer: SBChannelId = this.channelServer!): Promise<SBChannelHandle> {
+  create(storageToken: SBStorageToken, channelServer: SBChannelId = this.channelServer!): Promise<Channel> {
     if (DBG) console.log("==== Channel.create() called with storageToken:", storageToken, "and channelServer:", channelServer)
     _sb_assert(storageToken !== null, '[Channel.create] Missing storage token')
     if (channelServer) this.channelServer = channelServer;
     _sb_assert(this.channelServer, '[Channel.create] Missing channel server (neither provided nor in channelKeys)')
-    return new Promise<SBChannelHandle>(async (resolve, reject) => {
+    return new Promise<Channel>(async (resolve, reject) => {
       await this.channelReady
       this.channelData.storageToken = validate_SBStorageToken(storageToken)
       if (DBG) console.log("Will try to create channel with channelData:", this.channelData)
@@ -2817,14 +2823,15 @@ class Channel extends SBChannelKeys {
           // in case it's different or whatevs, but only if it's confirmed
           this.channelServer = channelServer
           _sb_assert(this.channelData && this.channelData.channelId && this.userPrivateKey, 'Internal Error [L2546]')
-          resolve({
-            [SB_CHANNEL_HANDLE_SYMBOL]: true,
-            channelId: this.channelData.channelId!,
-            userPrivateKey: this.userPrivateKey,
-            // channelPrivateKey: (await new SB384(channelKeys.channelPrivateKey).ready).userPrivateKey,
-            channelServer: this.channelServer,
-            channelData: this.channelData
-          })
+          resolve(this)
+          // resolve({
+          //   [SB_CHANNEL_HANDLE_SYMBOL]: true,
+          //   channelId: this.channelData.channelId!,
+          //   userPrivateKey: this.userPrivateKey,
+          //   // channelPrivateKey: (await new SB384(channelKeys.channelPrivateKey).ready).userPrivateKey,
+          //   channelServer: this.channelServer,
+          //   channelData: this.channelData
+          // })
         }).catch((e) => { reject("Channel.create() failed: " + WrapError(e)) })
     })
   }
@@ -2839,8 +2846,8 @@ class Channel extends SBChannelKeys {
    * Returns map of message keys from the server corresponding to the request.
    */
   getMessageKeys(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Set<string>> {
-    // todo: add IndexedDB caching - see above
     return new Promise(async (resolve, _reject) => {
+      await this.channelReady
       _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)")
       // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)
       // let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
@@ -2872,6 +2879,7 @@ class Channel extends SBChannelKeys {
     if (DBG) console.log("[getRawMessageMap] called with messageKeys:", messageKeys)
     if (messageKeys.size === 0) throw new SBError("[getRawMessageMap] no message keys provided")
     return new Promise(async (resolve, _reject) => {
+      await this.channelReady
       _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)")
       const messagePayloads: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
       _sb_assert(messagePayloads, "[getRawMessageMap] no messages (empty/null response)")
@@ -2887,6 +2895,7 @@ class Channel extends SBChannelKeys {
     if (DBG) console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys)
     if (messageKeys.size === 0) throw new SBError("[getMessageMap] no message keys provided")
     return new Promise(async (resolve, _reject) => {
+      await this.channelReady
 
       // _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
       const messagePayloads: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
@@ -3877,19 +3886,21 @@ class Snackabra {
   // }
 
   /**
-   * Creates a new channel.
-   * Returns a promise to a ''SBChannelHandle'' object.
-   * Note that this method does not connect to the channel,
-   * it just creates (authorizes) it and allocates storage budget.
-   * 
+   * Creates a new channel. Returns a promise to a ''SBChannelHandle'' object.
+   * Note that this method does not connect to the channel, it just creates
+   * (authorizes) it and allocates storage budget.
+   *
    * New (2.0) interface:
-   * 
+   *
    * @param budgetChannel: Channel - the source of initialization budget
-   * 
+   *
    * Note that if you have a full budget channel, you can budd off it (which
-   * will take all the storage). Providing a budget channel here will allows
-   * you to create new channels when a 'guest' on some other channel (for example),
+   * will take all the storage). Providing a budget channel here will allows you
+   * to create new channels when a 'guest' on some other channel (for example),
    * or to create a new channel with a minimal budget.
+   *
+   * Snackabra.create() returns a handle, whereas Channel.create() returns the
+   * channel itself.
    */
   create(budgetChannel: Channel): Promise<SBChannelHandle>
   create(storageToken: SBStorageToken): Promise<SBChannelHandle>
@@ -3922,8 +3933,11 @@ class Snackabra {
         // create a fresh channel (set of keys)
         const channelKeys = await new Channel().ready
         channelKeys.channelServer = this.#channelServer
+        // channelKeys.create(_storageToken!)
+        //   .then((handle) => { resolve(handle) })
+        //   .catch((e) => { reject(e) })
         channelKeys.create(_storageToken!)
-          .then((handle) => { resolve(handle) })
+          .then((c) => { resolve(c.handle) })
           .catch((e) => { reject(e) })
       } catch (e) {
         const msg = `Creating channel did not succeed: ${e}`; console.error(msg); reject(msg);

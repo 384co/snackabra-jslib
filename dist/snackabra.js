@@ -1746,12 +1746,15 @@ class Channel extends SBChannelKeys {
     #cursor = '';
     visitors = new Map();
     constructor(handleOrKey, protocol) {
-        if (handleOrKey === null)
-            throw new SBError(`Channel() constructor: you cannot pass 'null'`);
+        this.protocol = protocol;
         if (DBG2)
             console.log("Channel() constructor called with handleOrKey:", handleOrKey);
-        super(handleOrKey);
-        this.protocol = protocol;
+        if (handleOrKey === null)
+            super();
+        else
+            super(handleOrKey);
+        if (protocol)
+            this.protocol = protocol;
         this.channelReady =
             this.sbChannelKeysReady
                 .then(() => {
@@ -1849,13 +1852,7 @@ class Channel extends SBChannelKeys {
                 .then(() => {
                 this.channelServer = channelServer;
                 _sb_assert(this.channelData && this.channelData.channelId && this.userPrivateKey, 'Internal Error [L2546]');
-                resolve({
-                    [SB_CHANNEL_HANDLE_SYMBOL]: true,
-                    channelId: this.channelData.channelId,
-                    userPrivateKey: this.userPrivateKey,
-                    channelServer: this.channelServer,
-                    channelData: this.channelData
-                });
+                resolve(this);
             }).catch((e) => { reject("Channel.create() failed: " + WrapError(e)); });
         });
     }
@@ -1864,6 +1861,7 @@ class Channel extends SBChannelKeys {
     }
     getMessageKeys(currentMessagesLength = 100, paginate = false) {
         return new Promise(async (resolve, _reject) => {
+            await this.channelReady;
             _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)");
             const messages = await this.callApi('/getMessageKeys', { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined });
             _sb_assert(messages, "Channel.getMessageKeys: no messages (empty/null response)");
@@ -1878,6 +1876,7 @@ class Channel extends SBChannelKeys {
         if (messageKeys.size === 0)
             throw new SBError("[getRawMessageMap] no message keys provided");
         return new Promise(async (resolve, _reject) => {
+            await this.channelReady;
             _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)");
             const messagePayloads = await this.callApi('/getMessages', messageKeys);
             _sb_assert(messagePayloads, "[getRawMessageMap] no messages (empty/null response)");
@@ -1892,6 +1891,7 @@ class Channel extends SBChannelKeys {
         if (messageKeys.size === 0)
             throw new SBError("[getMessageMap] no message keys provided");
         return new Promise(async (resolve, _reject) => {
+            await this.channelReady;
             const messagePayloads = await this.callApi('/getMessages', messageKeys);
             const messages = new Map();
             for (const [k, v] of messagePayloads) {
@@ -2595,7 +2595,7 @@ class Snackabra {
                 const channelKeys = await new Channel().ready;
                 channelKeys.channelServer = this.#channelServer;
                 channelKeys.create(_storageToken)
-                    .then((handle) => { resolve(handle); })
+                    .then((c) => { resolve(c.handle); })
                     .catch((e) => { reject(e); });
             }
             catch (e) {
