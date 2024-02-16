@@ -508,26 +508,29 @@ export interface SBObjectHandle {
   // strictly speaking, only 'id' is required
   id: Base62Encoded,
 
-  key?: Base62Encoded,
   verification?: Promise<string> | string,
 
   version?: SBObjectHandleVersions,
-  type?: string, // for some backwards compatibility, no longer used
 
+  key?: Base62Encoded,
   iv?: Uint8Array | Base62Encoded,
   salt?: ArrayBuffer | Base62Encoded,
 
   storageServer?: string,
 
-  fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
-  dateAndTime?: string, // optional: time of shard creation
-  fileType?: string, // optional: file type (mime)
-  lastModified?: number, // optional: last modified time (of underlying file, if any)
-  actualSize?: number, // optional: actual size of underlying file, if any
-  savedSize?: number, // optional: size of shard (may be different from actualSize)
-
   data?: WeakRef<ArrayBuffer> | ArrayBuffer, // if present, the actual data
   payload?: any // if present, for convenience a spot for extractPayload(rawData).payload
+
+  // various additional properties are optional. note that core SB lib does not
+  // have a concept of a 'file'
+  fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
+  dateAndTime?: string, // time of shard creation
+  fileType?: string, // file type (mime)
+  lastModified?: number, // last modified time (of underlying file, if any)
+  actualSize?: number, // actual size of underlying file, if any
+  savedSize?: number, // size of shard (may be different from actualSize)
+  type?: string, // for some backwards compatibility, no longer used
+
 }
 
 export function validate_SBObjectHandle(h: SBObjectHandle) {
@@ -3142,7 +3145,7 @@ class ChannelSocket extends Channel {
   // #ChannelSocketReadyFlag: boolean = false // must be named <class>ReadyFlag
   static ReadyFlag = Symbol('ChannelSocketReadyFlag'); // see below for '(this as any)[ChannelSocket.ReadyFlag] = false;'
 
-  #ws: WSProtocolOptions
+  #ws?: WSProtocolOptions
   // #sbServer: SBServer
   #socketServer: string
 
@@ -3153,11 +3156,8 @@ class ChannelSocket extends Channel {
   // #resolveFirstMessage: (value: ChannelSocket | PromiseLike<ChannelSocket>) => void = () => { _sb_exception('L2461', 'this should never be called') }
   // #firstMessageEventHandlerReference: (e: MessageEvent<any>) => void = (_e: MessageEvent<any>) => { _sb_exception('L2462', 'this should never be called') }
 
-
   constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message) => void) {
     // undefined (missing) is fine, but 'null' is not
-    let channelServer: string | undefined
-
     if (handleOrKey === null) throw new SBError(`[ChannelSocket] constructor: you cannot pass 'null'`)
     if (handleOrKey) {
       // annoying TS limitation that we can't propagate a dual type
@@ -3165,15 +3165,15 @@ class ChannelSocket extends Channel {
         super(handleOrKey as SBUserPrivateKey) // we let super deal with it
       } else if (_checkChannelHandle(handleOrKey)) {
         const handle = validate_SBChannelHandle(handleOrKey)
-        channelServer = handle.channelServer // might still be missing
         super(handle);
+        if (handle.channelServer) this.channelServer = handle.channelServer // might still be missing
       } else {
         throw new SBError(`[ChannelSocket] constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`)
       }
     } else {
       throw new SBError("[ChannelSocket] constructor: no handle or key provided (cannot 'create' using 'new ChannelSocket()'")
     }
-    if (!channelServer) channelServer = Snackabra.defaultChannelServer // might throw
+    if (!this.channelServer) this.channelServer = Snackabra.defaultChannelServer // might throw
 
     _sb_assert(onMessage, '[ChannelSocket] constructor: no onMessage handler provided')
     
@@ -3184,17 +3184,90 @@ class ChannelSocket extends Channel {
     // super(handleOrKey) // initialize 'channel' parent
 
     ; (this as any)[ChannelSocket.ReadyFlag] = false;
-    this.#socketServer = channelServer.replace(/^http/, 'ws')
+    this.#socketServer = this.channelServer.replace(/^http/, 'ws')
     this.onMessage = onMessage
-    const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket'
-    this.#ws = {
-      url: url,
-      // websocket: new WebSocket(url),
-      ready: false,
-      closed: false,
-      timeout: 2000
-    }
     this.channelSocketReady = this.#channelSocketReadyFactory()
+  }
+
+  #channelSocketReadyFactory() {
+    return new Promise<ChannelSocket>(async (resolve, reject) => {
+      if (DBG) console.log("++++ STARTED ChannelSocket.readyPromise()")
+      await this.sbChannelKeysReady // because we need the getter for channelId
+      const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket'
+      this.#ws = {
+        url: url,
+        // websocket: new WebSocket(url),
+        ready: false,
+        closed: false,
+        timeout: 2000
+      }
+      if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
+        // either it's new, or it's closed, or it's in the process of closing
+        // a WebSocket connection is always a 'GET', and there's no way to provide a body
+        const apiBodyBuf = assemblePayload(await this.buildApiBody(url))
+        _sb_assert(apiBodyBuf, "Internal Error [L3598]")
+        // here's the only spot in the code where we actually open the websocket:
+        this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf!))
+      }
+
+      this.#ws.websocket.addEventListener('message',
+        (e: MessageEvent<any>) => {
+          if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3618")?.hasOwnProperty('ready')) {
+            // switch to main message processor
+            this.#ws!.websocket!.addEventListener('message', this.#processMessage)
+              // we're ready
+              ; (this as any)[ChannelSocket.ReadyFlag] = true;
+            resolve(this)
+          } else {
+            if (DBG) console.log(SEP, "Received non-ready:\n", e.data, "\n", SEP)
+            reject("[ChannelSocket] received something other than 'ready' as first message")
+          }
+        }
+      )
+
+      this.#ws.websocket.addEventListener('open', async () => {
+        this.#ws!.closed = false
+        // need to make sure parent is ready (and has keys)
+        await this.ready
+        if (DBG) console.log("++++++++ readyPromise() sending init")
+        // auth is done on setup, it's not needed for the 'ready' signal;
+        // this will prompt server to send backlogged messages
+        // this.#ws.websocket!.send(JSON.stringify({ ready: true }))
+        this.#ws!.websocket!.send(assemblePayload({ ready: true })!)
+      });
+
+      this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
+        this.#ws!.closed = true
+        if (!e.wasClean) {
+          console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.channelServer}`)
+        } else {
+          if (e.reason.includes("does not have an owner"))
+            // reject(`No such channel on this server (${this.#sbServer.channel_server})`)
+            reject(`No such channel on this server (${this.channelServer})`)
+          else console.log('ChannelSocket() was closed (cleanly): ', e.reason)
+        }
+        reject('wbSocket() closed before it was opened (?)')
+      });
+
+      this.#ws.websocket.addEventListener('error', (e) => {
+        this.#ws!.closed = true
+        console.log('ChannelSocket() error: ', e)
+        reject('ChannelSocket creation error (see log)')
+      });
+
+      // let us set a timeout to catch and make sure this thing resoles within 0.5 seconds
+      setTimeout(() => {
+        if (!(this as any)[ChannelSocket.ReadyFlag]) {
+          const msg = "[ChannelSocket] - this socket is not resolving (waited 10s) ..."
+          console.warn(msg); reject(msg);
+        } else {
+          if (DBG) console.log("ChannelSocket() - this socket resolved", this)
+        }
+      }, 10000);
+
+      // (this as any)[ChannelSocket.ReadyFlag] = true;
+      // resolve(this) // nope, we resolve when we get a 'ready' message
+    })
   }
 
   #processMessage = async (e: MessageEvent<any>) => {
@@ -3262,86 +3335,12 @@ class ChannelSocket extends Channel {
     }
   }
 
-  #channelSocketReadyFactory() {
-    return new Promise<ChannelSocket>(async (resolve, reject) => {
-      if (DBG) console.log("++++ STARTED ChannelSocket.readyPromise()")
-      const url = this.#ws.url
-
-      if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
-        // either it's new, or it's closed, or it's in the process of closing
-        // a WebSocket connection is always a 'GET', and there's no way to provide a body
-        const apiBodyBuf = assemblePayload(await this.buildApiBody(url))
-        _sb_assert(apiBodyBuf, "Internal Error [L3598]")
-        // here's the only spot in the code where we actually open the websocket:
-        this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf!))
-      }
-
-      this.#ws.websocket.addEventListener('message',
-        (e: MessageEvent<any>) => {
-          if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3618")?.hasOwnProperty('ready')) {
-            // switch to main message processor
-            this.#ws.websocket!.addEventListener('message', this.#processMessage)
-              // we're ready
-              ; (this as any)[ChannelSocket.ReadyFlag] = true;
-            resolve(this)
-          } else {
-            if (DBG) console.log(SEP, "Received non-ready:\n", e.data, "\n", SEP)
-            reject("[ChannelSocket] received something other than 'ready' as first message")
-          }
-        }
-      )
-
-      this.#ws.websocket.addEventListener('open', async () => {
-        this.#ws.closed = false
-        // need to make sure parent is ready (and has keys)
-        await this.ready
-        if (DBG) console.log("++++++++ readyPromise() sending init")
-        // auth is done on setup, it's not needed for the 'ready' signal;
-        // this will prompt server to send backlogged messages
-        // this.#ws.websocket!.send(JSON.stringify({ ready: true }))
-        this.#ws.websocket!.send(assemblePayload({ ready: true })!)
-      });
-
-      this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
-        this.#ws.closed = true
-        if (!e.wasClean) {
-          console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.channelServer}`)
-        } else {
-          if (e.reason.includes("does not have an owner"))
-            // reject(`No such channel on this server (${this.#sbServer.channel_server})`)
-            reject(`No such channel on this server (${this.channelServer})`)
-          else console.log('ChannelSocket() was closed (cleanly): ', e.reason)
-        }
-        reject('wbSocket() closed before it was opened (?)')
-      });
-
-      this.#ws.websocket.addEventListener('error', (e) => {
-        this.#ws.closed = true
-        console.log('ChannelSocket() error: ', e)
-        reject('ChannelSocket creation error (see log)')
-      });
-
-      // let us set a timeout to catch and make sure this thing resoles within 0.5 seconds
-      setTimeout(() => {
-        if (!(this as any)[ChannelSocket.ReadyFlag]) {
-          const msg = "[ChannelSocket] - this socket is not resolving (waited 10s) ..."
-          console.warn(msg); reject(msg);
-        } else {
-          if (DBG) console.log("ChannelSocket() - this socket resolved", this)
-        }
-      }, 10000);
-
-      // (this as any)[ChannelSocket.ReadyFlag] = true;
-      // resolve(this) // nope, we resolve when we get a 'ready' message
-    })
-  }
-
   get ready() { return this.channelSocketReady }
   // get readyFlag(): boolean { return this.#ChannelSocketReadyFlag }
   get ChannelSocketReadyFlag(): boolean { return (this as any)[ChannelSocket.ReadyFlag] }
 
   get status() {
-    if (!this.#ws.websocket) return 'CLOSED'
+    if (!this.#ws || !this.#ws.websocket) return 'CLOSED'
     else switch (this.#ws.websocket.readyState) {
       case 0: return 'CONNECTING'
       case 1: return 'OPEN'
@@ -3369,8 +3368,8 @@ class ChannelSocket extends Channel {
   async send(msg: SBMessage | any): Promise<string> {
     await this.ready
     const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
-    _sb_assert(this.#ws.websocket, "ChannelSocket.send() called before ready")
-    if (this.#ws.closed) {
+    _sb_assert(this.#ws && this.#ws.websocket, "ChannelSocket.send() called before ready")
+    if (this.#ws!.closed) {
       if (this.#traceSocket) console.info("send() triggered reset of #readyPromise() (normal)")
       this.channelSocketReady = this.#channelSocketReadyFactory()
         // this.#ChannelSocketReadyFlag = true
@@ -3380,7 +3379,7 @@ class ChannelSocket extends Channel {
       await sbm.ready // message needs to be ready
       await this.ready // and 'we' (channel socket) need to be ready
       if (!this.ChannelSocketReadyFlag) reject("ChannelSocket.send() is confused - ready or not?")
-      const readyState = this.#ws.websocket!.readyState
+      const readyState = this.#ws!.websocket!.readyState
       switch (readyState) {
         case 1: // OPEN
           if (this.#traceSocket)
@@ -3397,13 +3396,13 @@ class ChannelSocket extends Channel {
           this.#ack.set(messageHash, resolve)
 
           // THIS IS WHERE we actually send the payload ...
-          this.#ws.websocket!.send(messagePayload!)
+          this.#ws!.websocket!.send(messagePayload!)
 
           setTimeout(() => {
             // we could just resolve on message return, but we want to print out error message
             if (this.#ack.has(messageHash)) {
               this.#ack.delete(messageHash)
-              const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`
+              const msg = `Websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})`
               console.error(msg)
               reject(msg)
             } else {
@@ -3411,7 +3410,7 @@ class ChannelSocket extends Channel {
               if (this.#traceSocket) console.log("++++++++ ChannelSocket.send() completed sending")
               resolve("success")
             }
-          }, this.#ws.timeout)
+          }, this.#ws!.timeout)
           break
         case 0: // CONNECTING
         case 2: // CLOSING

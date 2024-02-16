@@ -2082,7 +2082,6 @@ class ChannelSocket extends Channel {
     #ack = new Map();
     #traceSocket = false;
     constructor(handleOrKey, onMessage) {
-        let channelServer;
         if (handleOrKey === null)
             throw new SBError(`[ChannelSocket] constructor: you cannot pass 'null'`);
         if (handleOrKey) {
@@ -2091,8 +2090,9 @@ class ChannelSocket extends Channel {
             }
             else if (_checkChannelHandle(handleOrKey)) {
                 const handle = validate_SBChannelHandle(handleOrKey);
-                channelServer = handle.channelServer;
                 super(handle);
+                if (handle.channelServer)
+                    this.channelServer = handle.channelServer;
             }
             else {
                 throw new SBError(`[ChannelSocket] constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`);
@@ -2101,75 +2101,26 @@ class ChannelSocket extends Channel {
         else {
             throw new SBError("[ChannelSocket] constructor: no handle or key provided (cannot 'create' using 'new ChannelSocket()'");
         }
-        if (!channelServer)
-            channelServer = Snackabra.defaultChannelServer;
+        if (!this.channelServer)
+            this.channelServer = Snackabra.defaultChannelServer;
         _sb_assert(onMessage, '[ChannelSocket] constructor: no onMessage handler provided');
         this[_a.ReadyFlag] = false;
-        this.#socketServer = channelServer.replace(/^http/, 'ws');
+        this.#socketServer = this.channelServer.replace(/^http/, 'ws');
         this.onMessage = onMessage;
-        const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket';
-        this.#ws = {
-            url: url,
-            ready: false,
-            closed: false,
-            timeout: 2000
-        };
         this.channelSocketReady = this.#channelSocketReadyFactory();
     }
-    #processMessage = async (e) => {
-        if (DBG)
-            console.log("Received socket message:", e);
-        const msg = e.data;
-        var message = null;
-        _sb_assert(msg, "[ChannelSocket] received empty message");
-        if (typeof msg === 'string') {
-            console.error("ChannelSocket receiving string (json?) message, this is getting deprecated");
-            message = jsonParseWrapper(msg, "L3589");
-        }
-        else if (msg instanceof ArrayBuffer) {
-            message = extractPayload(msg).payload;
-        }
-        else if (msg instanceof Blob) {
-            message = extractPayload(await msg.arrayBuffer()).payload;
-        }
-        else {
-            _sb_exception("L3594", "[ChannelSocket] received unknown message type");
-        }
-        _sb_assert(message, "[ChannelSocket] cannot parse message");
-        message = validate_ChannelMessage(message);
-        console.log(SEP, "Received socket message:\n", message, "\n", SEP);
-        if (!message.channelId)
-            message.channelId = this.channelId;
-        _sb_assert(message.channelId === this.channelId, "[ChannelSocket] received message for wrong channel?");
-        if (this.#traceSocket)
-            console.log("Received socket message:", message);
-        const hash = await crypto.subtle.digest('SHA-256', message.c);
-        const ack_id = arrayBufferToBase64url(hash);
-        if (DBG)
-            console.log("Received message with hash:", ack_id);
-        const r = this.#ack.get(ack_id);
-        if (r) {
-            if (DBG || this.#traceSocket)
-                console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`);
-            this.#ack.delete(ack_id);
-            r("success");
-        }
-        const m = await this.extractMessage(message);
-        if (m) {
-            if (DBG)
-                console.log("Repackaged and will deliver 'Message':", m);
-            this.onMessage(m);
-        }
-        else {
-            if (DBG)
-                console.log("Message could not be parsed, will not deliver");
-        }
-    };
     #channelSocketReadyFactory() {
         return new Promise(async (resolve, reject) => {
             if (DBG)
                 console.log("++++ STARTED ChannelSocket.readyPromise()");
-            const url = this.#ws.url;
+            await this.sbChannelKeysReady;
+            const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket';
+            this.#ws = {
+                url: url,
+                ready: false,
+                closed: false,
+                timeout: 2000
+            };
             if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
                 const apiBodyBuf = assemblePayload(await this.buildApiBody(url));
                 _sb_assert(apiBodyBuf, "Internal Error [L3598]");
@@ -2225,10 +2176,59 @@ class ChannelSocket extends Channel {
             }, 10000);
         });
     }
+    #processMessage = async (e) => {
+        if (DBG)
+            console.log("Received socket message:", e);
+        const msg = e.data;
+        var message = null;
+        _sb_assert(msg, "[ChannelSocket] received empty message");
+        if (typeof msg === 'string') {
+            console.error("ChannelSocket receiving string (json?) message, this is getting deprecated");
+            message = jsonParseWrapper(msg, "L3589");
+        }
+        else if (msg instanceof ArrayBuffer) {
+            message = extractPayload(msg).payload;
+        }
+        else if (msg instanceof Blob) {
+            message = extractPayload(await msg.arrayBuffer()).payload;
+        }
+        else {
+            _sb_exception("L3594", "[ChannelSocket] received unknown message type");
+        }
+        _sb_assert(message, "[ChannelSocket] cannot parse message");
+        message = validate_ChannelMessage(message);
+        console.log(SEP, "Received socket message:\n", message, "\n", SEP);
+        if (!message.channelId)
+            message.channelId = this.channelId;
+        _sb_assert(message.channelId === this.channelId, "[ChannelSocket] received message for wrong channel?");
+        if (this.#traceSocket)
+            console.log("Received socket message:", message);
+        const hash = await crypto.subtle.digest('SHA-256', message.c);
+        const ack_id = arrayBufferToBase64url(hash);
+        if (DBG)
+            console.log("Received message with hash:", ack_id);
+        const r = this.#ack.get(ack_id);
+        if (r) {
+            if (DBG || this.#traceSocket)
+                console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`);
+            this.#ack.delete(ack_id);
+            r("success");
+        }
+        const m = await this.extractMessage(message);
+        if (m) {
+            if (DBG)
+                console.log("Repackaged and will deliver 'Message':", m);
+            this.onMessage(m);
+        }
+        else {
+            if (DBG)
+                console.log("Message could not be parsed, will not deliver");
+        }
+    };
     get ready() { return this.channelSocketReady; }
     get ChannelSocketReadyFlag() { return this[_a.ReadyFlag]; }
     get status() {
-        if (!this.#ws.websocket)
+        if (!this.#ws || !this.#ws.websocket)
             return 'CLOSED';
         else
             switch (this.#ws.websocket.readyState) {
@@ -2246,7 +2246,7 @@ class ChannelSocket extends Channel {
     async send(msg) {
         await this.ready;
         const sbm = msg instanceof SBMessage ? msg : new SBMessage(this, msg);
-        _sb_assert(this.#ws.websocket, "ChannelSocket.send() called before ready");
+        _sb_assert(this.#ws && this.#ws.websocket, "ChannelSocket.send() called before ready");
         if (this.#ws.closed) {
             if (this.#traceSocket)
                 console.info("send() triggered reset of #readyPromise() (normal)");

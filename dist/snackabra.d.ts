@@ -103,21 +103,21 @@ export type SBObjectHandleVersions = '1' | '2' | '3';
 export interface SBObjectHandle {
     [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
     id: Base62Encoded;
-    key?: Base62Encoded;
     verification?: Promise<string> | string;
     version?: SBObjectHandleVersions;
-    type?: string;
+    key?: Base62Encoded;
     iv?: Uint8Array | Base62Encoded;
     salt?: ArrayBuffer | Base62Encoded;
     storageServer?: string;
+    data?: WeakRef<ArrayBuffer> | ArrayBuffer;
+    payload?: any;
     fileName?: string;
     dateAndTime?: string;
     fileType?: string;
     lastModified?: number;
     actualSize?: number;
     savedSize?: number;
-    data?: WeakRef<ArrayBuffer> | ArrayBuffer;
-    payload?: any;
+    type?: string;
 }
 export declare function validate_SBObjectHandle(h: SBObjectHandle): SBObjectHandle;
 export declare function stringify_SBObjectHandle(h: SBObjectHandle): Promise<SBObjectHandle>;
