@@ -335,14 +335,13 @@ export interface ChannelMessage {
   timestampPrefix?: string, // string/base4 encoding of timestamp (see timestampToBase4String)
   _id?: string, // channelId + '_' + subChannel + '_' + timestampPrefix
 
-  // whatever is being sent; should (must) be stripped when sent
-  // when encrypted, this is packaged as payload (and then encrypted)
-  // (signing is done on the payload version)
-  // internally before sending, it's referenced as-is
+  // whatever is being sent; should (must) be stripped when sent. when
+  // encrypted, this is packaged as payload first (signing is done on the
+  // payload version)
   unencryptedContents?: any,
 
   ready?: boolean, // if present, signals other side is ready to receive messages (rest of message ignored)
-  t?: SBUserId, // 'to': public (hash) of recipient; note that Owner sees all messages; if omitted means broadcast
+  t?: SBUserId, // 'to': public (hash) of recipient; note that Owner sees all messages; if omitted usually means broadcast
   ttl?: number, // Value 0-15; if it's missing it's 15/0xF (infinite); if it's 1-7 it's duplicated to subchannels
 }
 
@@ -2253,6 +2252,178 @@ class SB384 {
 //#region Channel, ChannelSocket, SBMessage
 
 /**
+ * Key exchange protocol. (Note that SBMessage always includes
+ * a reference to the channel)
+ */
+export interface SBProtocol {
+  // if the protocol doesn't 'apply' to the message, this should throw
+  encryptionKey(msg: SBMessage): Promise<CryptoKey>;
+  // 'undefined' means it's outside the scope of our protocol, for example
+  // if we're not a permitted recipient, or keys have expired, etc
+  decryptionKey(channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
+}
+
+/**
+ * Superset of what different protocols might need. Their meaning
+ * depends on the protocol
+ */
+export interface Protocol_KeyInfo {
+  salt1?: ArrayBuffer,
+  salt2?: ArrayBuffer,
+  iterations1?: number,
+  iterations2?: number,
+  hash1?: string,
+  hash2?: string,
+  summary?: string,
+}
+
+/**
+ * Basic protocol, just provide entropy and salt, then all
+ * messages are encrypted accordingly.
+ */
+export class Protocol_AES_GCM_256 implements SBProtocol {
+  #masterKey?: Promise<CryptoKey>
+  #keyInfo: Protocol_KeyInfo
+
+  constructor(passphrase: string, keyInfo: Protocol_KeyInfo) {
+    this.#keyInfo = keyInfo; // todo: assert components
+    this.#masterKey = this.initializeMasterKey(passphrase);
+  }
+
+  async initializeMasterKey(passphrase: string): Promise<CryptoKey> {
+    const salt = this.#keyInfo.salt1!;
+    const iterations = this.#keyInfo.iterations1!;
+    const hash = this.#keyInfo.hash1!;
+    _sb_assert(salt && iterations && hash, "Protocol_AES_GCM_256.initializeMasterKey() - insufficient key info (fatal)")
+
+    const baseKey = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(passphrase),
+      { name: 'PBKDF2' },
+      false,
+      ['deriveBits', 'deriveKey']
+    );
+
+    const masterKeyBuffer = await crypto.subtle.deriveBits(
+      {
+        name: 'PBKDF2',
+        salt: salt,
+        iterations: iterations,
+        hash: hash
+      },
+      baseKey,
+      256
+    );
+
+    return crypto.subtle.importKey(
+      'raw',
+      masterKeyBuffer,
+      { name: 'PBKDF2' },
+      false,
+      ['deriveBits', 'deriveKey']
+    );
+  }
+
+  static async genKey(): Promise<Protocol_KeyInfo> {
+    return {
+      salt1: crypto.getRandomValues(new Uint8Array(16)).buffer,
+      iterations1: 100000,
+      iterations2: 10000,
+      hash1: 'SHA-256',
+      summary: 'PBKDF2 - SHA-256 - AES-GCM',
+    }
+  }
+
+  // Derive a per-message key 
+  async #getMessageKey(salt: ArrayBuffer): Promise<CryptoKey> {
+    const derivedKey = await crypto.subtle.deriveKey(
+      {
+        'name': 'PBKDF2',
+        'salt': salt,
+        'iterations': this.#keyInfo.iterations2!, // on a per-message basis
+        'hash': this.#keyInfo.hash1!
+      },
+      await this.#masterKey!,
+      { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
+    return derivedKey
+  }
+
+  async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
+    if (DBG) console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt)
+    return this.#getMessageKey(msg.salt)
+  }
+
+  async decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined> {
+    if (!msg.salt) {
+      console.warn("Salt should always be present in ChannelMessage")
+      return undefined
+    }
+    if (DBG) console.log("CALLING Protocol_AES_GCM_384.decryptionKey(), salt:", msg.salt)
+    return this.#getMessageKey(msg.salt!)
+  }
+}
+
+/**
+ * Implements 'whisper', eg 1:1 public-key based encryption between
+ * sender and receiver. It will use as sender the private key used
+ * on the Channel, and you can either provide 'sendTo' in the 
+ * SBMessage options, or omit it in which case it will use the
+ * channel owner's public key.
+ * 
+ * If no protocol is provided to a channel or message, then this
+ * protocol is used by default.
+ */
+export class Protocol_ECDH implements SBProtocol {
+  #keyMap: Map<string, CryptoKey> = new Map();
+
+  constructor() { /* this protocol depends on channel and recipient only */ }
+
+  async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
+    await msg.channel.ready;
+    const channelId = msg.channel.channelId!;
+    _sb_assert(channelId, "Internal Error (L2565)");
+    const sendTo = msg.options.sendTo ? msg.options.sendTo : msg.channel.channelData.ownerPublicKey;
+    return this.#getKey(channelId, sendTo, msg.channel.privateKey);
+  }
+
+  async decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
+    await channel.ready;
+    const channelId = channel.channelId!;
+    _sb_assert(channelId, "Internal Error (L2594)");
+    const sentFrom = channel.visitors.get(msg.f)!;
+    if (!sentFrom) {
+      console.error("Protocol_ECDH.key() - sentFrom is unknown");
+      return undefined;
+    }
+    return this.#getKey(channelId, sentFrom, channel.privateKey);
+  }
+
+  async #getKey(channelId: string, publicKey: string, privateKey: CryptoKey): Promise<CryptoKey> {
+    const key = channelId + "_" + publicKey;
+    if (!this.#keyMap.has(key)) {
+      const newKey = await crypto.subtle.deriveKey(
+        {
+          name: 'ECDH',
+          public: (await new SB384(publicKey).ready).publicKey
+        },
+        privateKey,
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+      this.#keyMap.set(key, newKey);
+      if (DBG2) console.log("++++ Protocol_ECDH.key() - newKey:", newKey);
+    }
+    const res = this.#keyMap.get(key);
+    _sb_assert(res, "Internal Error (L2584/2611)");
+    if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res);
+    return res!;
+  }
+}
+
+
+
+/**
  * The minimum state of a Channel is the "user" keys, eg
  * how we identify when connecting to the channel.
  */
@@ -2418,11 +2589,19 @@ export interface MessageOptions {
 }
 
 /**
- * Every message being sent needs to at some point be in the form
- * of an SBMessage object. Upon creation, the provided contents
- * (which can be any JS object pretty much) is encrypted and
- * wrapped in a ChannelMessage object, which is what is later
- * sent to the channel (or socket).
+ * Every message being sent goes through the SBMessage object. Upon creation,
+ * the provided contents (which can be any JS object more or les) is encrypted
+ * and wrapped into a ChannelMessage object, which is what is later sent. Same
+ * binary format is used for restful endpoints, websockets, and other
+ * transports.
+ *
+ * Body should be below 32KiB. Note: for protocol choice, sbm will prioritize
+ * message options over channel choice, and lacking both will default to
+ * Channel.defaultProtocol (which is Protocol_ECDH).
+ *
+ * Note that with Protocl_ECDH, you need to make sure 'sendTo' is set, since
+ * that will otherwise default to Owner. It does not support channel
+ * 'broadcast'.
  */
 class SBMessage {
   [SB_MESSAGE_SYMBOL] = true
@@ -2431,23 +2610,18 @@ class SBMessage {
   #message?: ChannelMessage   // the message that's set to send
   salt: ArrayBuffer
 
-  /**
-   * SBMessage
-   * 
-   * Body should be below 32KiB, though it tolerates up to 64KiB
-   *
-   */
   constructor(
     public channel: Channel,
     public contents: any,
     public options: MessageOptions = {}
   ) {
-    // there is always salt, whether or not the protocol needs it
+    // there is always sbm-generated salt, whether or not the protocol needs it,
+    // or wants to create/manage it by itself
     this.salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
     this.sbMessageReady = new Promise<SBMessage>(async (resolve) => {
       await channel.channelReady
       if (!this.options.protocol) this.options.protocol = channel.protocol
-      if (!this.options.protocol) throw new SBError("SBMessage() - no protocol provided")
+      if (!this.options.protocol) this.options.protocol = Channel.defaultProtocol
       this.#message = await sbCrypto.wrap(
         this.contents,
         this.channel.userId,
@@ -2468,179 +2642,12 @@ class SBMessage {
    * SBMessage.send()
    */
   async send() {
-    if (DBG2) console.log("SBMessage.send() - sending message:", this.message)
+    if (DBG) console.log("SBMessage.send() - sending message:", this.message)
     await this.ready
     return this.channel.callApi('/send', this.message)
-    // return this.channel.send(this)
   }
 } /* class SBMessage */
 
-/**
- * Key exchange protocol. (Note that SBMessage always includes
- * a reference to the channel)
- */
-export interface SBProtocol {
-  // if the protocol doesn't 'apply' to the message, this should throw
-  encryptionKey(msg: SBMessage): Promise<CryptoKey>;
-  // 'undefined' means it's outside the scope of our protocol, for example
-  // if we're not a permitted recipient, or keys have expired, etc
-  decryptionKey(channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
-}
-
-/**
- * Superset of what different protocols might need. Their meaning
- * depends on the protocol
- */
-export interface Protocol_KeyInfo {
-  salt1?: ArrayBuffer,
-  salt2?: ArrayBuffer,
-  iterations1?: number,
-  iterations2?: number,
-  hash1?: string,
-  hash2?: string,
-  summary?: string,
-}
-
-/**
- * Basic protocol, just provide entropy and salt, then all
- * messages are encrypted accordingly.
- */
-export class Protocol_AES_GCM_256 implements SBProtocol {
-  #masterKey?: Promise<CryptoKey>
-  #keyInfo: Protocol_KeyInfo
-
-  constructor(passphrase: string, keyInfo: Protocol_KeyInfo) {
-    this.#keyInfo = keyInfo; // todo: assert components
-    this.#masterKey = this.initializeMasterKey(passphrase);
-  }
-
-  async initializeMasterKey(passphrase: string): Promise<CryptoKey> {
-    const salt = this.#keyInfo.salt1!;
-    const iterations = this.#keyInfo.iterations1!;
-    const hash = this.#keyInfo.hash1!;
-    _sb_assert(salt && iterations && hash, "Protocol_AES_GCM_256.initializeMasterKey() - insufficient key info (fatal)")
-
-    const baseKey = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(passphrase),
-      { name: 'PBKDF2' },
-      false,
-      ['deriveBits', 'deriveKey']
-    );
-
-    const masterKeyBuffer = await crypto.subtle.deriveBits(
-      {
-        name: 'PBKDF2',
-        salt: salt,
-        iterations: iterations,
-        hash: hash
-      },
-      baseKey,
-      256
-    );
-
-    return crypto.subtle.importKey(
-      'raw',
-      masterKeyBuffer,
-      { name: 'PBKDF2' },
-      false,
-      ['deriveBits', 'deriveKey']
-    );
-  }
-
-  static async genKey(): Promise<Protocol_KeyInfo> {
-    return {
-      salt1: crypto.getRandomValues(new Uint8Array(16)).buffer,
-      iterations1: 100000,
-      iterations2: 10000,
-      hash1: 'SHA-256',
-      summary: 'PBKDF2 - SHA-256 - AES-GCM',
-    }
-  }
-
-  // Derive a per-message key 
-  async #getMessageKey(salt: ArrayBuffer): Promise<CryptoKey> {
-    const derivedKey = await crypto.subtle.deriveKey(
-      {
-        'name': 'PBKDF2',
-        'salt': salt,
-        'iterations': this.#keyInfo.iterations2!, // on a per-message basis
-        'hash': this.#keyInfo.hash1!
-      },
-      await this.#masterKey!,
-      { 'name': 'AES-GCM', 'length': 256 }, true, ['encrypt', 'decrypt'])
-    return derivedKey
-  }
-
-  async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
-    if (DBG) console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt)
-    return this.#getMessageKey(msg.salt)
-  }
-
-  async decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined> {
-    if (!msg.salt) {
-      console.warn("Salt should always be present in ChannelMessage")
-      return undefined
-    }
-    if (DBG) console.log("CALLING Protocol_AES_GCM_384.decryptionKey(), salt:", msg.salt)
-    return this.#getMessageKey(msg.salt!)
-  }
-}
-
-/**
- * Implements 'whisper', eg 1:1 public-key based encryption between
- * sender and receiver. It will use as sender the private key used
- * on the Channel, and you can either provide 'sendTo' in the 
- * SBMessage options, or omit it in which case it will use the
- * channel owner's public key.
- */
-export class Protocol_ECDH implements SBProtocol {
-  #keyMap: Map<string, CryptoKey> = new Map();
-
-  constructor() { /* this protocol depends on channel and recipient only */ }
-
-  async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
-    await msg.channel.ready;
-    const channelId = msg.channel.channelId!;
-    _sb_assert(channelId, "Internal Error (L2565)");
-    const sendTo = msg.options.sendTo ? msg.options.sendTo : msg.channel.channelData.ownerPublicKey;
-    return this.#getKey(channelId, sendTo, msg.channel.privateKey);
-  }
-
-  async decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined> {
-    await channel.ready;
-    const channelId = channel.channelId!;
-    _sb_assert(channelId, "Internal Error (L2594)");
-    const sentFrom = channel.visitors.get(msg.f)!;
-    if (!sentFrom) {
-      if (DBG) console.log("Protocol_ECDH.key() - sentFrom is unknown");
-      return undefined;
-    }
-    return this.#getKey(channelId, sentFrom, channel.privateKey);
-  }
-
-  async #getKey(channelId: string, publicKey: string, privateKey: CryptoKey): Promise<CryptoKey> {
-    const key = channelId + "_" + publicKey;
-    if (!this.#keyMap.has(key)) {
-      const newKey = await crypto.subtle.deriveKey(
-        {
-          name: 'ECDH',
-          public: (await new SB384(publicKey).ready).publicKey
-        },
-        privateKey,
-        { name: 'AES-GCM', length: 256 },
-        true,
-        ['encrypt', 'decrypt']
-      );
-      this.#keyMap.set(key, newKey);
-      if (DBG2) console.log("++++ Protocol_ECDH.key() - newKey:", newKey);
-    }
-    const res = this.#keyMap.get(key);
-    _sb_assert(res, "Internal Error (L2584/2611)");
-    if (DBG2) console.log("++++ Protocol_ECDH.key() - res:", res);
-    return res!;
-  }
-}
 
 
 // // same as in servers / workers.ts
@@ -2682,11 +2689,9 @@ class Channel extends SBChannelKeys {
   channelReady: Promise<Channel>
   static ReadyFlag = Symbol('ChannelReadyFlag'); // see below for '(this as any)[Channel.ReadyFlag] = false;'
   locked?: boolean = false // TODO: need to make sure we're tracking whenever this has changed
-  // this is actually info for lock status, and is now available to Owner (no admin status anymore)
-  // adminData?: Dictionary<any> // todo: make into getter
-  // verifiedGuest: boolean = false
   #cursor: string = ''; // last (oldest) message key seen
-  // #protocol?: SBProtocol
+
+  static defaultProtocol: SBProtocol = new Protocol_ECDH() // default
 
   visitors: Map<SBUserId, SBUserPrivateKey> = new Map()
 
@@ -2699,18 +2704,17 @@ class Channel extends SBChannelKeys {
   constructor(newChannel: null, protocol: SBProtocol) // requesting a new channel
   constructor(key: SBUserPrivateKey, protocol?: SBProtocol)
   constructor(handle: SBChannelHandle, protocol?: SBProtocol)
-  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey | null, public protocol?: SBProtocol) {
-    // if (handleOrKey === null) throw new SBError(`Channel() constructor: you cannot pass 'null'`)
-    if (DBG2) console.log("Channel() constructor called with handleOrKey:", handleOrKey)
+  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey | null, public protocol: SBProtocol = Channel.defaultProtocol) {
+    if (DBG) console.log("Channel() constructor called with handleOrKey:\n", handleOrKey)
     if (handleOrKey === null)
       super()
     else
       super(handleOrKey);
-    // this.protocol = protocol ? protocol : new BasicProtocol(this)
-    if (protocol) this.protocol = protocol
     this.channelReady =
       this.sbChannelKeysReady
         .then(() => {
+          // owner 'userId' is same as channelId, always added
+          this.visitors.set(this.channelId!, this.channelData.ownerPublicKey);
           (this as any)[Channel.ReadyFlag] = true;
           return this;
         })
@@ -2720,85 +2724,79 @@ class Channel extends SBChannelKeys {
   get ready() { return this.channelReady }
   get ChannelReadyFlag(): boolean { return (this as any)[Channel.ReadyFlag] }
 
-  // @Memoize @Ready get protocol() { return this.#protocol }
   @Memoize @Ready get api() { return this } // for compatibility
 
   /**
-   * Takes a 'ChannelMessage' format and presents it as a 'Message'.
-   * Does a variety of things. If there is any issue, will return 'undefined',
-   * and you should probably just ignore the message. Only requirement
-   * is you extract payload before calling this (sometimes the callee
-   * needs to, or wants to, fill in things in ChannelMessage)
+   * Takes a 'ChannelMessage' format and presents it as a 'Message'. Does a
+   * variety of things. If there is any issue, will return 'undefined', and you
+   * should probably just ignore that message. Only requirement is you extract
+   * payload before calling this (some callees needs to, or wants to, fill in
+   * things in ChannelMessage)
    */
   async extractMessage(msgRaw: ChannelMessage): Promise<Message | undefined> {
     if (DBG) console.log("[extractMessage] Extracting message:", msgRaw)
     try {
       msgRaw = validate_ChannelMessage(msgRaw)
+      if (!msgRaw) {
+        if (DBG) console.error("++++ [extractMessage]: message is not valid (probably an error)", msgRaw)
+        return undefined
+      }
       const f = msgRaw.f // protocols may use 'from', so needs to be in channel visitor map
-      if (!f) return undefined
+      if (!f) {
+        console.error("++++ [extractMessage]: no sender userId hash in message (probably an error)")
+        return undefined
+      }
       if (!this.visitors.has(f)) {
-        if (DBG2) console.log("++++ [extractMessage]: need to update visitor table ...")
+        if (DBG) console.log("++++ [extractMessage]: need to update visitor table ...")
         const visitorMap = await this.callApi('/getPubKeys')
-        if (!visitorMap || !(visitorMap instanceof Map)) return undefined
-        if (DBG2) console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP)
+        if (!visitorMap || !(visitorMap instanceof Map)) {
+          if (DBG) console.error("++++ [extractMessage]: visitorMap is not valid (probably an error)")
+          return undefined
+        }
+        if (DBG) console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP)
         for (const [k, v] of visitorMap) {
-          if (DBG2) console.log("++++ [extractMessage]: adding visitor:", k, v)
+          if (DBG) console.log("++++ [extractMessage]: adding visitor:", k, v)
           this.visitors.set(k, v)
         }
       }
+
       _sb_assert(this.visitors.has(f), `Cannot find sender userId hash ${f} in public key map`)
+      _sb_assert(this.protocol, "Protocol not set (internal error)")
       const k = await this.protocol?.decryptionKey(this, msgRaw)
-      if (!k) return undefined
-      try {
-        // const body = await sbCrypto.extractMessage(k!, msgRaw)
-        // extractMessage(k: CryptoKey, o: ChannelMessage): Promise<any> {
-
-        if (!msgRaw.ts) throw new SBError(`unwrap() - no timestamp in encrypted message`)
-        const { c: t, iv: iv } = msgRaw // encryptedContentsMakeBinary(o)
-        _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
-        const view = new DataView(new ArrayBuffer(8));
-        view.setFloat64(0, msgRaw.ts);
-        const bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t!)
-
-        // const m: Message = {
-        //   body: contents,
-        //   channelId: message.channelId!,
-        //   sender: message.f!,
-        //   senderPublicKey: this.visitors.get(message.f!)!,
-        //   senderTimestamp: message.ts!,
-        //   serverTimestamp: message.sts!,
-        //   _id: message._id!,
-        // }
-
-        if (!msgRaw._id)
-          msgRaw._id = composeMessageKey(this.channelId!, msgRaw.sts!, msgRaw.i2)
-
-        if(msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
-
-        // if (DBG) console.log("++++ [extractMessage]: (ChannelMessage):\n", channelMsg)
-        // TODO: i get channelId and senderId identitical at times ...
-        const msg: Message = {
-          body: extractPayload(bodyBuffer).payload,
-          channelId: this.channelId!,
-          sender: f,
-          senderPublicKey: this.visitors.get(f)!,
-          senderTimestamp: msgRaw.ts!,
-          serverTimestamp: msgRaw.sts!,
-          // eol: msgRaw.eol, // ToDo: various places for TTL/EOL processing
-          _id: msgRaw._id!,
-        }
-        return validate_Message(msg)
-      } catch (e) {
-        if (DBG) console.error("[extractMessage] Could not process message [L2766]:", e)
+      if (!k) {
+        if (DBG) console.error("++++ [extractMessage]: no decryption key provided by protocol (probably an error)")
         return undefined
       }
-
+      if (!msgRaw.ts) throw new SBError(`unwrap() - no timestamp in encrypted message`)
+      const { c: t, iv: iv } = msgRaw // encryptedContentsMakeBinary(o)
+      _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
+      const view = new DataView(new ArrayBuffer(8));
+      view.setFloat64(0, msgRaw.ts);
+      const bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t!)
+      if (!msgRaw._id)
+        msgRaw._id = composeMessageKey(this.channelId!, msgRaw.sts!, msgRaw.i2)
+      if(msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
+      const msg: Message = {
+        body: extractPayload(bodyBuffer).payload,
+        channelId: this.channelId!,
+        sender: f,
+        senderPublicKey: this.visitors.get(f)!,
+        senderTimestamp: msgRaw.ts!,
+        serverTimestamp: msgRaw.sts!,
+        // eol: <needs to be calculated>, // ToDo: various places for TTL/EOL processing
+        _id: msgRaw._id!,
+      }
+      if (DBG) console.log("[extractMessage] Extracted message (before validation):", msg)
+      return validate_Message(msg)
     } catch (e) {
-      if (DBG) console.error("[extractMessage] Could not process message [L2771]:", e)
+      if (DBG) console.error("[extractMessage] Could not process message (exception) [L2782]:", e)
       return undefined
     }
   }
 
+  /**
+   * Applies 'extractMessage()' to a map of messages.
+   */
   async extractMessageMap(msgMap: Map<string, ChannelMessage>): Promise<Map<string, Message>> {
     const ret = new Map<string, Message>()
     for (const [k, v] of msgMap) {
@@ -2849,30 +2847,16 @@ class Channel extends SBChannelKeys {
     return new Promise(async (resolve, _reject) => {
       await this.channelReady
       _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)")
-      // ToDO: we want to cache (merge) these messages into a local cached list (since they are immutable)
-      // let cursorOption = paginate ? '&cursor=' + this.#cursor : '';
-      //  const messages = await this.callApi('/getMessageKeys?currentMessagesLength=' + currentMessagesLength + cursorOption)
-      const messages = await this.callApi(
+      const messages: Set<string> = await this.callApi(
         '/getMessageKeys',
         { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined })
       // todo: empty is valid
-      _sb_assert(messages, "Channel.getMessageKeys: no messages (empty/null response)")
-      if (DBG2) console.log("getMessageKeys\n", messages)
+      if (DBG) console.log("getMessageKeys\n", messages)
+      if(!messages || messages.size === 0)
+        console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?")
       resolve(messages)
     });
   }
-
-  // async decryptMessage(value: ArrayBuffer): Promise<Message | undefined> {
-  //   if (!this.protocol) throw new SBError("Channel.get..Messages(): need protocol to decrypt messages")
-  //   const msgBuf = extractPayload(value).payload
-  //   if (DBG) console.log("++++ deCryptMessage: msgBuf:\n", msgBuf)
-  //   const msgRaw = validate_ChannelMessage(msgBuf)
-  //   if (DBG) console.log("++++ deCryptChannelMessage: validated")
-  //   // const decryptedMessage = await this.deCryptChannelMessage(this, key, value)
-  //   const msg = await this.extractMessage(msgRaw)
-  //   return msg
-  // }
-
 
   // get raw set of messages from the server
   getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>> {
@@ -2896,27 +2880,8 @@ class Channel extends SBChannelKeys {
     if (messageKeys.size === 0) throw new SBError("[getMessageMap] no message keys provided")
     return new Promise(async (resolve, _reject) => {
       await this.channelReady
-
-      // _sb_assert(this.channelId, "Channel.getMessages: no channel ID (?)")
       const messagePayloads: Map<string, ArrayBuffer> = await this.callApi('/getMessages', messageKeys)
-      // _sb_assert(messagePayloads, "Channel.getMessages: no messages (empty/null response)")
-      
-
-      // we want to iterate through all the entries in the map, and call 'deCryptChannelMessage' on each
-      // one with parameters of the key and the value (which is the encrypted contents). if it failed
-      // to decrypt, it will return 'undefined', otherwise we add the returned 'Message' object and
-      // add it to a NEW map, which maps from the key to the decrypted message
-
-      // const decryptedMessages = new Map<string, ChannelMessage>()
-      // for (const [key, value] of messages.entries()) {
-      //   const decryptedMessage = await this.decryptMessage(value)
-      //   if (decryptedMessage) decryptedMessages.set(key, decryptedMessage)
-      // }
-      // if (DBG2) console.log(SEP, "and here are decrypted ones, hopefully\n", SEP, decryptedMessages, "\n", SEP)
-      // resolve(decryptedMessages)7
-
-      // we first have to apply extractPayload().payload to each value, and only
-      // include entries that pass validate_ChannelMessage()
+      // we extract payload, validate (at ChannelMessage level), then call extractMessageMap() to decrypt
       const messages = new Map<string, ChannelMessage>()
       for (const [k, v] of messagePayloads) {
         try {
@@ -2925,14 +2890,12 @@ class Channel extends SBChannelKeys {
           if (DBG) console.warn(SEP, "[getMessageMap] Failed extract and/or to validate message:", SEP, v, SEP, e, SEP)
         }
       }
-
       resolve(await this.extractMessageMap(messages))
-
     });
   }
 
   @Ready async send(msg: any, options?: MessageOptions): Promise<string> {
-    _sb_assert(!(msg instanceof SBMessage), "Channel.send: msg is already an SBMessage")
+    _sb_assert(!(msg instanceof SBMessage), "[Channel.send] msg is already an SBMessage")
     return (new SBMessage(this, msg, options)).send()
 
     // const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
@@ -3119,78 +3082,57 @@ class Channel extends SBChannelKeys {
 } /* class Channel */
 
 /**
-   * ChannelSocket extends Channel. Use this instead of ChannelEndpoint if you
-   * are going to be sending/receiving messages.
-   * 
-   * You send by calling channel.send(msg: SBMessage | string), i.e.
-   * you can send a quick string.
-   * 
+   * ChannelSocket extends Channel. Has same basic functionality as Channel, but
+   * is synchronous and uses websockets, eg lower latency and higher throughput.
+   *
+   * You send by calling channel.send(msg: SBMessage | string), i.e. you can
+   * send a quick string.
+   *
    * You can set your message handler upon creation, or later by using
-   * channel.onMessage = (m: ChannelMessage) => { ... }.
-   * 
-   * This implementation uses websockeds to connect all participating
-   * clients through a single servlet (somewhere), with very fast
-   * forwarding.
-   * 
-   * You don't need to worry about managing resources, like closing it,
-   * or checking if it's open. It will close based on server behavior,
-   * eg it's up to the server to close the connection based on inactivity.
-   * The ChannelSocket will re-open if you try to send against a closed
-   * connection. You can check status with channelSocket.status if you
-   * like, but it shouldn't be necessary.
-   * 
-   * Messages are delivered as type ChannelMessage. Usually they are
-   * simple blobs of data that are encrypted: the ChannelSocket will
-   * decrypt them for you. It also handles a simple ack/nack mechanism
-   * with the server transparently.
-   * 
+   * channel.onMessage = (m: Message) => { ... }.
+   *
+   * You don't need to worry about managing resources, like closing it, or
+   * checking if it's open. It will close based on server behavior, eg it's up
+   * to the server to close the connection based on inactivity. The
+   * ChannelSocket will re-open if you try to send against a closed connection.
+   *
+   * Messages are delivered as type Message. It also handles a simple ack/nack
+   * mechanism with the server transparently.
+   *
    * Be aware that if ChannelSocket doesn't know how to handle a certain
-   * message, it will generally just forward it to you as-is. 
-   * 
+   * message, it will generally drop it. 
+   *
  */
 class ChannelSocket extends Channel {
   // ready: Promise<ChannelSocket>
   channelSocketReady: Promise<ChannelSocket>
-  // #ChannelSocketReadyFlag: boolean = false // must be named <class>ReadyFlag
   static ReadyFlag = Symbol('ChannelSocketReadyFlag'); // see below for '(this as any)[ChannelSocket.ReadyFlag] = false;'
 
   #ws?: WSProtocolOptions
-  // #sbServer: SBServer
   #socketServer: string
 
   onMessage = (_m: Message): void => { _sb_assert(false, "[ChannelSocket] NO MESSAGE HANDLER"); }
   #ack: Map<string, (value: string | PromiseLike<string>) => void> = new Map()
   #traceSocket: boolean = false // should not be true in production
 
-  // #resolveFirstMessage: (value: ChannelSocket | PromiseLike<ChannelSocket>) => void = () => { _sb_exception('L2461', 'this should never be called') }
-  // #firstMessageEventHandlerReference: (e: MessageEvent<any>) => void = (_e: MessageEvent<any>) => { _sb_exception('L2462', 'this should never be called') }
-
-  constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message) => void) {
-    // undefined (missing) is fine, but 'null' is not
-    if (handleOrKey === null) throw new SBError(`[ChannelSocket] constructor: you cannot pass 'null'`)
-    if (handleOrKey) {
-      // annoying TS limitation that we can't propagate a dual type
-      if (typeof handleOrKey === 'string') {
-        super(handleOrKey as SBUserPrivateKey) // we let super deal with it
-      } else if (_checkChannelHandle(handleOrKey)) {
-        const handle = validate_SBChannelHandle(handleOrKey)
-        super(handle);
-        if (handle.channelServer) this.channelServer = handle.channelServer // might still be missing
-      } else {
-        throw new SBError(`[ChannelSocket] constructor: invalid parameter (must be SBChannelHandle or SBUserPrivateKey)`)
-      }
-    } else {
-      throw new SBError("[ChannelSocket] constructor: no handle or key provided (cannot 'create' using 'new ChannelSocket()'")
-    }
-    if (!this.channelServer) this.channelServer = Snackabra.defaultChannelServer // might throw
-
+  constructor(
+      handleOrKey: SBChannelHandle | SBUserPrivateKey,
+      onMessage: (m: Message) => void,
+      protocol?: SBProtocol
+      ) {
     _sb_assert(onMessage, '[ChannelSocket] constructor: no onMessage handler provided')
-    
-    // if (!handle.hasOwnProperty('channelId') || !handle.hasOwnProperty('userPrivateKey'))
-    //   throw new SBError("ChannelSocket(): first argument must be valid SBChannelHandle")
-    // if (!handle.channelServer)
-    //   throw new SBError("ChannelSocket(): no channel server provided (required)")
-    // super(handleOrKey) // initialize 'channel' parent
+
+    if (typeof handleOrKey === 'string') {
+      super(handleOrKey as SBUserPrivateKey, protocol) // we let super deal with it
+    } else {
+      const handle = validate_SBChannelHandle(handleOrKey)
+      super(handle, protocol)
+      if (handle.channelServer)
+        this.channelServer = handle.channelServer // handle choice will override
+    }
+
+    // if for some reason we still don't have this, go with default
+    if (!this.channelServer) this.channelServer = Snackabra.defaultChannelServer // might throw
 
     ; (this as any)[ChannelSocket.ReadyFlag] = false;
     this.#socketServer = this.channelServer.replace(/^http/, 'ws')
@@ -3274,14 +3216,13 @@ class ChannelSocket extends Channel {
         }
       }, 10000);
 
-      // (this as any)[ChannelSocket.ReadyFlag] = true;
-      // resolve(this) // nope, we resolve when we get a 'ready' message
+
     })
   }
 
   #processMessage = async (e: MessageEvent<any>) => {
-    if (DBG) console.log("Received socket message:", e)
     const msg = e.data
+    if (DBG) console.log("[ChannelSocket] Received socket message:", msg)
     var message: ChannelMessage | null = null
     _sb_assert(msg, "[ChannelSocket] received empty message")
     if (typeof msg === 'string') {
@@ -3294,16 +3235,21 @@ class ChannelSocket extends Channel {
     } else {
       _sb_exception("L3594", "[ChannelSocket] received unknown message type")
     }
-    _sb_assert(message, "[ChannelSocket] cannot parse message")
+    _sb_assert(message, "[ChannelSocket] cannot extract message")
+
+    // we catch server-specific messages here, and then pass the rest to the user
+    if (message!.ready) {
+      console.log("++++++++ #processMessage: received ready message", message)
+      return
+    }
 
     message = validate_ChannelMessage(message!) // throws if there's an issue
-    // TODO: decrypt, validate signature, etc
-    console.log(SEP, "Received socket message:\n", message, "\n", SEP)
+    if (DBG2) console.log(SEP, "[ChannelSocket] Received (extracted/validated) socket message:\n", message, "\n", SEP)
 
     if (!message.channelId) message.channelId = this.channelId
     _sb_assert(message.channelId === this.channelId, "[ChannelSocket] received message for wrong channel?")
 
-    if (this.#traceSocket) console.log("Received socket message:", message)
+    if (this.#traceSocket) console.log("[ChannelSocket] Received socket message:", message)
 
     // if (!message._id)
     //   message._id = composeMessageKey(message.channelId!, message.sts!, message.i2)
@@ -3311,7 +3257,7 @@ class ChannelSocket extends Channel {
     // check if this message is one that we've recently sent (track 'ack')
     const hash = await crypto.subtle.digest('SHA-256', message.c!)
     const ack_id = arrayBufferToBase64url(hash)
-    if (DBG) console.log("Received message with hash:", ack_id)
+    if (DBG) console.log("[ChannelSocket] Received message with hash:", ack_id)
     const r = this.#ack.get(ack_id)
     if (r) {
       if (DBG || this.#traceSocket) console.log(`++++++++ #processMessage: found matching ack for id ${ack_id}`)
@@ -3319,28 +3265,14 @@ class ChannelSocket extends Channel {
       r("success") // we first resolve that outstanding send (and then also deliver message)
     }
 
-    // // const contents = await this.deCryptChannelMessage(this, message._id, message.c!)
-    // const contents = await this.deCryptChannelMessage(this, message)
-
-    // // we shuffle around the data into an easier-to-consume format
-    // const m: Message = {
-    //   body: contents,
-    //   channelId: message.channelId!,
-    //   sender: message.f!,
-    //   senderPublicKey: this.visitors.get(message.f!)!,
-    //   senderTimestamp: message.ts!,
-    //   serverTimestamp: message.sts!,
-    //   _id: message._id!,
-    // }
-
     const m = await this.extractMessage(message)
 
     if (m) {
-      if (DBG) console.log("Repackaged and will deliver 'Message':", m)
+      if (DBG) console.log("[ChannelSocket] Repackaged and will deliver 'Message':", m)
       // call user-provided message handler
       this.onMessage(m)
     } else {
-      if (DBG) console.log("Message could not be parsed, will not deliver")
+      if (DBG) console.log("[ChannelSocket] Message could not be parsed, will not deliver")
     }
   }
 
@@ -3570,7 +3502,7 @@ export class StorageApi {
     return data_buffer.slice(0, _size);
   }
 
-  // derives the encryption key for a given object (shard)
+  /** Derives the encryption key for a given object (shard). */
   static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey> {
     return new Promise((resolve, reject) => {
       try {
@@ -3908,11 +3840,6 @@ class Snackabra {
     _sb_assert(budgetChannelOrToken !== null, '[create channel] Invalid parameter (null)')
     return new Promise<SBChannelHandle>(async (resolve, reject) => {
       try {
-        // 
-        // if (typeof budgetChannelOrToken === 'string') {
-        //   _storageToken = budgetChannelOrToken as SBStorageToken
-        // } else 
-
         var _storageToken: SBStorageToken | undefined
         if (budgetChannelOrToken instanceof Channel) {
           const budget = budgetChannelOrToken as Channel
@@ -3946,10 +3873,9 @@ class Snackabra {
   }
 
   /**
-   * Connects to :term:`Channel Name` on this SB config.
-   * Returns a Channel object if no message handler is
-   * provided, if onMessage is provided then it returns
-   * a ChannelSocket object.
+   * Connects to :term:`Channel` on this channel server. Returns a Channel  if
+   * no message handler is provided; if onMessage is provided then it returns a
+   * ChannelSocket.
    */
 
   connect(handleOrKey: SBChannelHandle | SBUserPrivateKey): Channel

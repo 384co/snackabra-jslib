@@ -212,6 +212,33 @@ declare class SB384 {
     get userPrivateKey(): SBUserPrivateKey;
     get userPrivateKeyDehydrated(): SBUserPrivateKey;
 }
+export interface SBProtocol {
+    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
+    decryptionKey(channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
+}
+export interface Protocol_KeyInfo {
+    salt1?: ArrayBuffer;
+    salt2?: ArrayBuffer;
+    iterations1?: number;
+    iterations2?: number;
+    hash1?: string;
+    hash2?: string;
+    summary?: string;
+}
+export declare class Protocol_AES_GCM_256 implements SBProtocol {
+    #private;
+    constructor(passphrase: string, keyInfo: Protocol_KeyInfo);
+    initializeMasterKey(passphrase: string): Promise<CryptoKey>;
+    static genKey(): Promise<Protocol_KeyInfo>;
+    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
+    decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
+}
+export declare class Protocol_ECDH implements SBProtocol {
+    #private;
+    constructor();
+    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
+    decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined>;
+}
 export declare class SBChannelKeys extends SB384 {
     #private;
     sbChannelKeysReady: Promise<SBChannelKeys>;
@@ -249,39 +276,13 @@ declare class SBMessage {
     get message(): ChannelMessage;
     send(): Promise<any>;
 }
-export interface SBProtocol {
-    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
-    decryptionKey(channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
-}
-export interface Protocol_KeyInfo {
-    salt1?: ArrayBuffer;
-    salt2?: ArrayBuffer;
-    iterations1?: number;
-    iterations2?: number;
-    hash1?: string;
-    hash2?: string;
-    summary?: string;
-}
-export declare class Protocol_AES_GCM_256 implements SBProtocol {
-    #private;
-    constructor(passphrase: string, keyInfo: Protocol_KeyInfo);
-    initializeMasterKey(passphrase: string): Promise<CryptoKey>;
-    static genKey(): Promise<Protocol_KeyInfo>;
-    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
-    decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined>;
-}
-export declare class Protocol_ECDH implements SBProtocol {
-    #private;
-    constructor();
-    encryptionKey(msg: SBMessage): Promise<CryptoKey>;
-    decryptionKey(channel: any, msg: ChannelMessage): Promise<CryptoKey | undefined>;
-}
 declare class Channel extends SBChannelKeys {
     #private;
-    protocol?: SBProtocol | undefined;
+    protocol: SBProtocol;
     channelReady: Promise<Channel>;
     static ReadyFlag: symbol;
     locked?: boolean;
+    static defaultProtocol: SBProtocol;
     visitors: Map<SBUserId, SBUserPrivateKey>;
     constructor();
     constructor(newChannel: null, protocol: SBProtocol);
@@ -327,7 +328,7 @@ declare class ChannelSocket extends Channel {
     channelSocketReady: Promise<ChannelSocket>;
     static ReadyFlag: symbol;
     onMessage: (_m: Message) => void;
-    constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message) => void);
+    constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message) => void, protocol?: SBProtocol);
     get ready(): Promise<ChannelSocket>;
     get ChannelSocketReadyFlag(): boolean;
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
