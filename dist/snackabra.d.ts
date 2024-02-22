@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 082)";
+declare const version = "2.0.0-alpha.5 (build 085)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -25,11 +25,6 @@ export interface SBChannelData {
 }
 export declare function validate_SBChannelData(data: any): SBChannelData;
 export type SBStorageTokenHash = string;
-export declare function timestampToBase4String(tsNum: number): string;
-export declare function base4StringToTimestamp(tsStr: string): number;
-export declare function base4StringToDate(tsStr: string): string;
-export declare function deComposeMessageKey(key: string): [string, string, string];
-export declare function composeMessageKey(channelId: SBChannelId, timestamp: number, subChannel?: string): string;
 export interface Message {
     body: any;
     channelId: SBChannelId;
@@ -94,6 +89,7 @@ export interface EncryptParams {
     tagLength?: number;
 }
 declare function setDebugLevel(dbg1: boolean, dbg2?: boolean): void;
+export type MessageTtl = 0 | 3 | 4 | 5 | 6 | 7 | 8 | 15;
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
 export type SBObjectHandleVersions = '1' | '2' | '3';
@@ -325,6 +321,12 @@ declare class Channel extends SBChannelKeys {
         targetChannel?: SBChannelHandle;
         size?: number;
     }): Promise<SBChannelHandle>;
+    static timestampToBase4String(tsNum: number): string;
+    static timestampLongestPrefix: (s1: string, s2: string) => string;
+    static base4StringToTimestamp(tsStr: string): number;
+    static base4StringToDate(tsStr: string): string;
+    static deComposeMessageKey(key: string): [string, string, string];
+    static composeMessageKey(channelId: SBChannelId, timestamp: number, subChannel?: string): string;
 }
 declare class ChannelSocket extends Channel {
     #private;

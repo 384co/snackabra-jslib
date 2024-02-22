@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 082)';
+const version = '2.0.0-alpha.5 (build 085)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 function _check_SBStorageToken(data) {
@@ -67,33 +67,6 @@ export function validate_SBChannelData(data) {
             console.error('invalid SBChannelData ... trying to ingest:\n', data);
         throw new SBError(`invalid SBChannelData`);
     }
-}
-export function timestampToBase4String(tsNum) {
-    return tsNum.toString(4).padStart(22, "0") + "0000";
-}
-export function base4StringToTimestamp(tsStr) {
-    const regex = /^[0-3]{26}$/;
-    if (!tsStr || typeof tsStr !== 'string' || tsStr.length !== 26 || !regex.test(tsStr))
-        return 0;
-    return parseInt(tsStr.slice(0, -4), 4);
-}
-export function base4StringToDate(tsStr) {
-    const ts = base4StringToTimestamp(tsStr);
-    if (ts)
-        return new Date(ts).toISOString();
-    else
-        return '';
-}
-export function deComposeMessageKey(key) {
-    const regex = /^([a-zA-Z0-9]{43})_([_a-zA-Z0-9]{4})_([0-3]{26})$/;
-    const match = key.match(regex);
-    if (match && match.length >= 4)
-        return [match[1], match[2], match[3]];
-    else
-        return ['', '', ''];
-}
-export function composeMessageKey(channelId, timestamp, subChannel = '____') {
-    return `${channelId}_${subChannel ?? '____'}_${timestampToBase4String(timestamp)}`;
 }
 export function validate_Message(data) {
     if (!data)
@@ -1881,7 +1854,7 @@ class Channel extends SBChannelKeys {
                 return undefined;
             }
             if (!msgRaw._id)
-                msgRaw._id = composeMessageKey(this.channelId, msgRaw.sts, msgRaw.i2);
+                msgRaw._id = Channel.composeMessageKey(this.channelId, msgRaw.sts, msgRaw.i2);
             if (msgRaw.ttl !== undefined && msgRaw.ttl !== 15)
                 console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`);
             const msg = {
@@ -2098,6 +2071,39 @@ class Channel extends SBChannelKeys {
                 return;
             }
         });
+    }
+    static timestampToBase4String(tsNum) {
+        return tsNum.toString(4).padStart(22, "0") + "0000";
+    }
+    static timestampLongestPrefix = (s1, s2) => {
+        let i = 0;
+        while (i < s1.length && i < s2.length && s1[i] === s2[i])
+            i++;
+        return s1.substring(0, i);
+    };
+    static base4StringToTimestamp(tsStr) {
+        const regex = /^[0-3]{26}$/;
+        if (!tsStr || typeof tsStr !== 'string' || tsStr.length !== 26 || !regex.test(tsStr))
+            return 0;
+        return parseInt(tsStr.slice(0, -4), 4);
+    }
+    static base4StringToDate(tsStr) {
+        const ts = Channel.base4StringToTimestamp(tsStr);
+        if (ts)
+            return new Date(ts).toISOString();
+        else
+            return '';
+    }
+    static deComposeMessageKey(key) {
+        const regex = /^([a-zA-Z0-9]{43})_([_a-zA-Z0-9]{4})_([0-3]{26})$/;
+        const match = key.match(regex);
+        if (match && match.length >= 4)
+            return [match[1], match[2], match[3]];
+        else
+            return ['', '', ''];
+    }
+    static composeMessageKey(channelId, timestamp, subChannel = '____') {
+        return `${channelId}_${subChannel ?? '____'}_${Channel.timestampToBase4String(timestamp)}`;
     }
 }
 __decorate([

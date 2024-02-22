@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 082)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 085)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -162,68 +162,6 @@ interface WSProtocolOptions {
   timeout?: number,
   closed: boolean,
 }
-
-/**
- * Converts from timestamp to 'base 4' string used in message IDs.
- * 
- * Time stamps are monotonically increasing. We enforce that they must be
- * different. Stored as a string of [0-3] to facilitate prefix searches (within
- * 4x time ranges). We append "0000" for future needs, for example if we need
- * above 1000 messages per second. Can represent epoch timestamps for the next
- * 400+ years. Currently the appended "0000" is stripped/ignored.
- */
-export function timestampToBase4String(tsNum: number) {
-  return tsNum.toString(4).padStart(22, "0") + "0000" // total length 26
-}
-
-/**
- * Reverse of timestampToBase4String. Strict about the format
- * (needs to be `[0-3]{26}`), returns 0 if there's any issue.
- */
-export function base4StringToTimestamp(tsStr: string) {
-  const regex = /^[0-3]{26}$/;
-  if (!tsStr || typeof tsStr !== 'string' || tsStr.length !== 26 || !regex.test(tsStr)) return 0
-  return parseInt(tsStr.slice(0, -4), 4);
-}
-
-/*
- * Similar to {@link base4StringToTimestamp}, but returns an (ISO) formatted
- * date string. Returns '' if there's an issue with the timestamp. Note that it
- * rigidly expects a 26 character timestamp (prefix) string.
- */
-export function base4StringToDate(tsStr: string) {
-  const ts: number = base4StringToTimestamp(tsStr)
-  if (ts) return new Date(ts).toISOString()
-  else return ''
-}
-
-/**
- * Teases apart the three elements of a channel message key. Note, this does not
- * throw if there's an issue, it just sets all the parts to '', which should
- * never occur. Up to you if you want to run with that result or assert on it.
- * Strict about the format (defined as `[a-zA-Z0-9]{43}_[_a-zA-Z0-9]{4}_[0-3]{26}`).
- */
-export function deComposeMessageKey(key: string): [string, string, string] {
-  const regex = /^([a-zA-Z0-9]{43})_([_a-zA-Z0-9]{4})_([0-3]{26})$/;
-  const match = key.match(regex);
-  if (match && match.length >= 4) return [match![1]!, match![2]!, match![3]!]
-  else return ['', '', '']
-}
-
-/**
- * Creates a 'message key' from constituent parts.
- */
-export function composeMessageKey(channelId: SBChannelId, timestamp: number, subChannel: string = '____',) {
-  return `${channelId}_${subChannel ?? '____'}_${timestampToBase4String(timestamp)}`
-}
-
-// export function deComposeMessageKey(key: string) {
-//   const channelId = key.slice(0, 43)
-//   const subChannel = key.slice(44, 48)
-//   const timestamp = base4StringToTimestamp(key.slice(49))
-//   return { channelId, timestamp, subChannel }
-// }
-
 /**
  * The "app" level message format, provided to onMessage (by ChannelSocket), and
  * similar interfaces. Note it will only be forwarded if verified.
@@ -349,7 +287,6 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
  * and append any binary data it needs.
  *
  */
-
 export interface ChannelMessage {
   [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean,
 
@@ -411,7 +348,13 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
   }
 }
 
-// safety/privacy measures; also economizing on storage
+/**
+ * Complements validate_ChannelMessage. This is used to strip out the parts that
+ * are not strictly needed. Addresses privacy, security, and message size
+ * issues. Note that 'ChannelMessage' is a 'public' interface, in the sense that
+ * this is what is actually stored (as payload ArrayBuffers) at rest, both on
+ * servers and clients.
+ */
 export function stripChannelMessage(msg: ChannelMessage): ChannelMessage {
   if (DBG2) console.log('stripping message:\n', msg)
   const ret: ChannelMessage = {}
@@ -428,7 +371,10 @@ export function stripChannelMessage(msg: ChannelMessage): ChannelMessage {
   return ret
 }
 
-
+/**
+ * This corresponds to all important meta-data on a channel that an Owner
+ * has access to.
+ */
 export interface ChannelAdminData {
   channelId: SBChannelId,
   channelData: SBChannelData,
@@ -442,9 +388,9 @@ export interface ChannelAdminData {
 }
 
 /**
- * This is eseentially web standard type AesGcmParams, but
- * with properties being optional - they'll be filled in
- * at the "bottom layer" if missing (and if needed).
+ * This is eseentially web standard type AesGcmParams, but with properties being
+ * optional - they'll be filled in at the "bottom layer" if missing (and if
+ * needed).
  */
 export interface EncryptParams {
   name?: string;
@@ -454,7 +400,7 @@ export interface EncryptParams {
 }
 
 // these are toggled/reset (globally) by ''new Snackabra(...)''
-// they will stick to 'true' if any Snackabra object is created
+// they will "stick" to whatever they were set to last
 var DBG = false;
 var DBG2 = false; // note, if this is true then DBG will be true too
 
@@ -467,7 +413,7 @@ if ((globalThis as any).configuration && (globalThis as any).configuration.DEBUG
     if (DBG) console.warn("++++ ALSO setting DBG2 (verbose) ++++");
   }
 }
-// some cases we need explit access to poke these
+// ... and in some cases we need explit access to poke these
 function setDebugLevel(dbg1: boolean, dbg2?: boolean) {
   DBG = dbg1
   if (dbg2) DBG2 = dbg1 && dbg2
@@ -475,33 +421,54 @@ function setDebugLevel(dbg1: boolean, dbg2?: boolean) {
   if (DBG2) console.warn("++++ [setDebugLevel]: ALSO setting DBG2 to TRUE (verbose) ++++");
 }
 
-// index/number of seconds/string description of TTL values (0-15)
-//
-// (it's valid to encode it as four bits):
-// 0	         0  Ephemeral (not stored)
-// 1              <reserved>
-// 2		          <reserved>
-// 3	        60  One minute (current minimum)
-// 4	       300  Five minutes
-// 5	      1800  Thirty minutes
-// 6	     14400  Four hours
-// 7	    129600  36 hours
-// 8      864000  Ten days
-// 10             <reserved> (all 'reserved' future choices will be monotonically increasing)
-// 11		          <reserved>
-// 12		          <reserved>
-// 13		          <reserved>
-// 14		          <reserved>
-// 15	  Infinity	Infinity
-//
-// Note that time periods above '8' is largely TBD pending finalization
-// of what the storage server will prefer. As far as messages are concerned,
-// anything above '8' is 'very long'. Thus for example, messages with a 'to'
-// field (routable) may not have ttl above '8'.
+/**
+     Index/number of seconds/string description of TTL values (0-15) for
+     messages.
+
+     ```text
+         #    Seconds  Description
+         0          0  Ephemeral (not stored)
+         1             <reserved>
+         2             <reserved>
+         3         60  One minute (current minimum)
+         4        300  Five minutes
+         5       1800  Thirty minutes
+         6      14400  Four hours
+         7     129600  36 hours
+         8     864000  Ten days
+        10             <reserved> (all 'reserved' future choices will be monotonically increasing)
+        11             <reserved>
+        12             <reserved>
+        13             <reserved>
+        14             <reserved>
+        15   Infinity  Permastore, this is the default.
+      ```
+
+      Note that time periods above '8' (10 days) is largely TBD pending
+      finalization of what the storage server will prefer. As far as messages
+      are concerned, anything above '8' is 'very long'.
+
+      A few rules around messages and TTL (this list is not exhaustive):
+
+      - Currently only values 0, 3-8, and 15 are valid (15 is default).
+      - Routable messages (eg messages with a 'to' field) may not have ttl above '8'.
+      - TTL messages are never in storage shards; channel servers can chose to
+        limit how many they will keep (on a per TTL category basis) regardless
+        of time value (but at least last 1000).
+      - TTL messages are duplicated and available on 'main' channel ('i2')
+        '____' as well as on subchannels '___3', '___4', up to '___8'.
+
+      It's valid to encode it as four bits.
+*/
+export type MessageTtl = 0 | 3 | 4 | 5 | 6 | 7 | 8 | 15
+
 export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 14400, 129600, 864000, -1, -1, -1, -1, -1, Infinity]
 export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One minute', 'Five minutes', 'Thirty minutes', 'Four hours', '36 hours', '10 days', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)']
 
+// mostly historical
 // export type SBObjectType = 'f' | 'p' | 'b' | 't' | '_' | 'T'
+
+// this library essentially only supports '3'
 export type SBObjectHandleVersions = '1' | '2' | '3'
 const currentSBOHVersion: SBObjectHandleVersions = '3'
 
@@ -2908,7 +2875,7 @@ class Channel extends SBChannelKeys {
         return undefined
       }
       if (!msgRaw._id)
-        msgRaw._id = composeMessageKey(this.channelId!, msgRaw.sts!, msgRaw.i2)
+        msgRaw._id = Channel.composeMessageKey (this.channelId!, msgRaw.sts!, msgRaw.i2)
       if(msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
       const msg: Message = {
         body: extractPayload(bodyBuffer).payload,
@@ -3232,6 +3199,73 @@ class Channel extends SBChannelKeys {
       }
     });
   }
+
+  /* Some utility functions that are perhaps most logically associated with 'Channel.x' */
+
+  /**
+   * Converts from timestamp to 'base 4' string used in message IDs.
+   * 
+   * Time stamps are monotonically increasing. We enforce that they must be
+   * different. Stored as a string of [0-3] to facilitate prefix searches (within
+   * 4x time ranges). We append "0000" for future needs, for example if we need
+   * above 1000 messages per second. Can represent epoch timestamps for the next
+   * 400+ years. Currently the appended "0000" is stripped/ignored.
+   */
+  static timestampToBase4String(tsNum: number) {
+    return tsNum.toString(4).padStart(22, "0") + "0000" // total length 26
+  }
+
+  /**
+   * Takes two time stamp prefix strings, finds the time interval that contains
+   * both messages. We use prefix heavily rather than 'from, to' filtering.
+   */
+  static timestampLongestPrefix = (s1: string, s2: string): string => {
+    let i = 0;
+    while (i < s1.length && i < s2.length && s1[i] === s2[i]) i++;
+    return s1.substring(0, i);
+  };
+
+  /**
+   * Reverse of timestampToBase4String. Strict about the format
+   * (needs to be `[0-3]{26}`), returns 0 if there's any issue.
+   */
+  static base4StringToTimestamp(tsStr: string) {
+    const regex = /^[0-3]{26}$/;
+    if (!tsStr || typeof tsStr !== 'string' || tsStr.length !== 26 || !regex.test(tsStr)) return 0
+    return parseInt(tsStr.slice(0, -4), 4);
+  }
+
+  /*
+  * Similar to {@link base4StringToTimestamp}, but returns an (ISO) formatted
+  * date string. Returns '' if there's an issue with the timestamp. Note that it
+  * rigidly expects a 26 character timestamp (prefix) string.
+  */
+  static base4StringToDate(tsStr: string) {
+    const ts: number = Channel.base4StringToTimestamp(tsStr)
+    if (ts) return new Date(ts).toISOString()
+    else return ''
+  }
+
+  /**
+   * Teases apart the three elements of a channel message key. Note, this does not
+   * throw if there's an issue, it just sets all the parts to '', which should
+   * never occur. Up to you if you want to run with that result or assert on it.
+   * Strict about the format (defined as `[a-zA-Z0-9]{43}_[_a-zA-Z0-9]{4}_[0-3]{26}`).
+   */
+  static deComposeMessageKey(key: string): [string, string, string] {
+    const regex = /^([a-zA-Z0-9]{43})_([_a-zA-Z0-9]{4})_([0-3]{26})$/;
+    const match = key.match(regex);
+    if (match && match.length >= 4) return [match![1]!, match![2]!, match![3]!]
+    else return ['', '', '']
+  }
+
+  /**
+   * Creates a 'message key' from constituent parts.
+   */
+  static composeMessageKey(channelId: SBChannelId, timestamp: number, subChannel: string = '____',) {
+    return `${channelId}_${subChannel ?? '____'}_${Channel.timestampToBase4String(timestamp)}`
+  }
+
 } /* class Channel */
 
 /**
