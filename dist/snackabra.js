@@ -8,6 +8,13 @@ var _a, _b;
 const version = '2.0.0-alpha.5 (build 082)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
+function _check_SBStorageToken(data) {
+    return (data.hash && typeof data.hash === 'string' && data.hash.length > 0
+        && (!data.size || Number.isInteger(data.size) && data.size > 0)
+        && (!data.motherChannel || typeof data.motherChannel === 'string')
+        && (!data.created || Number.isInteger(data.created))
+        && (!data.used || typeof data.used === 'boolean'));
+}
 export function validate_SBStorageToken(data) {
     if (!data)
         throw new SBError(`invalid SBStorageToken (null or undefined)`);
@@ -15,11 +22,7 @@ export function validate_SBStorageToken(data) {
         return data;
     else if (typeof data === 'string' && data.slice(0, 4) === SBStorageTokenPrefix)
         return { [SB_STORAGE_TOKEN_SYMBOL]: true, hash: data };
-    else if (data.hash && typeof data.hash === 'string' && data.hash.length > 0
-        && (!data.size || Number.isInteger(data.size) && data.size > 0)
-        && (!data.motherChannel || typeof data.motherChannel === 'string')
-        && (!data.created || Number.isInteger(data.created))
-        && (!data.used || typeof data.used === 'boolean')) {
+    else if (_check_SBStorageToken(data)) {
         return { ...data, [SB_STORAGE_TOKEN_SYMBOL]: true };
     }
     else {
@@ -28,7 +31,7 @@ export function validate_SBStorageToken(data) {
         throw new SBError(`invalid SBStorageToken`);
     }
 }
-function _checkChannelHandle(data) {
+function _check_SBChannelHandle(data) {
     return (data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
         && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
         && (!data.channelServer || typeof data.channelServer === 'string')
@@ -39,7 +42,7 @@ export function validate_SBChannelHandle(data) {
         throw new SBError(`invalid SBChannelHandle (null or undefined)`);
     else if (data[SB_CHANNEL_HANDLE_SYMBOL])
         return data;
-    else if (_checkChannelHandle(data)) {
+    else if (_check_SBChannelHandle(data)) {
         return { ...data, [SB_CHANNEL_HANDLE_SYMBOL]: true };
     }
     else {
@@ -65,20 +68,32 @@ export function validate_SBChannelData(data) {
         throw new SBError(`invalid SBChannelData`);
     }
 }
-function timestampToBase4String(tsNum) {
+export function timestampToBase4String(tsNum) {
     return tsNum.toString(4).padStart(22, "0") + "0000";
 }
-function base4StringToTimestamp(tsStr) {
-    return parseInt(tsStr, 4);
+export function base4StringToTimestamp(tsStr) {
+    const regex = /^[0-3]{26}$/;
+    if (!tsStr || typeof tsStr !== 'string' || tsStr.length !== 26 || !regex.test(tsStr))
+        return 0;
+    return parseInt(tsStr.slice(0, -4), 4);
+}
+export function base4StringToDate(tsStr) {
+    const ts = base4StringToTimestamp(tsStr);
+    if (ts)
+        return new Date(ts).toISOString();
+    else
+        return '';
+}
+export function deComposeMessageKey(key) {
+    const regex = /^([a-zA-Z0-9]{43})_([_a-zA-Z0-9]{4})_([0-3]{26})$/;
+    const match = key.match(regex);
+    if (match && match.length >= 4)
+        return [match[1], match[2], match[3]];
+    else
+        return ['', '', ''];
 }
 export function composeMessageKey(channelId, timestamp, subChannel = '____') {
     return `${channelId}_${subChannel ?? '____'}_${timestampToBase4String(timestamp)}`;
-}
-export function deComposeMessageKey(key) {
-    const channelId = key.slice(0, 43);
-    const subChannel = key.slice(44, 48);
-    const timestamp = base4StringToTimestamp(key.slice(49));
-    return { channelId, timestamp, subChannel };
 }
 export function validate_Message(data) {
     if (!data)
@@ -146,7 +161,7 @@ export function validate_ChannelMessage(body) {
     }
 }
 export function stripChannelMessage(msg) {
-    if (DBG)
+    if (DBG2)
         console.log('stripping message:\n', msg);
     const ret = {};
     if (msg.f !== undefined)
@@ -304,6 +319,28 @@ export function jsonParseWrapper(str, loc, reviver) {
     }
     return str;
 }
+const simpleJsonPattern = /^\s*[\[\{].*[\]\}]\s*$/;
+export function jsonOrString(str) {
+    if (str === null)
+        return null;
+    if (typeof str === 'string') {
+        if (simpleJsonPattern.test(str)) {
+            try {
+                str = JSON.parse(str);
+                return str;
+            }
+            catch (e) {
+                return null;
+            }
+        }
+        else {
+            return str;
+        }
+    }
+    else {
+        return null;
+    }
+}
 const bs2dv = (bs) => bs instanceof ArrayBuffer
     ? new DataView(bs)
     : new DataView(bs.buffer, bs.byteOffset, bs.byteLength);
@@ -353,10 +390,11 @@ function SBFetch(input, init) {
         throw new SBError(msg);
     });
 }
+var sbFetch = SBFetch;
 export async function SBApiFetch(input, init) {
     let response;
     try {
-        response = await SBFetch(input, init);
+        response = await sbFetch(input, init);
         if (!response)
             throw new SBError("[SBApiFetch] Server did not respond (might be expected)");
         const contentType = response.headers.get('content-type');
@@ -373,8 +411,12 @@ export async function SBApiFetch(input, init) {
         else if (contentType.indexOf("application/octet-stream") !== -1) {
             retValue = extractPayload(await response.arrayBuffer()).payload;
         }
+        else if (contentType.indexOf("text/plain") !== -1) {
+            retValue = await response.text();
+            throw new SBError(`[SBApiFetch] Server responded with text/plain (?) ('${retValue}')`);
+        }
         else {
-            throw new SBError("[SBApiFetch] Server responded with unknown content-type header (?)");
+            throw new SBError(`[SBApiFetch] Server responded with unknown content-type header ('${contentType}')`);
         }
         if (!response.ok || !retValue || retValue.error || retValue.success === false) {
             let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response';
@@ -613,6 +655,8 @@ function getType(value) {
         return 'w';
     if (typeof value === 'object' && typeof value.then === 'function')
         console.error("[getType] Trying to serialize a Promise - did you forget an 'await'?");
+    else if (typeof value === 'object' && typeof value.toJSON === 'function')
+        return 'j';
     else
         console.error('[getType] Unsupported for object:', value);
     throw new SBError('Unsupported type');
@@ -633,6 +677,10 @@ function _assemblePayload(data) {
                         if (!payload)
                             throw new SBError(`Failed to assemble payload for ${key}`);
                         BufferList.push(payload);
+                        break;
+                    case 'j':
+                        const jsonValue = new TextEncoder().encode(JSON.stringify(value));
+                        BufferList.push(jsonValue.buffer);
                         break;
                     case 'n':
                         const numberValue = new Uint8Array(8);
@@ -737,6 +785,8 @@ function deserializeValue(buffer, type) {
     switch (type) {
         case 'o':
             return _extractPayload(buffer);
+        case 'j':
+            return jsonParseWrapper(new TextDecoder().decode(buffer), "L1322");
         case 'n':
             return new DataView(buffer).getFloat64(0);
         case 'i':
@@ -1204,7 +1254,7 @@ function SBValidateObject(obj, type) {
     }
 }
 export const sbCrypto = new SBCrypto();
-const SEP = "============================================================\n";
+const SEP = '\n' + '='.repeat(76) + '\n';
 function modPow(base, exponent, modulus) {
     if (modulus === 1n)
         return 0n;
@@ -1499,6 +1549,7 @@ export class Protocol_AES_GCM_256 {
         return derivedKey;
     }
     async encryptionKey(msg) {
+        _sb_assert(msg.salt, "Protocol called without salt (Internal Error)");
         if (DBG)
             console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt);
         return this.#getMessageKey(msg.salt);
@@ -1567,7 +1618,7 @@ export class SBChannelKeys extends SB384 {
                 const ownerPrivateKey = handleOrKey;
                 super(ownerPrivateKey, true);
             }
-            else if (_checkChannelHandle(handleOrKey)) {
+            else if (_check_SBChannelHandle(handleOrKey)) {
                 const handle = validate_SBChannelHandle(handleOrKey);
                 channelServer = handle.channelServer;
                 super(handle.userPrivateKey, true);
@@ -1712,25 +1763,35 @@ class SBMessage {
         this.channel = channel;
         this.contents = contents;
         this.options = options;
-        this.salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
-        this.sbMessageReady = new Promise(async (resolve) => {
-            await channel.channelReady;
-            if (!this.options.protocol)
-                this.options.protocol = channel.protocol;
-            if (!this.options.protocol)
-                this.options.protocol = Channel.defaultProtocol;
-            this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, await this.options.protocol.encryptionKey(this), this.salt, this.channel.signKey, options);
-            this[SBMessage.ReadyFlag] = true;
-            resolve(this);
-        });
+        if (options.sendString) {
+            _sb_assert(typeof contents === 'string', "SBMessage() - sendString is true, but contents is not a string");
+            this.#message = contents;
+            this.sbMessageReady = new Promise(async (resolve) => {
+                this[SBMessage.ReadyFlag] = true;
+                resolve(this);
+            });
+        }
+        else {
+            this.salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
+            this.sbMessageReady = new Promise(async (resolve) => {
+                await channel.channelReady;
+                if (!this.options.protocol)
+                    this.options.protocol = channel.protocol;
+                if (!this.options.protocol)
+                    this.options.protocol = Channel.defaultProtocol;
+                this.#message = await sbCrypto.wrap(this.contents, this.channel.userId, await this.options.protocol.encryptionKey(this), this.salt, this.channel.signKey, options);
+                this[SBMessage.ReadyFlag] = true;
+                resolve(this);
+            });
+        }
     }
     get ready() { return this.sbMessageReady; }
     get SBMessageReadyFlag() { return this[SBMessage.ReadyFlag]; }
     get message() { return this.#message; }
     async send() {
+        await this.ready;
         if (DBG)
             console.log("SBMessage.send() - sending message:", this.message);
-        await this.ready;
         return this.channel.callApi('/send', this.message);
     }
 }
@@ -1742,7 +1803,6 @@ class Channel extends SBChannelKeys {
     channelReady;
     static ReadyFlag = Symbol('ChannelReadyFlag');
     locked = false;
-    #cursor = '';
     static defaultProtocol = new Protocol_ECDH();
     visitors = new Map();
     constructor(handleOrKey, protocol = Channel.defaultProtocol) {
@@ -1766,7 +1826,7 @@ class Channel extends SBChannelKeys {
     get ChannelReadyFlag() { return this[Channel.ReadyFlag]; }
     get api() { return this; }
     async extractMessage(msgRaw) {
-        if (DBG)
+        if (DBG2)
             console.log("[extractMessage] Extracting message:", msgRaw);
         try {
             msgRaw = validate_ChannelMessage(msgRaw);
@@ -1811,7 +1871,15 @@ class Channel extends SBChannelKeys {
             _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)");
             const view = new DataView(new ArrayBuffer(8));
             view.setFloat64(0, msgRaw.ts);
-            const bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t);
+            let bodyBuffer;
+            try {
+                bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t);
+            }
+            catch (e) {
+                if (DBG)
+                    console.error("[extractMessage] Could not decrypt message (exception) [L2898]:", e.message);
+                return undefined;
+            }
             if (!msgRaw._id)
                 msgRaw._id = composeMessageKey(this.channelId, msgRaw.sts, msgRaw.i2);
             if (msgRaw.ttl !== undefined && msgRaw.ttl !== 15)
@@ -1825,13 +1893,13 @@ class Channel extends SBChannelKeys {
                 serverTimestamp: msgRaw.sts,
                 _id: msgRaw._id,
             };
-            if (DBG)
+            if (DBG2)
                 console.log("[extractMessage] Extracted message (before validation):", msg);
             return validate_Message(msg);
         }
         catch (e) {
             if (DBG)
-                console.error("[extractMessage] Could not process message (exception) [L2782]:", e);
+                console.error("[extractMessage] Could not process message (exception) [L2782]:", e.message);
             return undefined;
         }
     }
@@ -1867,16 +1935,16 @@ class Channel extends SBChannelKeys {
     getLastMessageTimes() {
         throw new SBError("Channel.getLastMessageTimes(): not supported in 2.0 yet");
     }
-    getMessageKeys(currentMessagesLength = 100, paginate = false) {
+    getMessageKeys(prefix = '0') {
         return new Promise(async (resolve, _reject) => {
             await this.channelReady;
             _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)");
-            const messages = await this.callApi('/getMessageKeys', { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined });
+            const { keys, historyShard } = (await this.callApi('/getMessageKeys', { prefix: prefix }));
             if (DBG)
-                console.log("getMessageKeys\n", messages);
-            if (!messages || messages.size === 0)
+                console.log("getMessageKeys\n", keys);
+            if (!keys || keys.size === 0)
                 console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?");
-            resolve(messages);
+            resolve({ keys, historyShard });
         });
     }
     getRawMessageMap(messageKeys) {
@@ -1915,6 +1983,15 @@ class Channel extends SBChannelKeys {
             resolve(await this.extractMessageMap(messages));
         });
     }
+    getHistory() {
+        return new Promise(async (resolve, _reject) => {
+            await this.channelReady;
+            _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)");
+            const response = await this.callApi('/getHistory');
+            console.log("getHistory result:\n", response);
+            resolve(response.shardHandle);
+        });
+    }
     async send(msg, options) {
         _sb_assert(!(msg instanceof SBMessage), "[Channel.send] msg is already an SBMessage");
         return (new SBMessage(this, msg, options)).send();
@@ -1939,7 +2016,7 @@ class Channel extends SBChannelKeys {
         const prefix = this.hashB32;
         if (DBG)
             console.log(`==== ChannelApi.getPage: calling fetch with: ${prefix}`);
-        const page = await SBFetch(this.channelServer + '/api/v2/page/' + prefix);
+        const page = await sbFetch(this.channelServer + '/api/v2/page/' + prefix);
         const contentType = page.headers.get('content-type');
         if (contentType !== 'sb384payloadV3')
             throw new SBError("[Channel.getPage] Can only handle 'sb384payloadV3' content type, use 'fetch()'");
@@ -2125,18 +2202,25 @@ class ChannelSocket extends Channel {
                 _sb_assert(apiBodyBuf, "Internal Error [L3598]");
                 this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf));
             }
-            this.#ws.websocket.addEventListener('message', (e) => {
-                if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3618")?.hasOwnProperty('ready')) {
-                    this.#ws.websocket.addEventListener('message', this.#processMessage);
+            if (DBG)
+                console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
+            const thisWsWebsocket = this.#ws.websocket;
+            const initialListener = (e) => {
+                if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3253")?.hasOwnProperty('ready')) {
+                    thisWsWebsocket.removeEventListener('message', initialListener);
+                    thisWsWebsocket.addEventListener('message', this.#processMessage);
+                    if (DBG)
+                        console.log(SEP, "Received ready", SEP);
                     this[_a.ReadyFlag] = true;
                     resolve(this);
                 }
                 else {
                     if (DBG)
-                        console.log(SEP, "Received non-ready:\n", e.data, "\n", SEP);
+                        console.log(SEP, "Received non-ready (?):\n", e.data, "\n", SEP);
                     reject("[ChannelSocket] received something other than 'ready' as first message");
                 }
-            });
+            };
+            this.#ws.websocket.addEventListener('message', initialListener);
             this.#ws.websocket.addEventListener('open', async () => {
                 this.#ws.closed = false;
                 await this.ready;
@@ -2169,7 +2253,7 @@ class ChannelSocket extends Channel {
                     reject(msg);
                 }
                 else {
-                    if (DBG)
+                    if (DBG2)
                         console.log("ChannelSocket() - this socket resolved", this);
                 }
             }, 10000);
@@ -2182,8 +2266,16 @@ class ChannelSocket extends Channel {
         var message = null;
         _sb_assert(msg, "[ChannelSocket] received empty message");
         if (typeof msg === 'string') {
-            console.error("ChannelSocket receiving string (json?) message, this is getting deprecated");
-            message = jsonParseWrapper(msg, "L3589");
+            const _message = jsonOrString(msg);
+            if (!_message)
+                _sb_exception("L3287", "[ChannelSocket] Cannot parse message: " + msg);
+            if (typeof _message === 'string') {
+                if (DBG)
+                    console.log("[ChannelSocket] Received simple string message, will forward\n", _message);
+                this.onMessage(_message);
+                return;
+            }
+            message = _message;
         }
         else if (msg instanceof ArrayBuffer) {
             message = extractPayload(msg).payload;
@@ -2196,7 +2288,11 @@ class ChannelSocket extends Channel {
         }
         _sb_assert(message, "[ChannelSocket] cannot extract message");
         if (message.ready) {
-            console.log("++++++++ #processMessage: received ready message", message);
+            console.log("++++++++ #processMessage: received ready message\n", message);
+            return;
+        }
+        if (message.error) {
+            console.error("++++++++ #processMessage: received error message\n", message);
             return;
         }
         message = validate_ChannelMessage(message);
@@ -2247,9 +2343,9 @@ class ChannelSocket extends Channel {
         if (b)
             console.log("==== jslib ChannelSocket: Tracing enabled ====");
     }
-    async send(msg) {
+    async send(msg, options) {
         await this.ready;
-        const sbm = msg instanceof SBMessage ? msg : new SBMessage(this, msg);
+        const sbm = msg instanceof SBMessage ? msg : new SBMessage(this, msg, options);
         _sb_assert(this.#ws && this.#ws.websocket, "ChannelSocket.send() called before ready");
         if (this.#ws.closed) {
             if (this.#traceSocket)
@@ -2267,27 +2363,37 @@ class ChannelSocket extends Channel {
                 case 1:
                     if (this.#traceSocket)
                         console.log("++++++++ ChannelSocket.send() will send message:", Object.assign({}, sbm.message));
-                    const messagePayload = assemblePayload(sbm.message);
-                    _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message");
-                    const hash = await crypto.subtle.digest('SHA-256', sbm.message.c);
-                    const messageHash = arrayBufferToBase64url(hash);
-                    if (DBG || this.#traceSocket)
-                        console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash);
-                    this.#ack.set(messageHash, resolve);
-                    this.#ws.websocket.send(messagePayload);
-                    setTimeout(() => {
-                        if (this.#ack.has(messageHash)) {
-                            this.#ack.delete(messageHash);
-                            const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`;
-                            console.error(msg);
-                            reject(msg);
-                        }
-                        else {
-                            if (this.#traceSocket)
-                                console.log("++++++++ ChannelSocket.send() completed sending");
-                            resolve("success");
-                        }
-                    }, this.#ws.timeout);
+                    let messagePayload = null;
+                    if (options?.sendString === true) {
+                        messagePayload = sbm.message;
+                    }
+                    else {
+                        const msg = sbm.message;
+                        messagePayload = assemblePayload(msg);
+                        _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message");
+                        const hash = await crypto.subtle.digest('SHA-256', msg.c);
+                        const messageHash = arrayBufferToBase64url(hash);
+                        if (DBG || this.#traceSocket)
+                            console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash);
+                        this.#ack.set(messageHash, resolve);
+                        setTimeout(() => {
+                            if (this.#ack.has(messageHash)) {
+                                this.#ack.delete(messageHash);
+                                const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`;
+                                console.error(msg);
+                                reject(msg);
+                            }
+                            else {
+                                if (this.#traceSocket)
+                                    console.log("++++++++ ChannelSocket.send() completed sending");
+                                resolve("success");
+                            }
+                        }, this.#ws.timeout);
+                    }
+                    if (!messagePayload)
+                        reject("ChannelSocket.send(): no message payload (Internal Error)");
+                    else
+                        this.#ws.websocket.send(messagePayload);
                     break;
                 case 0:
                 case 2:
@@ -2299,6 +2405,14 @@ class ChannelSocket extends Channel {
                     _sb_exception('ChannelSocket', `socket in unknown state (${readyState})`);
             }
         });
+    }
+    async close() {
+        if (this.#ws && this.#ws.websocket) {
+            this.#ws.websocket.close();
+            this.#ws.closed = true;
+        }
+        ;
+        this[_a.ReadyFlag] = false;
     }
 }
 _a = ChannelSocket;
@@ -2376,12 +2490,11 @@ export class StorageApi {
             }
         });
     }
-    async storeData(contents, channelOrHandle) {
+    async storeData(contents, budgetSource) {
         try {
             const buf = assemblePayload(contents);
             if (!buf)
                 throw new SBError("[storeData] failed to assemble payload");
-            const channel = channelOrHandle instanceof Channel ? channelOrHandle : new Channel(channelOrHandle);
             const bufSize = buf.byteLength;
             const paddedBuf = _b.padBuf(buf);
             const fullHash = await sbCrypto.generateIdKey(paddedBuf);
@@ -2393,7 +2506,19 @@ export class StorageApi {
             const id = arrayBufferToBase62(fullHash.idBinary);
             const key = await _b.getObjectKey(fullHash.keyMaterial, keyInfo.salt);
             const encryptedData = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv });
-            const storageToken = await channel.getStorageToken(encryptedData.byteLength);
+            let storageToken;
+            if (budgetSource instanceof Channel) {
+                storageToken = await budgetSource.getStorageToken(encryptedData.byteLength);
+            }
+            else if (_check_SBChannelHandle(budgetSource)) {
+                storageToken = await (await new Channel(budgetSource).ready).getStorageToken(encryptedData.byteLength);
+            }
+            else if (_check_SBStorageToken(budgetSource)) {
+                storageToken = validate_SBStorageToken(budgetSource);
+            }
+            else {
+                throw new SBError("[storeData] invalid budget source (needs to be a channel, channel handle, or storage token)");
+            }
             const storeQuery = storageServer + '/api/v2/storeData?id=' + id;
             const init = {
                 method: 'POST',
@@ -2524,22 +2649,27 @@ class Snackabra {
     #storage;
     #version = version;
     #channelServerInfo;
-    sbFetch = SBFetch;
-    constructor(channelServer, setDBG, setDBG2) {
+    constructor(channelServer, options) {
         console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`);
         _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter');
         SnackabraDefaults.channelServer = channelServer;
-        if (setDBG && setDBG === true)
+        if (typeof options === 'boolean')
+            options = { DEBUG: options };
+        if (options && options.DEBUG && options.DEBUG === true)
             DBG = true;
-        if (DBG && setDBG2 && setDBG2 === true)
+        if (options && DBG && options.DEBUG2 && options.DEBUG2 === true)
             DBG2 = true;
         if (DBG)
             console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
         if (DBG2)
             console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
+        if (options && options.sbFetch) {
+            console.log("++++ Snackabra constructor: setting custom fetch function ++++", options.sbFetch);
+            sbFetch = options.sbFetch;
+        }
         this.#channelServer = channelServer;
         this.#storage = new StorageApi(new Promise((resolve, reject) => {
-            SBFetch(this.#channelServer + '/api/v2/info')
+            sbFetch(this.#channelServer + '/api/v2/info')
                 .then((response) => {
                 if (!response.ok) {
                     reject('response from channel server was not OK');

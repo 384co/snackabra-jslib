@@ -25,15 +25,11 @@ export interface SBChannelData {
 }
 export declare function validate_SBChannelData(data: any): SBChannelData;
 export type SBStorageTokenHash = string;
-export interface Dictionary<T> {
-    [index: string]: T;
-}
+export declare function timestampToBase4String(tsNum: number): string;
+export declare function base4StringToTimestamp(tsStr: string): number;
+export declare function base4StringToDate(tsStr: string): string;
+export declare function deComposeMessageKey(key: string): [string, string, string];
 export declare function composeMessageKey(channelId: SBChannelId, timestamp: number, subChannel?: string): string;
-export declare function deComposeMessageKey(key: string): {
-    channelId: string;
-    timestamp: number;
-    subChannel: string;
-};
 export interface Message {
     body: any;
     channelId: SBChannelId;
@@ -74,6 +70,7 @@ export interface ChannelMessage {
     _id?: string;
     unencryptedContents?: any;
     ready?: boolean;
+    error?: string;
     t?: SBUserId;
     ttl?: number;
 }
@@ -128,7 +125,9 @@ export type SBUserPublicKey = string;
 export type SBUserPrivateKey = string;
 export declare class MessageBus {
     #private;
-    bus: Dictionary<any>;
+    bus: {
+        [index: string]: any;
+    };
     subscribe(event: string, handler: CallableFunction): void;
     unsubscribe(event: string, handler: CallableFunction): void;
     publish(event: string, ...args: unknown[]): void;
@@ -137,9 +136,9 @@ export declare class SBError extends Error {
     constructor(message: string);
 }
 export declare function jsonParseWrapper(str: string | null, loc?: string, reviver?: (this: any, key: string, value: any) => any): any;
+export declare function jsonOrString(str: string | null): any;
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
 export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
-declare function SBFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 export declare function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any>;
 export declare const base64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 declare function arrayBufferToBase64url(buffer: ArrayBuffer | Uint8Array): string;
@@ -260,6 +259,7 @@ export interface MessageOptions {
     sendTo?: SBUserId;
     subChannel?: string;
     protocol?: SBProtocol;
+    sendString?: boolean;
 }
 declare class SBMessage {
     #private;
@@ -269,15 +269,14 @@ declare class SBMessage {
     [SB_MESSAGE_SYMBOL]: boolean;
     sbMessageReady: Promise<SBMessage>;
     static ReadyFlag: symbol;
-    salt: ArrayBuffer;
+    salt?: ArrayBuffer;
     constructor(channel: Channel, contents: any, options?: MessageOptions);
     get ready(): Promise<SBMessage>;
     get SBMessageReadyFlag(): any;
-    get message(): ChannelMessage;
+    get message(): string | ChannelMessage;
     send(): Promise<any>;
 }
 declare class Channel extends SBChannelKeys {
-    #private;
     protocol: SBProtocol;
     channelReady: Promise<Channel>;
     static ReadyFlag: symbol;
@@ -295,9 +294,13 @@ declare class Channel extends SBChannelKeys {
     extractMessageMap(msgMap: Map<string, ChannelMessage>): Promise<Map<string, Message>>;
     create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<Channel>;
     getLastMessageTimes(): void;
-    getMessageKeys(currentMessagesLength?: number, paginate?: boolean): Promise<Set<string>>;
+    getMessageKeys(prefix?: string): Promise<{
+        keys: Set<string>;
+        historyShard: SBObjectHandle;
+    }>;
     getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
     getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>>;
+    getHistory(): Promise<SBObjectHandle>;
     send(msg: any, options?: MessageOptions): Promise<string>;
     setPage(options: {
         page: any;
@@ -327,13 +330,14 @@ declare class ChannelSocket extends Channel {
     #private;
     channelSocketReady: Promise<ChannelSocket>;
     static ReadyFlag: symbol;
-    onMessage: (_m: Message) => void;
-    constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message) => void, protocol?: SBProtocol);
+    onMessage: (_m: Message | string) => void;
+    constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message | string) => void, protocol?: SBProtocol);
     get ready(): Promise<ChannelSocket>;
     get ChannelSocketReadyFlag(): boolean;
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set enableTrace(b: boolean);
-    send(msg: SBMessage | any): Promise<string>;
+    send(msg: SBMessage | any, options?: MessageOptions): Promise<string>;
+    close(): Promise<void>;
 }
 export interface Shard {
     version: '3';
@@ -349,21 +353,24 @@ export declare class StorageApi {
     getStorageServer(): Promise<string>;
     static padBuf(buf: ArrayBuffer): ArrayBuffer;
     static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey>;
-    storeData(contents: any, channelOrHandle: SBChannelHandle | Channel): Promise<SBObjectHandle>;
+    storeData(contents: any, budgetSource: SBChannelHandle | Channel | SBStorageToken): Promise<SBObjectHandle>;
     fetchData(handle: SBObjectHandle): Promise<SBObjectHandle>;
     static getData(handle: SBObjectHandle): ArrayBuffer | undefined;
     static getPayload(handle: SBObjectHandle): any;
 }
 declare class Snackabra {
     #private;
-    sbFetch: typeof SBFetch;
-    constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean);
+    constructor(channelServer: string, options?: {
+        DEBUG?: boolean;
+        DEBUG2?: boolean;
+        sbFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    } | boolean);
     static get defaultChannelServer(): string;
     getPage(prefix: string): Promise<any>;
     create(budgetChannel: Channel): Promise<SBChannelHandle>;
     create(storageToken: SBStorageToken): Promise<SBChannelHandle>;
     connect(handleOrKey: SBChannelHandle | SBUserPrivateKey): Channel;
-    connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: ChannelMessage) => void): ChannelSocket;
+    connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message | string) => void): ChannelSocket;
     get storage(): StorageApi;
     getStorageServer(): Promise<string>;
     get crypto(): SBCrypto;

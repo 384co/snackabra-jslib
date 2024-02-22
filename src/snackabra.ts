@@ -40,19 +40,23 @@ export interface SBStorageToken {
   used?: boolean,
 }
 
+function _check_SBStorageToken(data: SBStorageToken) {
+  return (
+    data.hash && typeof data.hash === 'string' && data.hash.length > 0
+    && (!data.size || Number.isInteger(data.size) && data.size > 0)
+    && (!data.motherChannel || typeof data.motherChannel === 'string')
+    && (!data.created || Number.isInteger(data.created))
+    && (!data.used || typeof data.used === 'boolean')
+  )
+}
+
 export function validate_SBStorageToken(data: SBStorageToken): SBStorageToken {
   if (!data) throw new SBError(`invalid SBStorageToken (null or undefined)`)
   else if (data[SB_STORAGE_TOKEN_SYMBOL]) return data as SBStorageToken
   else if (typeof data === 'string' && (data as string).slice(0, 4) === SBStorageTokenPrefix)
     // if at runtime we get just the hash, we 'upgrade' the type to help caller
     return { [SB_STORAGE_TOKEN_SYMBOL]: true, hash: data as string } as SBStorageToken
-  else if (
-    data.hash && typeof data.hash === 'string' && data.hash.length > 0
-    && (!data.size || Number.isInteger(data.size) && data.size > 0)
-    && (!data.motherChannel || typeof data.motherChannel === 'string')
-    && (!data.created || Number.isInteger(data.created))
-    && (!data.used || typeof data.used === 'boolean')
-  ) {
+  else if (_check_SBStorageToken(data)) {
     return { ...data, [SB_STORAGE_TOKEN_SYMBOL]: true } as SBStorageToken
   } else {
     if (DBG) console.error('invalid SBStorageToken ... trying to ingest:\n', data)
@@ -81,7 +85,8 @@ export interface SBChannelHandle {
   channelData?: SBChannelData,
 }
 
-function _checkChannelHandle(data: SBChannelHandle) {
+// returns true of false, does not throw
+function _check_SBChannelHandle(data: SBChannelHandle) {
   return (
     data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
     && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
@@ -90,10 +95,11 @@ function _checkChannelHandle(data: SBChannelHandle) {
   )
 }
 
+/** Validates 'SBChannelHandle', throws if there's an issue */
 export function validate_SBChannelHandle(data: SBChannelHandle): SBChannelHandle {
   if (!data) throw new SBError(`invalid SBChannelHandle (null or undefined)`)
   else if (data[SB_CHANNEL_HANDLE_SYMBOL]) return data as SBChannelHandle
-  else if (_checkChannelHandle(data)) {
+  else if (_check_SBChannelHandle(data)) {
     return { ...data, [SB_CHANNEL_HANDLE_SYMBOL]: true } as SBChannelHandle
   } else {
     if (DBG2) console.error('invalid SBChannelHandle ... trying to ingest:\n', data)
@@ -157,38 +163,66 @@ interface WSProtocolOptions {
   closed: boolean,
 }
 
-
 /**
- * Dictionary
+ * Converts from timestamp to 'base 4' string used in message IDs.
  * 
- * This is still used in a few places, should slowly be replaced by stronger typing.
+ * Time stamps are monotonically increasing. We enforce that they must be
+ * different. Stored as a string of [0-3] to facilitate prefix searches (within
+ * 4x time ranges). We append "0000" for future needs, for example if we need
+ * above 1000 messages per second. Can represent epoch timestamps for the next
+ * 400+ years. Currently the appended "0000" is stripped/ignored.
  */
-export interface Dictionary<T> {
-  [index: string]: T;
-}
-
-// Time stamps are monotonically increasing. We enforce that they must be different.
-// Stored as a string of [0-3] to facilitate prefix searches (within 4x time ranges).
-// We append "0000" for future needs, for example if we need above 1000 messages per second.
-// Can represent epoch timestamps for the next 400+ years.
-function timestampToBase4String(tsNum: number) {
+export function timestampToBase4String(tsNum: number) {
   return tsNum.toString(4).padStart(22, "0") + "0000" // total length 26
 }
 
-function base4StringToTimestamp(tsStr: string) {
-  return parseInt(tsStr, 4)
+/**
+ * Reverse of timestampToBase4String. Strict about the format
+ * (needs to be `[0-3]{26}`), returns 0 if there's any issue.
+ */
+export function base4StringToTimestamp(tsStr: string) {
+  const regex = /^[0-3]{26}$/;
+  if (!tsStr || typeof tsStr !== 'string' || tsStr.length !== 26 || !regex.test(tsStr)) return 0
+  return parseInt(tsStr.slice(0, -4), 4);
 }
 
+/*
+ * Similar to {@link base4StringToTimestamp}, but returns an (ISO) formatted
+ * date string. Returns '' if there's an issue with the timestamp. Note that it
+ * rigidly expects a 26 character timestamp (prefix) string.
+ */
+export function base4StringToDate(tsStr: string) {
+  const ts: number = base4StringToTimestamp(tsStr)
+  if (ts) return new Date(ts).toISOString()
+  else return ''
+}
+
+/**
+ * Teases apart the three elements of a channel message key. Note, this does not
+ * throw if there's an issue, it just sets all the parts to '', which should
+ * never occur. Up to you if you want to run with that result or assert on it.
+ * Strict about the format (defined as `[a-zA-Z0-9]{43}_[_a-zA-Z0-9]{4}_[0-3]{26}`).
+ */
+export function deComposeMessageKey(key: string): [string, string, string] {
+  const regex = /^([a-zA-Z0-9]{43})_([_a-zA-Z0-9]{4})_([0-3]{26})$/;
+  const match = key.match(regex);
+  if (match && match.length >= 4) return [match![1]!, match![2]!, match![3]!]
+  else return ['', '', '']
+}
+
+/**
+ * Creates a 'message key' from constituent parts.
+ */
 export function composeMessageKey(channelId: SBChannelId, timestamp: number, subChannel: string = '____',) {
   return `${channelId}_${subChannel ?? '____'}_${timestampToBase4String(timestamp)}`
 }
 
-export function deComposeMessageKey(key: string) {
-  const channelId = key.slice(0, 43)
-  const subChannel = key.slice(44, 48)
-  const timestamp = base4StringToTimestamp(key.slice(49))
-  return { channelId, timestamp, subChannel }
-}
+// export function deComposeMessageKey(key: string) {
+//   const channelId = key.slice(0, 43)
+//   const subChannel = key.slice(44, 48)
+//   const timestamp = base4StringToTimestamp(key.slice(49))
+//   return { channelId, timestamp, subChannel }
+// }
 
 /**
  * The "app" level message format, provided to onMessage (by ChannelSocket), and
@@ -341,6 +375,7 @@ export interface ChannelMessage {
   unencryptedContents?: any,
 
   ready?: boolean, // if present, signals other side is ready to receive messages (rest of message ignored)
+  error?: string, // if present, signals error (and rest of message ignored)
   t?: SBUserId, // 'to': public (hash) of recipient; note that Owner sees all messages; if omitted usually means broadcast
   ttl?: number, // Value 0-15; if it's missing it's 15/0xF (infinite); if it's 1-7 it's duplicated to subchannels
 }
@@ -378,7 +413,7 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
 
 // safety/privacy measures; also economizing on storage
 export function stripChannelMessage(msg: ChannelMessage): ChannelMessage {
-  if (DBG) console.log('stripping message:\n', msg)
+  if (DBG2) console.log('stripping message:\n', msg)
   const ret: ChannelMessage = {}
   if (msg.f !== undefined) ret.f = msg.f; else throw new SBError("ERROR: missing 'f' ('from') in message")
   if (msg.c !== undefined) ret.c = msg.c; else throw new SBError("ERROR: missing 'ec' ('encrypted contents') in message")
@@ -591,7 +626,7 @@ type jwkStruct = {
  * MessageBus
  */
 export class MessageBus {
-  bus: Dictionary<any> = {}
+  bus: { [index: string]: any } = {}
 
   /**
    * Safely returns handler for any event
@@ -682,6 +717,33 @@ export function jsonParseWrapper(str: string | null, loc?: string, reviver?: (th
   return str as any
 }
 
+// this is a simple pattern to check if a string is a simple JSON (object or array)
+const simpleJsonPattern = /^\s*[\[\{].*[\]\}]\s*$/;
+
+/**
+ * Different version than jsonParseWrapper. Does not throw, and also checks for
+ * simple strings (which are not valid JSON) and would return those. Returns
+ * null if input is null, or it can't figure out what it is. Used in (low level)
+ * messaging contexts.
+ */
+export function jsonOrString(str: string | null) {
+  if (str === null) return null
+  if (typeof str === 'string') {
+    if (simpleJsonPattern.test(str)) {
+      try {
+        str = JSON.parse(str) // handle nesting
+        return str as any
+      } catch (e) {
+        return null
+      }
+    } else {
+      return str as string
+    }
+  } else {
+    return null
+  }
+}
+
 const bs2dv = (bs: BufferSource) => bs instanceof ArrayBuffer
   ? new DataView(bs)
   : new DataView(bs.buffer, bs.byteOffset, bs.byteLength)
@@ -746,6 +808,10 @@ function SBFetch(input: RequestInfo | URL, init?: RequestInit) {
     });
 }
 
+// Snackabra() globally can change this upon creation, if another network
+// operation is needed
+var sbFetch: ((input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) = SBFetch
+
 /**
  * Wrapper to SBFetch that applies SB API calling conventions on both sides of
  * the call; it will return whatever data structure the server returns, note
@@ -756,7 +822,7 @@ function SBFetch(input: RequestInfo | URL, init?: RequestInit) {
 export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
   let response
   try {
-    response = await SBFetch(input, init)
+    response = await sbFetch(input, init)
     if (!response) throw new SBError("[SBApiFetch] Server did not respond (might be expected)");
     // if (!response || !response.ok) {
     //   // read the json error message if it's there
@@ -777,8 +843,11 @@ export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit) {
       retValue = jsonParseWrapper(json, "L489");
     } else if (contentType.indexOf("application/octet-stream") !== -1) {
       retValue = extractPayload(await response.arrayBuffer()).payload
+    } else if (contentType.indexOf("text/plain") !== -1) {
+      retValue = await response.text()
+      throw new SBError(`[SBApiFetch] Server responded with text/plain (?) ('${retValue}')`);
     } else {
-      throw new SBError("[SBApiFetch] Server responded with unknown content-type header (?)");
+      throw new SBError(`[SBApiFetch] Server responded with unknown content-type header ('${contentType}')`);
     }
     if (!response.ok || !retValue || retValue.error || retValue.success === false) {
       let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response'
@@ -1080,6 +1149,7 @@ function is32BitSignedInteger(number: number) {
  * b - Boolean
  * d - Date
  * i - Integer (32 bit signed)
+ * j - JSON (stringify)
  * m - Map
  * 0 - Null
  * n - Number (JS internal)
@@ -1114,6 +1184,8 @@ function getType(value: any) {
   // }
   if (typeof value === 'object' && typeof value.then === 'function')
     console.error("[getType] Trying to serialize a Promise - did you forget an 'await'?");
+  else if (typeof value === 'object' && typeof value.toJSON === 'function')
+    return 'j'; // JSON.stringify(value) will be used
   else
     console.error('[getType] Unsupported for object:', value);
   throw new SBError('Unsupported type');
@@ -1135,6 +1207,10 @@ function _assemblePayload(data: any): ArrayBuffer | null {
             const payload = _assemblePayload(value);
             if (!payload) throw new SBError(`Failed to assemble payload for ${key}`);
             BufferList.push(payload);
+            break;
+          case 'j': // JSON
+            const jsonValue = new TextEncoder().encode(JSON.stringify(value));
+            BufferList.push(jsonValue.buffer);
             break;
           case 'n': // Number
             const numberValue = new Uint8Array(8);
@@ -1242,6 +1318,8 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
   switch (type) {
     case 'o':
       return _extractPayload(buffer);
+    case 'j': // JSON
+      return jsonParseWrapper(new TextDecoder().decode(buffer), "L1322");
     case 'n': // Number
       return new DataView(buffer).getFloat64(0);
     case 'i': // Integer (32 bit signed)
@@ -1912,7 +1990,7 @@ function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean 
  */
 export const sbCrypto = new SBCrypto();
 
-const SEP = "============================================================\n";
+const SEP = '\n' + '='.repeat(76) + '\n'
 
 //#endregion - SETUP and STARTUP stuff
 
@@ -1954,35 +2032,37 @@ function decompressP384(xBase64: string, signY: number) {
 /**
   * Basic (core) capability object in SB.
   *
-  * Like most SB classes, SB384 follows the "ready template" design
-  * pattern: the object is immediately available upon creation,
-  * but isn't "ready" until it says it's ready. See `Channel Class`_
-  * example below. Getters will throw exceptions if the object
-  * isn't sufficiently initialized. Also see Design Note [4]_.
-  * 
-  * { @link https://snackabra.io/jslib.html#dn-004-the-ready-pattern }
   *
-  * @param key a jwk with which to create identity; if not provided,
-  * it will 'mint' (generate) them randomly, in other words it will
-  * default to creating a new identity ("384").
-  * 
-  * @param forcePrivate if true, will force SB384 to include private
-  * key; it will throw an exception if the key is not private.
-  * If SB384 is used to mint, then it's always private.
-  * 
+  * @param key a jwk with which to create identity; if not provided, it will
+  * 'mint' (generate) them randomly, in other words it will default to creating
+  * a new identity ("384").
+  *
+  * @param forcePrivate if true, will force SB384 to include private key; it
+  * will throw an exception if the key is not private. If SB384 is used to mint,
+  * then it's always private.
+  *
   * The important "externally visible" formats are:
-  * 
-  * - userId(): unique hash of contents of public key, shorter format
-  *   (256 bits, 43 x base62), cannot be used to reconstruct key,
-  *   used to identify users (and channels)
-  * 
-  * - userPublicKey(): encodes core public key info ('x' and 'y' fields),
-  *   as a base62 string (with a unique prefix). This is 'wire' format
-  *   as well as human-readable. 
-  * 
+  *
+  * - {@link SB384.userId}: unique hash ({@link SB384Hash}) of contents of
+  *   public key, shorter format (256 bits, 43 x base62), cannot be used to
+  *   reconstruct key, used to identify users (and channels)
+  *
+  * - userPublicKey(): encodes core public key info ('x' and 'y' fields), as a
+  *   base62 string (with a unique prefix). This is 'wire' format as well as
+  *   human-readable. 
+  *
   * - userPrivateKey(): similar to public key format, adds the 'd' field
-  *   information (embedded), from this format a full private key can
-  *   be reconstructed.
+  *   information (embedded), from this format a full private key can be
+  *   reconstructed.
+  *
+  * Like most SB classes, SB384 follows the "ready template" design pattern: the
+  * object is immediately available upon creation, but isn't "ready" until it
+  * says it's ready. See `Channel Class`_ example below. Getters will throw
+  * exceptions if the object isn't sufficiently initialized. Also see Design
+  * Note [4]_.
+  *
+  * { @link https://snackabra.io/jslib.html#dn-004-the-ready-pattern }
+
   *
   */
 class SB384 {
@@ -2007,6 +2087,21 @@ class SB384 {
   #hash?: SB384Hash // generic 'identifier', see hash getter below
   #hashB32?: string // base32 version of hash (first 12 sets eg 48 chars)
 
+  /**
+   * As a fundamental object, SB384 can be initialized from a number starting points:
+   * 
+   * - No key provided: a new key pair is generated
+   * - A CryptoKey object: a key pair is generated from the CryptoKey
+   * - A JsonWebKey object: a key pair is generated from the JsonWebKey
+   * - A SBUserPublicKey object: a key pair is generated from the SBUserPublicKey
+   * - A SBUserPrivateKey object: a key pair is generated from the SBUserPrivateKey
+   * 
+   * The 'forcePrivate' parameter is used to force the object to be private; if
+   * the key provided is inherently not private, an exception is thrown. This simplifies
+   * situation where it would only make sense if you're operating with a private key,
+   * and spares you from (sometimes convoluted) checks (eg what fields are present in
+   * a 'jwk' field etc).
+   */
   constructor(key?: CryptoKey | JsonWebKey | SBUserPublicKey | SBUserPrivateKey, forcePrivate?: boolean) {
     (this as any)[SB384.ReadyFlag] = false;
     this.sb384Ready = new Promise<SB384>(async (resolve, reject) => {
@@ -2137,31 +2232,24 @@ class SB384 {
    * Returns a unique identifier for external use, that will be unique
    * for any class or object that uses SB384 as it's root.
    * 
-   * This is deterministic. Important use case is to translate a user id
-   * into a channel id (eg the channel that any user id is inherently
+   * This is deterministic. Typical use case is to translate a user id
+   * into a {@link ChannelId} (eg the channel that any user id is inherently
    * the owner of).
    * 
-   * The hash is base64 encoding of the SHA-384 hash of the public key,
-   * taking the 'x' and 'y' fields. Note that it is slightly restricted, it only
-   * allows [A-Za-z0-9], eg does not allow the '_' or '-' characters. This makes the
-   * encoding more practical for end-user interactions like copy-paste. This
-   * is accomplished by simply re-hashing until the result is valid. This 
-   * reduces the entropy of the channel ID by a neglible amount. 
+   * The hash is base62 encoding of the SHA-384 hash of the public key.
    * 
-   * Note this is not b62 encoding, which we use for 256-bit entities. This
-   * is still ~384 bits (e.g. x and y fields are each 384 bits, but of course
-   * the underlying total entropy isn't that (exercise left to the reader).
-   * 
-   * NOTE: if you ever need to COMPARE hashes, the short version is that
-   * you cannot do so in the general case: you need to use sbCrypto.compareHashWithKey()
    */
   @Memoize @Ready get hash(): SB384Hash { return this.#hash! }
+
+  /**
+   * Similar to {@link SB384.hash}, but base32 encoded.
+   */
   @Memoize @Ready get hashB32(): SB384Hash { return this.#hashB32! }
 
   // convenience getter
   @Memoize @Ready get userId(): SB384Hash { return this.hash }
 
-  /** ChannelID that corresponds to this, if it's an owner */
+  /** {@link ChannelID} that corresponds to this, if it's an owner */
   @Memoize @Ready get ownerChannelId() {
     // error even though there's a #hash, since we know it needs to be private
     // ... update, hm, actually this is still used as "whatif" for non-owner
@@ -2175,15 +2263,16 @@ class SB384 {
     return this.#privateUserKey!
   }
 
+  /** @type {CryptoKey} Signing key. */
   @Memoize @Ready get signKey(): CryptoKey { return this.#signKey! }
 
-  /** @type {CryptoKey} This should always be present */
+  /** @type {CryptoKey} Basic public key, always present. */
   @Memoize @Ready get publicKey(): CryptoKey { return this.#publicUserKey! }
 
-  /** For 'jwk' format use cases. @type {JsonWebKey} */
+  /* Deprecated For 'jwk' format use cases. @type {JsonWebKey} */
   // @Memoize @Ready get exportable_pubKey() { return sbCrypto.extractPubKey(this.#jwk!)! }
 
-  /** @type {JsonWebKey} */
+  /** @type {JsonWebKey} Exports private key in 'jwk' format. */
   @Memoize get jwkPrivate(): JsonWebKey {
     _sb_assert(this.#private, 'jwkPrivate() - not a private key')
     _sb_assert(this.#x && this.#y && this.#d, "JWK key info is not available (fatal)")
@@ -2198,7 +2287,7 @@ class SB384 {
     }
   }
 
-  /** @type {JsonWebKey} */
+  /** @type {JsonWebKey} Exports public key in 'jwk' format. */
   @Memoize get jwkPublic(): JsonWebKey {
     _sb_assert(this.#x && this.#y, "JWK key info is not available (fatal)")
     return {
@@ -2349,8 +2438,9 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
   }
 
   async encryptionKey(msg: SBMessage): Promise<CryptoKey> {
+    _sb_assert(msg.salt, "Protocol called without salt (Internal Error)")
     if (DBG) console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt)
-    return this.#getMessageKey(msg.salt)
+    return this.#getMessageKey(msg.salt!)
   }
 
   async decryptionKey(_channel: Channel, msg: ChannelMessage): Promise<CryptoKey | undefined> {
@@ -2442,7 +2532,7 @@ export class SBChannelKeys extends SB384 {
       if (typeof handleOrKey === 'string') {
         const ownerPrivateKey = handleOrKey as SBUserPrivateKey
         super(ownerPrivateKey, true)
-      } else if (_checkChannelHandle(handleOrKey)) {
+      } else if (_check_SBChannelHandle(handleOrKey)) {
         const handle = validate_SBChannelHandle(handleOrKey)
         channelServer = handle.channelServer
         super(handle.userPrivateKey, true);
@@ -2586,6 +2676,7 @@ export interface MessageOptions {
   sendTo?: SBUserId,   // 't' in ChannelMessage
   subChannel?: string, // 'i2' in ChannelMessage, Owner only
   protocol?: SBProtocol,
+  sendString?: boolean, // if true, just send the string, no other processing
 }
 
 /**
@@ -2602,36 +2693,53 @@ export interface MessageOptions {
  * Note that with Protocl_ECDH, you need to make sure 'sendTo' is set, since
  * that will otherwise default to Owner. It does not support channel
  * 'broadcast'.
+ *
+ * The option 'sendString' allows for 'lower-level' messaging, for example for
+ * special 'keep alive' messages that might be server-specific. If that is set,
+ * the contents are expected to be a string, and the message will be sent as-is,
+ * and features like encryption, ack/nack, ttl, routing, etc, are not available.
  */
 class SBMessage {
   [SB_MESSAGE_SYMBOL] = true
   sbMessageReady: Promise<SBMessage>
   static ReadyFlag = Symbol('SBMessageReadyFlag'); // see below for '(this as any)[<class>.ReadyFlag] = false;'
-  #message?: ChannelMessage   // the message that's set to send
-  salt: ArrayBuffer
+  #message?: ChannelMessage | string   // the message that's set to send
+  salt?: ArrayBuffer
 
   constructor(
     public channel: Channel,
     public contents: any,
     public options: MessageOptions = {}
   ) {
-    // there is always sbm-generated salt, whether or not the protocol needs it,
-    // or wants to create/manage it by itself
-    this.salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
-    this.sbMessageReady = new Promise<SBMessage>(async (resolve) => {
-      await channel.channelReady
-      if (!this.options.protocol) this.options.protocol = channel.protocol
-      if (!this.options.protocol) this.options.protocol = Channel.defaultProtocol
-      this.#message = await sbCrypto.wrap(
-        this.contents,
-        this.channel.userId,
-        await this.options.protocol.encryptionKey(this),
-        this.salt,
-        this.channel.signKey,
-        options);
-      (this as any)[SBMessage.ReadyFlag] = true
-      resolve(this)
-    })
+
+    if (options.sendString) {
+      // in this case, we don't need to do anything else, so 'sbMessageReady'
+      // should resolve to 'this' right away
+      _sb_assert(typeof contents === 'string', "SBMessage() - sendString is true, but contents is not a string")
+      this.#message = contents
+      this.sbMessageReady = new Promise<SBMessage>(async (resolve) => {
+        (this as any)[SBMessage.ReadyFlag] = true
+        resolve(this)
+      })
+    } else {
+      // there is always sbm-generated salt, whether or not the protocol needs it,
+      // or wants to create/manage it by itself
+      this.salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
+      this.sbMessageReady = new Promise<SBMessage>(async (resolve) => {
+        await channel.channelReady
+        if (!this.options.protocol) this.options.protocol = channel.protocol
+        if (!this.options.protocol) this.options.protocol = Channel.defaultProtocol
+        this.#message = await sbCrypto.wrap(
+          this.contents,
+          this.channel.userId,
+          await this.options.protocol.encryptionKey(this),
+          this.salt!,
+          this.channel.signKey,
+          options);
+        (this as any)[SBMessage.ReadyFlag] = true
+        resolve(this)
+      })
+    }
   }
 
   get ready() { return this.sbMessageReady }
@@ -2642,8 +2750,8 @@ class SBMessage {
    * SBMessage.send()
    */
   async send() {
-    if (DBG) console.log("SBMessage.send() - sending message:", this.message)
     await this.ready
+    if (DBG) console.log("SBMessage.send() - sending message:", this.message)
     return this.channel.callApi('/send', this.message)
   }
 } /* class SBMessage */
@@ -2659,50 +2767,70 @@ class SBMessage {
 
 
 /**
- * Join a channel, taking a channel handle. Returns channel object.
+ * Channels are the core communication and 'read/write' object.
  *
- * You must have an identity when connecting, because every single
- * message is signed by sender.
- *
- * Most classes in SB follow the "ready" template: objects can be used
- * right away, but they decide for themselves if they're ready or not.
- * The SB384 state is the *user* of the channel, not the channel
- * itself; it has an Owner (also SB384 object), which can be the
- * same as the user/visitor, but that requires finalizing creating
- * the channel to find out (from the channel server).
- * 
  * The Channel class communicates asynchronously with the channel.
- * 
+ *
  * The ChannelSocket class is a subclass of Channel, and it communicates
  * synchronously (via websockets).
+ *
+ * Protocol is called for every message to get the CryptoKey to use for that
+ * message; if provided, then it's the default for each message. Individual
+ * messages can override this. Upon sending, one or the other needs to be there.
+ * The default protocol is Protocol_ECDH, which does basic sender-receipient
+ * public key encryption.
  * 
- * Protocol is called for every message to get the CryptoKey to use
- * for that message; if provided, then it's the default for each
- * message. Individual messages can override this. Upon sending, one
- * or the other needs to be there.
- * 
+ * The interface equivalent of a Channel is {@link SBChannelHandle}.
+ *
  * Note that you don't need to worry about what API calls involve race
- * conditions and which don't, the library will do that for you.
- * 
+ * conditions and which don't, the library will do that for you. Like most
+ * classes in SB it follows the "ready" template: objects can be used right
+ * away, but they decide for themselves if they're ready or not. The SB384 state
+ * is the *user* of the channel, not the channel itself; it has an Owner (also
+ * SB384 object), which can be the same as the user/visitor, but that requires
+ * finalizing creating the channel to find out (from the channel server).
+ *
+ *
  */
 class Channel extends SBChannelKeys {
   channelReady: Promise<Channel>
   static ReadyFlag = Symbol('ChannelReadyFlag'); // see below for '(this as any)[Channel.ReadyFlag] = false;'
   locked?: boolean = false // TODO: need to make sure we're tracking whenever this has changed
-  #cursor: string = ''; // last (oldest) message key seen
+  // #cursor: string = ''; // last (oldest) message key seen
 
   static defaultProtocol: SBProtocol = new Protocol_ECDH() // default
 
   visitors: Map<SBUserId, SBUserPrivateKey> = new Map()
 
   /**
-   * Channel. Note that if you pass null as a first parameter, you're asking for
-   * a brand new channel but one that uses the provided protocol. We're still
-   * debating if creation of a channel should REQUIRE a protocol.
+   * Channel supports creation from scratch, from a handle, or from a key.
+   * With no parameters, you're creating a channel from scratch, which
+   * means in particular it creates the Owner keys. The resulting object
+   * can be recreated from `channel.userPrivateKey`. A from-scratch
+   * Channel is an "abstract" object, a mathematical construct, it isn't
+   * yet hosted anywhere. But it's guaranteed to be globally unique.
    */
   constructor() // requesting a new channel, no protocol
+  /**
+   * In the special case where you want to create a Channel from scratch,
+   * and immediately start using it, you can directly pass a protocol and
+   * mark absense of a handle with `null`.
+   */
   constructor(newChannel: null, protocol: SBProtocol) // requesting a new channel
+  /**
+   * If you are re-createating a Channel from the Owner private key, you
+   * can so so directly.
+   */
   constructor(key: SBUserPrivateKey, protocol?: SBProtocol)
+  /**
+   * If you have a full (or partial) handle present, you can use that as well;
+   * for example it might already contain the name of a specific channel server,
+   * the ChannelData from that server for the channel, etc. This is also the
+   * quickest way, since bootstrapping from keys requires more crypto.
+   * 
+   * @param handle - SBChannelHandle
+   * @param protocol - SBProtocol
+   */
   constructor(handle: SBChannelHandle, protocol?: SBProtocol)
   constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey | null, public protocol: SBProtocol = Channel.defaultProtocol) {
     if (DBG) console.log("Channel() constructor called with handleOrKey:\n", handleOrKey)
@@ -2734,7 +2862,7 @@ class Channel extends SBChannelKeys {
    * things in ChannelMessage)
    */
   async extractMessage(msgRaw: ChannelMessage): Promise<Message | undefined> {
-    if (DBG) console.log("[extractMessage] Extracting message:", msgRaw)
+    if (DBG2) console.log("[extractMessage] Extracting message:", msgRaw)
     try {
       msgRaw = validate_ChannelMessage(msgRaw)
       if (!msgRaw) {
@@ -2772,7 +2900,13 @@ class Channel extends SBChannelKeys {
       _sb_assert(t, "[unwrap] No contents in encrypted message (probably an error)")
       const view = new DataView(new ArrayBuffer(8));
       view.setFloat64(0, msgRaw.ts);
-      const bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t!)
+      let bodyBuffer
+      try {
+        bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t!)
+      } catch (e: any) {
+        if (DBG) console.error("[extractMessage] Could not decrypt message (exception) [L2898]:", e.message)
+        return undefined
+      }
       if (!msgRaw._id)
         msgRaw._id = composeMessageKey(this.channelId!, msgRaw.sts!, msgRaw.i2)
       if(msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
@@ -2786,10 +2920,10 @@ class Channel extends SBChannelKeys {
         // eol: <needs to be calculated>, // ToDo: various places for TTL/EOL processing
         _id: msgRaw._id!,
       }
-      if (DBG) console.log("[extractMessage] Extracted message (before validation):", msg)
+      if (DBG2) console.log("[extractMessage] Extracted message (before validation):", msg)
       return validate_Message(msg)
-    } catch (e) {
-      if (DBG) console.error("[extractMessage] Could not process message (exception) [L2782]:", e)
+    } catch (e: any) {
+      if (DBG) console.error("[extractMessage] Could not process message (exception) [L2782]:", e.message)
       return undefined
     }
   }
@@ -2842,19 +2976,24 @@ class Channel extends SBChannelKeys {
 
   /**
    * Returns map of message keys from the server corresponding to the request.
+   * Takes a single optional parameter, which is the time stamp prefix for which
+   * a set is requested. If not provided, the default is '0' (which corresponds
+   * to entire history). The return data structure includes the map of message
+   * keys, and the current history shard (which is 'null' if there is none).
    */
-  getMessageKeys(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Set<string>> {
+  getMessageKeys(prefix: string = '0'): Promise<{ keys: Set<string>, historyShard: SBObjectHandle }> {
+    // getMessageKeys(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Set<string>> {
     return new Promise(async (resolve, _reject) => {
       await this.channelReady
       _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)")
-      const messages: Set<string> = await this.callApi(
+      const { keys, historyShard } = (await this.callApi(
         '/getMessageKeys',
-        { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined })
-      // todo: empty is valid
-      if (DBG) console.log("getMessageKeys\n", messages)
-      if(!messages || messages.size === 0)
+        // { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined })
+        { prefix: prefix })) as { keys: Set<string>, historyShard: SBObjectHandle }
+      if (DBG) console.log("getMessageKeys\n", keys)
+      if(!keys || keys.size === 0)
         console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?")
-      resolve(messages)
+      resolve({ keys, historyShard })
     });
   }
 
@@ -2891,6 +3030,20 @@ class Channel extends SBChannelKeys {
         }
       }
       resolve(await this.extractMessageMap(messages))
+    });
+  }
+
+  /**
+   * Returns map of message keys from the server corresponding to the request.
+   */
+  getHistory(): Promise<SBObjectHandle> {
+    return new Promise(async (resolve, _reject) => {
+      await this.channelReady
+      _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)")
+      const response = await this.callApi('/getHistory')
+      // resolve(validate_SBChannelHandle(handle))
+      console.log("getHistory result:\n", response)
+      resolve(response.shardHandle)
     });
   }
 
@@ -2942,7 +3095,7 @@ class Channel extends SBChannelKeys {
   @Ready async getPage() {
     const prefix = this.hashB32 // we know the full prefix
     if (DBG) console.log(`==== ChannelApi.getPage: calling fetch with: ${prefix}`)
-    const page = await SBFetch(this.channelServer + '/api/v2/page/' + prefix)
+    const page = await sbFetch(this.channelServer + '/api/v2/page/' + prefix)
     const contentType = page.headers.get('content-type')
     if (contentType !== 'sb384payloadV3')
       throw new SBError("[Channel.getPage] Can only handle 'sb384payloadV3' content type, use 'fetch()'")
@@ -3096,28 +3249,30 @@ class Channel extends SBChannelKeys {
    * to the server to close the connection based on inactivity. The
    * ChannelSocket will re-open if you try to send against a closed connection.
    *
-   * Messages are delivered as type Message. It also handles a simple ack/nack
-   * mechanism with the server transparently.
+   * Messages are delivered as type Message if it could be parsed and decrypted;
+   * it can also be a string (typically if a low-level server message, in which
+   * case it will just be forwarded to the message handler).
+   *
+   * It also handles a simple ack/nack mechanism with the server transparently.
    *
    * Be aware that if ChannelSocket doesn't know how to handle a certain
    * message, it will generally drop it. 
    *
  */
 class ChannelSocket extends Channel {
-  // ready: Promise<ChannelSocket>
   channelSocketReady: Promise<ChannelSocket>
   static ReadyFlag = Symbol('ChannelSocketReadyFlag'); // see below for '(this as any)[ChannelSocket.ReadyFlag] = false;'
 
   #ws?: WSProtocolOptions
   #socketServer: string
 
-  onMessage = (_m: Message): void => { _sb_assert(false, "[ChannelSocket] NO MESSAGE HANDLER"); }
+  onMessage = (_m: Message | string): void => { _sb_assert(false, "[ChannelSocket] NO MESSAGE HANDLER"); }
   #ack: Map<string, (value: string | PromiseLike<string>) => void> = new Map()
   #traceSocket: boolean = false // should not be true in production
 
   constructor(
       handleOrKey: SBChannelHandle | SBUserPrivateKey,
-      onMessage: (m: Message) => void,
+      onMessage: (m: Message | string) => void,
       protocol?: SBProtocol
       ) {
     _sb_assert(onMessage, '[ChannelSocket] constructor: no onMessage handler provided')
@@ -3161,20 +3316,39 @@ class ChannelSocket extends Channel {
         this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf!))
       }
 
-      this.#ws.websocket.addEventListener('message',
-        (e: MessageEvent<any>) => {
-          if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3618")?.hasOwnProperty('ready')) {
-            // switch to main message processor
-            this.#ws!.websocket!.addEventListener('message', this.#processMessage)
-              // we're ready
-              ; (this as any)[ChannelSocket.ReadyFlag] = true;
-            resolve(this)
-          } else {
-            if (DBG) console.log(SEP, "Received non-ready:\n", e.data, "\n", SEP)
-            reject("[ChannelSocket] received something other than 'ready' as first message")
-          }
+      if (DBG) console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
+
+      const thisWsWebsocket = this.#ws.websocket
+      const initialListener = (e: MessageEvent<any>) => {
+        if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3253")?.hasOwnProperty('ready')) {
+          thisWsWebsocket.removeEventListener('message', initialListener);
+          thisWsWebsocket.addEventListener('message', this.#processMessage);
+          if (DBG) console.log(SEP, "Received ready", SEP);
+          (this as any)[ChannelSocket.ReadyFlag] = true;
+          resolve(this);
+        } else {
+          if (DBG) console.log(SEP, "Received non-ready (?):\n", e.data, "\n", SEP);
+          reject("[ChannelSocket] received something other than 'ready' as first message");
         }
-      )
+      };
+      this.#ws.websocket.addEventListener('message', initialListener);
+
+      // if (DBG) console.log(SEP,"++++ readyPromise() - setting up websocket message listener", SEP)
+      // this.#ws.websocket.addEventListener('message',
+      //   (e: MessageEvent<any>) => {
+      //     if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3618")?.hasOwnProperty('ready')) {
+      //       // switch to main message processor
+      //       this.#ws!.websocket!.addEventListener('message', this.#processMessage)
+      //       // we're ready
+      //       if (DBG) console.log(SEP, "Received ready", SEP)
+      //       ; (this as any)[ChannelSocket.ReadyFlag] = true;
+      //       resolve(this)
+      //     } else {
+      //       if (DBG) console.log(SEP, "Received non-ready:\n", e.data, "\n", SEP)
+      //       reject("[ChannelSocket] received something other than 'ready' as first message")
+      //     }
+      //   }
+      // )
 
       this.#ws.websocket.addEventListener('open', async () => {
         this.#ws!.closed = false
@@ -3206,13 +3380,13 @@ class ChannelSocket extends Channel {
         reject('ChannelSocket creation error (see log)')
       });
 
-      // let us set a timeout to catch and make sure this thing resoles within 0.5 seconds
+      // let us set a timeout to catch and make sure this thing resoles within 10 seconds
       setTimeout(() => {
         if (!(this as any)[ChannelSocket.ReadyFlag]) {
           const msg = "[ChannelSocket] - this socket is not resolving (waited 10s) ..."
           console.warn(msg); reject(msg);
         } else {
-          if (DBG) console.log("ChannelSocket() - this socket resolved", this)
+          if (DBG2) console.log("ChannelSocket() - this socket resolved", this)
         }
       }, 10000);
 
@@ -3226,8 +3400,15 @@ class ChannelSocket extends Channel {
     var message: ChannelMessage | null = null
     _sb_assert(msg, "[ChannelSocket] received empty message")
     if (typeof msg === 'string') {
-      console.error("ChannelSocket receiving string (json?) message, this is getting deprecated")
-      message = jsonParseWrapper(msg, "L3589")
+      // could be a simple JSON message, or a low-level server message (eg just a string)
+      const _message: any = jsonOrString(msg)
+      if (!_message) _sb_exception("L3287", "[ChannelSocket] Cannot parse message: " + msg)
+      if (typeof _message === 'string') {
+        if (DBG) console.log("[ChannelSocket] Received simple string message, will forward\n", _message)
+        this.onMessage(_message)
+        return
+      }
+      message = _message as ChannelMessage
     } else if (msg instanceof ArrayBuffer) {
       message = extractPayload(msg).payload
     } else if (msg instanceof Blob) {
@@ -3239,7 +3420,11 @@ class ChannelSocket extends Channel {
 
     // we catch server-specific messages here, and then pass the rest to the user
     if (message!.ready) {
-      console.log("++++++++ #processMessage: received ready message", message)
+      console.log("++++++++ #processMessage: received ready message\n", message)
+      return
+    }
+    if (message!.error) {
+      console.error("++++++++ #processMessage: received error message\n", message)
       return
     }
 
@@ -3306,9 +3491,9 @@ class ChannelSocket extends Channel {
     * or an error message if it fails.
     */
   @VerifyParameters
-  async send(msg: SBMessage | any): Promise<string> {
+  async send(msg: SBMessage | any, options?: MessageOptions): Promise<string> {
     await this.ready
-    const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg)
+    const sbm: SBMessage = msg instanceof SBMessage ? msg : new SBMessage(this, msg, options)
     _sb_assert(this.#ws && this.#ws.websocket, "ChannelSocket.send() called before ready")
     if (this.#ws!.closed) {
       if (this.#traceSocket) console.info("send() triggered reset of #readyPromise() (normal)")
@@ -3325,33 +3510,40 @@ class ChannelSocket extends Channel {
         case 1: // OPEN
           if (this.#traceSocket)
             console.log("++++++++ ChannelSocket.send() will send message:", Object.assign({}, sbm.message))
-          const messagePayload = assemblePayload(sbm.message)
-          _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message")
-          // we keep track of a hash of things we've sent so we can track when we see them
-          // const hash = await crypto.subtle.digest('SHA-256', messagePayload!)
-          const hash = await crypto.subtle.digest('SHA-256', sbm.message.c!)
-          const messageHash = arrayBufferToBase64url(hash)
-          if (DBG || this.#traceSocket)
-            console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash)
-          // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
-          this.#ack.set(messageHash, resolve)
+          let messagePayload: ArrayBuffer | string | null = null
+          if (options?.sendString === true) {
+            messagePayload = sbm.message as string
+          } else {
+            const msg = sbm.message as ChannelMessage
+            messagePayload = assemblePayload(msg)
+            _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message")
+            // we keep track of a hash of things we've sent so we can track when we see them
+            // todo: 'hash' should probably be an sbm property
+            const hash = await crypto.subtle.digest('SHA-256', msg.c!)
+            const messageHash = arrayBufferToBase64url(hash)
+            if (DBG || this.#traceSocket)
+              console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash)
+            // const ackPayload = { timestamp: Date.now(), type: 'ack', _id: _id }
+            this.#ack.set(messageHash, resolve)
+            setTimeout(() => {
+              // we could just resolve on message return, but we want to print out error message
+              if (this.#ack.has(messageHash)) {
+                this.#ack.delete(messageHash)
+                const msg = `Websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})`
+                console.error(msg)
+                reject(msg)
+              } else {
+                // normal behavior
+                if (this.#traceSocket) console.log("++++++++ ChannelSocket.send() completed sending")
+                resolve("success")
+              }
+            }, this.#ws!.timeout)
+          }
 
           // THIS IS WHERE we actually send the payload ...
-          this.#ws!.websocket!.send(messagePayload!)
+          if (!messagePayload) reject("ChannelSocket.send(): no message payload (Internal Error)")
+          else this.#ws!.websocket!.send(messagePayload)
 
-          setTimeout(() => {
-            // we could just resolve on message return, but we want to print out error message
-            if (this.#ack.has(messageHash)) {
-              this.#ack.delete(messageHash)
-              const msg = `Websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})`
-              console.error(msg)
-              reject(msg)
-            } else {
-              // normal behavior
-              if (this.#traceSocket) console.log("++++++++ ChannelSocket.send() completed sending")
-              resolve("success")
-            }
-          }, this.#ws!.timeout)
           break
         case 0: // CONNECTING
         case 2: // CLOSING
@@ -3364,6 +3556,16 @@ class ChannelSocket extends Channel {
           _sb_exception('ChannelSocket', `socket in unknown state (${readyState})`)
       }
     })
+  }
+
+  async close() {
+    if (this.#ws && this.#ws.websocket) {
+      this.#ws.websocket.close()
+      this.#ws.closed = true
+    }
+    // set ready to permanently reject // todo: why does this break callee?
+    // this.channelSocketReady = Promise.reject("[ChannelSocket] ChannelSocket close() was called")
+    ; (this as any)[ChannelSocket.ReadyFlag] = false;
   }
 
   // /** @type {JsonWebKey} */ @Memoize @Ready get exportable_owner_pubKey() { return this.keys.ownerKey }
@@ -3531,12 +3733,11 @@ export class StorageApi {
    */
   async storeData(
     contents: any,
-    channelOrHandle: SBChannelHandle | Channel
+    budgetSource: SBChannelHandle | Channel | SBStorageToken
   ) {
     try {
       const buf = assemblePayload(contents)!
       if (!buf) throw new SBError("[storeData] failed to assemble payload")
-      const channel = channelOrHandle instanceof Channel ? channelOrHandle : new Channel(channelOrHandle)
 
       const bufSize = (buf as ArrayBuffer).byteLength // before padding
       const paddedBuf = StorageApi.padBuf(buf)
@@ -3553,7 +3754,19 @@ export class StorageApi {
 
       const key = await StorageApi.getObjectKey(fullHash.keyMaterial, keyInfo.salt)
       const encryptedData = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv })
-      const storageToken = await channel.getStorageToken(encryptedData.byteLength)
+
+      let storageToken: SBStorageToken
+      // const channel = channelOrHandle instanceof Channel ? channelOrHandle : new Channel(channelOrHandle)
+      // const storageToken = await channel.getStorageToken(encryptedData.byteLength)
+      if (budgetSource instanceof Channel) {
+        storageToken = await budgetSource.getStorageToken(encryptedData.byteLength)
+      } else if (_check_SBChannelHandle(budgetSource as SBChannelHandle)) {
+        storageToken = await (await new Channel(budgetSource as SBChannelHandle).ready).getStorageToken(encryptedData.byteLength)
+      } else if (_check_SBStorageToken(budgetSource as SBStorageToken)) {
+        storageToken = validate_SBStorageToken(budgetSource as SBStorageToken)
+      } else {
+        throw new SBError("[storeData] invalid budget source (needs to be a channel, channel handle, or storage token)")
+      }
 
       // 'phase 2': we store the object
       const storeQuery = storageServer + '/api/v2/storeData?id=' + id
@@ -3622,7 +3835,6 @@ export class StorageApi {
       return (null)
     }
   }
-
 
   /**
    * This assumes you have a complete SBObjectHandle. Note that if you only have
@@ -3740,29 +3952,49 @@ const SnackabraDefaults = {
   * storage server is now provided by '/api/v2/info' endpoint from the
   * channel server.
   * 
-  * Two optional parameters enable debug output mode and verbose
-  * debug output mode.
+  * You can give an options parameter with various settings, including
+  * debug levels. For ease of use, you can just give a boolean value
+  * (eg 'true') to turn on basic debugging.
+  * 
+  * The 'sbFetch' option allows you to provide a custom fetch function
+  * for accessing channel and storage servers. For example, to provide
+  * a specific service binding for a web worker.
  */
 class Snackabra {
   #channelServer: string
   #storage: StorageApi
   #version = version
   #channelServerInfo: any
-  sbFetch = SBFetch // future: will allow overriding network fetch
 
-  constructor(channelServer: string, setDBG?: boolean, setDBG2?: boolean) {
+  constructor(
+    channelServer: string,
+    options?:
+    {
+      DEBUG?: boolean,
+      DEBUG2?: boolean,
+      sbFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    }
+    | boolean
+    ) {
     console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`)
     _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter')
     SnackabraDefaults.channelServer = channelServer
-    if (setDBG && setDBG === true) DBG = true;
-    if (DBG && setDBG2 && setDBG2 === true) DBG2 = true;
+    if (typeof options === 'boolean') options = { DEBUG: options }
+    if (options && options.DEBUG && options.DEBUG === true) DBG = true;
+    if (options && DBG && options.DEBUG2 && options.DEBUG2 === true) DBG2 = true;
     if (DBG) console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
     if (DBG2) console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
+
+    // sets global setting for what network/fetch operation to use
+    if (options && options.sbFetch) {
+      console.log("++++ Snackabra constructor: setting custom fetch function ++++", options.sbFetch)
+      sbFetch = options.sbFetch
+    }
 
     this.#channelServer = channelServer // conceptually, you can have multiple channel servers
     // (eventually) fetch storage server name from channel server; StorageApi knows how to handle this
     this.#storage = new StorageApi(new Promise((resolve, reject) => {
-      SBFetch(this.#channelServer + '/api/v2/info')
+      sbFetch(this.#channelServer + '/api/v2/info')
         .then((response: Response) => {
           if (!response.ok) { reject('response from channel server was not OK') }
           return response.json()
@@ -3780,6 +4012,7 @@ class Snackabra {
           reject(error)
         });
     }));
+
   }
 
   static get defaultChannelServer(): string {
@@ -3879,8 +4112,8 @@ class Snackabra {
    */
 
   connect(handleOrKey: SBChannelHandle | SBUserPrivateKey): Channel
-  connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: ChannelMessage) => void): ChannelSocket
-  connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage?: (m: ChannelMessage) => void): Channel | ChannelSocket {
+  connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message | string) => void): ChannelSocket
+  connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage?: (m: Message | string) => void): Channel | ChannelSocket {
     let handle: SBChannelHandle
     if (typeof handleOrKey === 'string') {
       handle = {
