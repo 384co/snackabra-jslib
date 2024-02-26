@@ -175,7 +175,7 @@ export function stripChannelMessage(msg, serverMode = false) {
 }
 var DBG = false;
 var DBG2 = false;
-var DBG0 = false;
+var DBG0 = true;
 if (DBG0)
     console.log("++++ Setting DBG0 to TRUE ++++");
 if (globalThis.configuration && globalThis.configuration.DEBUG === true) {
@@ -265,7 +265,7 @@ export class MessageQueue {
     closed = false;
     error = null;
     enqueue(item) {
-        if (DBG0)
+        if (DBG)
             console.log(`[MessageQueue] Enqueueing. There were ${this.queue.length} messages in queue`);
         if (this.closed)
             throw new SBError('[MessageQueue] Error, trying to enqueue to closed queue');
@@ -279,14 +279,14 @@ export class MessageQueue {
         }
     }
     async dequeue() {
-        if (DBG0)
+        if (DBG2)
             console.log(`[MessageQueue] Dequeueing. There are ${this.queue.length} messages left`);
         if (this.queue.length > 0) {
             const item = this.queue.shift();
             if (this.closed)
                 return Promise.reject(item);
             else {
-                if (DBG0)
+                if (DBG2)
                     console.log(SEP, SEP, SEP, `[MessageQueue] Dequeueing. Returning item.\n`, item, SEP);
                 return Promise.resolve(item);
             }
@@ -2629,10 +2629,25 @@ class ChannelSocket extends Channel {
                 return "<websocket accepted message>";
             }
             catch (e) {
-                const msg = `<websocket error upon send(): ${e}>`;
-                console.error(msg);
-                qMsg.reject(msg);
-                return (msg);
+                console.error("++++ [ChannelSocket] websocket error upon send(), will try reset() once");
+                let eMsg = `<websocket error upon send(): ${e}>`;
+                await this.reset();
+                if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
+                    try {
+                        this.#ws.websocket.send(messagePayload);
+                        console.info("++++ [ChannelSocket] websocket retry and send() worked!");
+                        return "<websocket accepted message (upon retry)>";
+                    }
+                    catch (e) {
+                        eMsg = `<websocket error upon send() and retry: ${e}>`;
+                    }
+                }
+                else {
+                    console.error("++++ [ChannelSocket] websocket reset did not work, rejecting on original error");
+                }
+                console.error(eMsg);
+                qMsg.reject(eMsg);
+                return (eMsg);
             }
         }
     }
@@ -2816,6 +2831,7 @@ export class StorageApi {
                     data: encryptedData
                 })
             };
+            console.log("5555 5555 [storeData] storeQuery:", SEP, storeQuery, SEP);
             const result = await SBApiFetch(storeQuery, init);
             const r = {
                 [SB_OBJECT_HANDLE_SYMBOL]: true,
@@ -2951,28 +2967,22 @@ class Snackabra {
         if (DBG2)
             console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
         if (options && options.sbFetch) {
-            console.log("++++ Snackabra constructor: setting custom fetch function ++++", options.sbFetch);
+            console.log("++++ Snackabra constructor: setting custom fetch function ++++");
             sbFetch = options.sbFetch;
         }
         this.#channelServer = channelServer;
         this.#storage = new StorageApi(new Promise((resolve, reject) => {
-            sbFetch(this.#channelServer + '/api/v2/info')
-                .then((response) => {
-                if (!response.ok) {
-                    reject('response from channel server was not OK');
-                }
-                return response.json();
-            })
-                .then((data) => {
-                if (data.error)
-                    reject(`fetching storage server name failed: ${data.error}`);
-                else {
-                    this.#channelServerInfo = data;
-                    if (DBG)
-                        console.log("Channel server info:", this.#channelServerInfo);
-                }
-                _sb_assert(data.storageServer, 'Channel server did not provide storage server name, cannot initialize');
-                resolve(data.storageServer);
+            if (DBG0)
+                console.log(`++++ Snackabra constructor: fetching storage server name from '${this.#channelServer + '/api/v2/info'}' ++++`);
+            SBApiFetch(this.#channelServer + '/api/v2/info')
+                .then((retValue) => {
+                if (DBG0)
+                    console.log("Channel server info:", retValue);
+                _sb_assert(retValue.storageServer, 'Channel server did not provide storage server name, cannot initialize');
+                this.#channelServerInfo = retValue;
+                if (DBG0)
+                    console.log("Channel server info:", this.#channelServerInfo);
+                resolve(retValue.storageServer);
             })
                 .catch((error) => {
                 if (!Snackabra.isShutdown) {

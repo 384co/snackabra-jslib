@@ -409,7 +409,7 @@ export interface EncryptParams {
 var DBG = false;
 var DBG2 = false; // note, if this is true then DBG will be true too
 
-var DBG0 = false // internal, when not flipped should be set 'DBG0 = DBG2'
+var DBG0 = true // internal, when not flipped should be set 'DBG0 = DBG2'
 if (DBG0) console.log("++++ Setting DBG0 to TRUE ++++");
 
 // in addition, for convenience (such as in test suites) we 'pick up' configuration.DEBUG
@@ -657,7 +657,7 @@ export class MessageQueue<T> {
   private closed = false;
   private error: any = null;
   enqueue(item: T) {
-    if (DBG0) console.log(`[MessageQueue] Enqueueing. There were ${this.queue.length} messages in queue`)
+    if (DBG) console.log(`[MessageQueue] Enqueueing. There were ${this.queue.length} messages in queue`)
     if (this.closed) throw new SBError('[MessageQueue] Error, trying to enqueue to closed queue');
     if (this.resolve) {
       this.resolve(item);
@@ -668,19 +668,19 @@ export class MessageQueue<T> {
     }
   }
   async dequeue(): Promise<T | null> {
-    if (DBG0) console.log(`[MessageQueue] Dequeueing. There are ${this.queue.length} messages left`)
+    if (DBG2) console.log(`[MessageQueue] Dequeueing. There are ${this.queue.length} messages left`)
     if (this.queue.length > 0) {
       const item = this.queue.shift()!;
       if (this.closed)
         return Promise.reject(item);
       else {
-        if (DBG0) console.log(SEP, SEP, SEP, `[MessageQueue] Dequeueing. Returning item.\n`, item, SEP)
+        if (DBG2) console.log(SEP, SEP, SEP, `[MessageQueue] Dequeueing. Returning item.\n`, item, SEP)
         return Promise.resolve(item);
       }
     } else {
       if (this.closed)
         return null
-      // if (DBG0) console.log(`[MessageQueue] Dequeueing. Returning promise.`)
+      // if (DBG2) console.log(`[MessageQueue] Dequeueing. Returning promise.`)
       return new Promise((resolve, reject) => {
         this.resolve = resolve;
         this.reject = reject;
@@ -3956,10 +3956,24 @@ class ChannelSocket extends Channel {
         this.#ws!.websocket!.send(messagePayload)
         return "<websocket accepted message>"
       } catch (e) {
-        const msg = `<websocket error upon send(): ${e}>`
-        console.error(msg)
-        qMsg.reject(msg)
-        return(msg)
+        // we try to reset the socket once, and then we give up
+        console.error("++++ [ChannelSocket] websocket error upon send(), will try reset() once")
+        let eMsg = `<websocket error upon send(): ${e}>`
+        await this.reset()
+        if (this.#ws && this.#ws.websocket && this.#ws!.websocket!.readyState === 1) {
+          try {
+            this.#ws!.websocket!.send(messagePayload)
+            console.info("++++ [ChannelSocket] websocket retry and send() worked!")
+            return "<websocket accepted message (upon retry)>"
+          } catch (e) {
+            eMsg = `<websocket error upon send() and retry: ${e}>`
+          }
+        } else {
+          console.error("++++ [ChannelSocket] websocket reset did not work, rejecting on original error")
+        }
+        console.error(eMsg)
+        qMsg.reject(eMsg)
+        return(eMsg)
       }
     }
   }
@@ -4293,6 +4307,9 @@ export class StorageApi {
           data: encryptedData
         })
       }
+
+      console.log("5555 5555 [storeData] storeQuery:", SEP, storeQuery, SEP)
+
       const result = await SBApiFetch(storeQuery, init)
 
       const r: SBObjectHandle = {
@@ -4474,7 +4491,7 @@ class Snackabra {
   #channelServer: string
   #storage: StorageApi
   #version = version
-  #channelServerInfo: any
+  #channelServerInfo: any // caches whatever last server info we got
 
   // globally paces operations, and assures unique timestamps
   public static lastTimeStamp = 0 // todo: x256 (string) format
@@ -4507,34 +4524,56 @@ class Snackabra {
 
     // sets global setting for what network/fetch operation to use
     if (options && options.sbFetch) {
-      console.log("++++ Snackabra constructor: setting custom fetch function ++++", options.sbFetch)
+      console.log("++++ Snackabra constructor: setting custom fetch function ++++" /*, options.sbFetch */)
       sbFetch = options.sbFetch
     }
 
     this.#channelServer = channelServer // conceptually, you can have multiple channel servers
     // (eventually) fetch storage server name from channel server; StorageApi knows how to handle this
     this.#storage = new StorageApi(new Promise((resolve, reject) => {
-      sbFetch(this.#channelServer + '/api/v2/info')
-        .then((response: Response) => {
-          if (!response.ok) { reject('response from channel server was not OK') }
-          return response.json()
-        })
-        .then((data) => {
-          if (data.error) reject(`fetching storage server name failed: ${data.error}`)
-          else {
-            this.#channelServerInfo = data
-            if (DBG) console.log("Channel server info:", this.#channelServerInfo)
-          }
-          _sb_assert(data.storageServer, 'Channel server did not provide storage server name, cannot initialize')
-          resolve(data.storageServer)
-        })
-        .catch((error: Error) => {
-          if (!Snackabra.isShutdown) {
-            console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
-            reject(error)
-          }
-        });
+
+        //   sbFetch(this.#channelServer + '/api/v2/info')
+        //     .then((response: Response) => {
+        //       if (!response.ok) { reject('response from channel server was not OK') }
+
+        //       return response.json()
+        //     })
+        //     .then((data) => {
+        //       if (data.error) reject(`fetching storage server name failed: ${data.error}`)
+        //       else {
+        //         this.#channelServerInfo = data
+        //         if (DBG) console.log("Channel server info:", this.#channelServerInfo)
+        //       }
+        //       _sb_assert(data.storageServer, 'Channel server did not provide storage server name, cannot initialize')
+        //       resolve(data.storageServer)
+        //     })
+        //     .catch((error: Error) => {
+        //       if (!Snackabra.isShutdown) {
+        //         console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
+        //         reject(error)
+        //       }
+        //     });
+
+        // let's refactor the above to use 'SBApiFetch' instead
+        if (DBG0) console.log(`++++ Snackabra constructor: fetching storage server name from '${this.#channelServer + '/api/v2/info'}' ++++`)
+        SBApiFetch(this.#channelServer + '/api/v2/info')
+          .then((retValue) => {
+            if (DBG0) console.log("Channel server info:", retValue)
+            _sb_assert(retValue.storageServer, 'Channel server did not provide storage server name, cannot initialize')
+            this.#channelServerInfo = retValue
+            if (DBG0) console.log("Channel server info:", this.#channelServerInfo)
+            resolve(retValue.storageServer)
+          })
+          .catch((error: Error) => {
+            if (!Snackabra.isShutdown) {
+              console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
+              reject(error)
+            }
+          });
+
+
     }));
+    
 
   }
 
