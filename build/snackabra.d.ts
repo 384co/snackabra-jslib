@@ -82,7 +82,7 @@ export interface ChannelAdminData {
     visitors: Map<SBUserId, SBUserPublicKey>;
     storageLimit: number;
     motherChannel: SBChannelId;
-    latestTimestamp: string;
+    lastTimestamp: number;
 }
 export interface EncryptParams {
     name?: string;
@@ -138,7 +138,6 @@ export declare class MessageQueue<T> {
     private error;
     enqueue(item: T): void;
     dequeue(): Promise<T | null>;
-    isEmpty(): boolean;
     close(reason?: string): void;
     drain(reason?: string): Promise<void>;
 }
@@ -297,12 +296,11 @@ declare class Channel extends SBChannelKeys {
     get api(): this;
     extractMessage(msgRaw: ChannelMessage | undefined): Promise<Message | undefined>;
     extractMessageMap(msgMap: Map<string, ChannelMessage>): Promise<Map<string, Message>>;
-    packageMessage(contents: any, options?: MessageOptions): ChannelMessage;
+    packageMessage(contents: any, options?: MessageOptions): Promise<ChannelMessage>;
     finalizeMessage(msg: ChannelMessage): Promise<ChannelMessage>;
     send(contents: any, options?: MessageOptions): Promise<string>;
     create(storageToken: SBStorageToken, channelServer?: SBChannelId): Promise<Channel>;
     getLastMessageTimes(): void;
-    getLatestTimestamp(): Promise<string>;
     messageQueueManager(): Promise<void>;
     close(): Promise<void>;
     getMessageKeys(prefix?: string): Promise<{
@@ -339,8 +337,7 @@ declare class Channel extends SBChannelKeys {
     static HIGHEST_TIMESTAMP: string;
     static timestampToBase4String(tsNum: number): string;
     static getLexicalExtremes<T extends number | string>(set: Set<T>): [T, T] | [];
-    static messageKeySetToPrefix: (keys: Set<string>) => string;
-    static timestampLongestPrefix: (s1: string, s2: string) => string;
+    static timestampLongestPrefix: (keys: Set<string>) => string;
     static base4StringToTimestamp(tsStr: string): number;
     static base4StringToDate(tsStr: string): string;
     static deComposeMessageKey(key: string): {
@@ -361,7 +358,6 @@ declare class ChannelSocket extends Channel {
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set enableTrace(b: boolean);
     send(contents: any, options?: MessageOptions): Promise<string>;
-    reset(): Promise<void>;
     close(): Promise<void>;
 }
 export interface Shard {

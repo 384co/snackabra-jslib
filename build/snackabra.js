@@ -147,7 +147,7 @@ export function stripChannelMessage(msg, serverMode = false) {
         throw new SBError("ERROR: missing 'ec' ('encrypted contents') in message");
     if (msg.iv !== undefined)
         ret.iv = msg.iv;
-    else if (!(msg.stringMessage) === true)
+    else
         throw new SBError("ERROR: missing 'iv' ('nonce') in message");
     if (msg.salt !== undefined)
         ret.salt = msg.salt;
@@ -155,7 +155,7 @@ export function stripChannelMessage(msg, serverMode = false) {
         throw new SBError("ERROR: missing 'salt' in message");
     if (msg.s !== undefined)
         ret.s = msg.s;
-    else if (!(msg.stringMessage) === true)
+    else
         throw new SBError("ERROR: missing 's' ('signature') in message");
     if (msg.ts !== undefined)
         ret.ts = msg.ts;
@@ -175,9 +175,7 @@ export function stripChannelMessage(msg, serverMode = false) {
 }
 var DBG = false;
 var DBG2 = false;
-var DBG0 = false;
-if (DBG0)
-    console.log("++++ Setting DBG0 to TRUE ++++");
+var DBG0 = true;
 if (globalThis.configuration && globalThis.configuration.DEBUG === true) {
     DBG = true;
     if (DBG)
@@ -265,7 +263,7 @@ export class MessageQueue {
     closed = false;
     error = null;
     enqueue(item) {
-        if (DBG0)
+        if (DBG2)
             console.log(`[MessageQueue] Enqueueing. There were ${this.queue.length} messages in queue`);
         if (this.closed)
             throw new SBError('[MessageQueue] Error, trying to enqueue to closed queue');
@@ -279,17 +277,13 @@ export class MessageQueue {
         }
     }
     async dequeue() {
-        if (DBG0)
+        if (DBG2)
             console.log(`[MessageQueue] Dequeueing. There are ${this.queue.length} messages left`);
         if (this.queue.length > 0) {
-            const item = this.queue.shift();
             if (this.closed)
-                return Promise.reject(item);
-            else {
-                if (DBG0)
-                    console.log(SEP, SEP, SEP, `[MessageQueue] Dequeueing. Returning item.\n`, item, SEP);
-                return Promise.resolve(item);
-            }
+                return Promise.reject(this.queue.shift());
+            else
+                return Promise.resolve(this.queue.shift());
         }
         else {
             if (this.closed)
@@ -299,9 +293,6 @@ export class MessageQueue {
                 this.reject = reject;
             });
         }
-    }
-    isEmpty() {
-        return this.queue.length === 0;
     }
     close(reason) {
         if (DBG)
@@ -440,32 +431,9 @@ async function SBFetch(input, init) {
         return response;
     }
     catch (error) {
-        if (error instanceof SBError)
-            throw error;
-        const errStr = `${error}`;
-        if (errStr.indexOf('connection closed before message completed') !== -1 ||
-            errStr.indexOf('Connection reset by peer') !== -1 ||
-            errStr.indexOf('The connection was reset') !== -1 ||
-            errStr.indexOf('The server closed the connection') !== -1 ||
-            errStr.indexOf('Please try sending the request again.') !== -1) {
-            console.warn(`... got error ('${errStr}'), retrying fetch() once again`);
-            try {
-                return await new Promise((resolve) => {
-                    setTimeout(() => {
-                        resolve(fetch(input, { ...init, signal: controller.signal }));
-                    }, 0);
-                });
-            }
-            catch (e) {
-                console.error('... got an error on retrying fetch()');
-                const msg = `[SBFetch] Error performing fetch() (after RETRY): ${error}`;
-                throw new SBError(msg);
-            }
-        }
-        else {
-            const msg = `[SBFetch] Error performing fetch() (this might be normal): ${error}`;
-            throw new SBError(msg);
-        }
+        const msg = `[SBFetch] Error performing fetch() (this might be normal): ${error}`;
+        console.warn(msg);
+        throw new SBError(msg);
     }
     finally {
         Snackabra.activeFetches.delete(id);
@@ -478,24 +446,12 @@ export async function SBApiFetch(input, init) {
         response = await sbFetch(input, init);
         if (!response)
             throw new SBError("[SBApiFetch] Server did not respond (might be expected)");
-        if (!response.ok) {
-            const text = await response.text();
-            let msg = '[SBApiFetch] Server responded with error\n';
-            if (response.status)
-                msg += `  Status code: ('${response.status}')\n`;
-            if (response.statusText)
-                msg += `  Status text: ('${response.statusText}')\n`;
-            if (text)
-                msg += `  Error msg:   ('${text}')\n`;
-            if (DBG)
-                console.log(msg);
-            throw new SBError(msg);
-        }
         const contentType = response.headers.get('content-type');
         var retValue;
-        if (!contentType)
-            throw new SBError("[SBApiFetch] No content header in server response");
-        if (contentType.indexOf("application/json") !== -1) {
+        if (!contentType) {
+            throw new SBError("[SBApiFetch] Server did not respond (might be expected) (no content header)");
+        }
+        else if (contentType.indexOf("application/json") !== -1) {
             const json = await response.json();
             if (DBG2)
                 console.log(`[SBApiFetch] json ('${json}'):\n`, json);
@@ -506,13 +462,13 @@ export async function SBApiFetch(input, init) {
         }
         else if (contentType.indexOf("text/plain") !== -1) {
             retValue = await response.text();
-            throw new SBError(`[SBApiFetch] Server responded with text/plain (?):\n('${retValue}')`);
+            throw new SBError(`[SBApiFetch] Server responded with text/plain (?) ('${retValue}')`);
         }
         else {
             throw new SBError(`[SBApiFetch] Server responded with unknown content-type header ('${contentType}')`);
         }
-        if (!retValue || retValue.error || retValue.success === false) {
-            let apiErrorMsg = '[SBApiFetch] No server response, or cannot parse, or error in response';
+        if (!response.ok || !retValue || retValue.error || retValue.success === false) {
+            let apiErrorMsg = '[SBApiFetch] Network or Server error or cannot parse response';
             if (response.status)
                 apiErrorMsg += ' [' + response.status + ']';
             if (retValue?.error)
@@ -1219,19 +1175,28 @@ export class SBCrypto {
         return crypto.subtle.encrypt(params, key, data);
     }
     async wrap(body, sender, encryptionKey, salt, signingKey) {
+        _sb_assert(body && sender && encryptionKey && signingKey, "wrapMessage(): missing required parameter(2)");
         const payload = assemblePayload(body);
+        _sb_assert(payload, "wrapMessage(): failed to assemble payload");
+        _sb_assert(payload.byteLength < MAX_SB_BODY_SIZE, `wrapMessage(): body must be smaller than ${MAX_SB_BODY_SIZE / 1024} KiB (we got ${payload.byteLength / 1024} KiB)})`);
+        _sb_assert(salt, "wrapMessage(): missing salt");
+        if (DBG2)
+            console.log("will wrap() body, payload:\n", SEP, "\n", body, "\n", SEP, payload, "\n", SEP);
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const timestamp = await Snackabra.dateNow();
         const view = new DataView(new ArrayBuffer(8));
         view.setFloat64(0, timestamp);
-        return ({
+        var message = {
             f: sender,
             c: await sbCrypto.encrypt(payload, encryptionKey, { iv: iv, additionalData: view }),
             iv: iv,
             salt: salt,
             s: await sbCrypto.sign(signingKey, payload),
             ts: timestamp,
-        });
+        };
+        if (DBG2)
+            console.log("wrap() message is\n", message);
+        return message;
     }
     sign(signKey, contents) {
         return crypto.subtle.sign({ name: "ECDSA", hash: { name: "SHA-384" }, }, signKey, contents);
@@ -1861,12 +1826,10 @@ class Channel extends SBChannelKeys {
             return undefined;
         if (DBG2)
             console.log("[extractMessage] Extracting message:", msgRaw);
-        if (msgRaw instanceof ArrayBuffer)
-            throw new SBError('[Channel.extractMessage] Message is an ArrayBuffer (did you forget extractPayload()?)');
         try {
             msgRaw = validate_ChannelMessage(msgRaw);
             if (!msgRaw) {
-                if (DBG2)
+                if (DBG)
                     console.warn("++++ [extractMessage]: message is not valid (probably an error)", msgRaw);
                 return undefined;
             }
@@ -1876,7 +1839,7 @@ class Channel extends SBChannelKeys {
                 return undefined;
             }
             if (!this.visitors.has(f)) {
-                if (DBG2)
+                if (DBG)
                     console.log("++++ [extractMessage]: need to update visitor table ...");
                 const visitorMap = await this.callApi('/getPubKeys');
                 if (!visitorMap || !(visitorMap instanceof Map)) {
@@ -1933,7 +1896,7 @@ class Channel extends SBChannelKeys {
             return validate_Message(msg);
         }
         catch (e) {
-            if (DBG2)
+            if (DBG)
                 console.error("[extractMessage] Could not process message (exception) [L2782]:", e.message);
             return undefined;
         }
@@ -1947,84 +1910,69 @@ class Channel extends SBChannelKeys {
         }
         return ret;
     }
-    packageMessage(contents, options = {}) {
-        if (DBG2)
-            console.log("[Channel#packageMessage] - contents:\n", contents, "options:\n", options);
+    async packageMessage(contents, options = {}) {
+        await this.ready;
         let msg = {
             f: this.userId,
+            ttl: options.ttl,
+            i2: options.subChannel,
+            salt: crypto.getRandomValues(new Uint8Array(16)).buffer,
             unencryptedContents: contents,
         };
         if (options) {
             if (options.sendTo)
                 msg.t = options.sendTo;
+            if (options.ttl)
+                msg.ttl = options.ttl;
             if (options.subChannel)
                 throw new SBError(`wrapMessage(): subChannel not yet supported`);
             if (options.sendString) {
                 _sb_assert(typeof contents === 'string', "[packageMessage] sendString is true, but contents is not a string");
-                _sb_assert(!options.ttl, "[packageMessage] sendString implies TTL=0");
-                msg.ttl = 0;
+                msg.c = contents;
                 msg.stringMessage = true;
             }
         }
-        if (msg.stringMessage !== true) {
-            msg.protocol = options.protocol ? options.protocol : this.protocol;
-            if (!msg.ttl)
-                msg.ttl = 15;
-            if (!msg.salt)
-                msg.salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
-            if (!msg.iv)
-                msg.iv = crypto.getRandomValues(new Uint8Array(12));
+        else {
+            msg.protocol = this.protocol;
+            msg.ttl = 15;
         }
         return msg;
     }
     async finalizeMessage(msg) {
-        if (!msg.ts)
-            msg.ts = await Snackabra.dateNow();
-        _sb_assert(!(msg.stringMessage === true), "[Channel.finalizeMessage()] stringMessage is true, finalizing should not be called (internal error)");
-        const payload = assemblePayload(msg.unencryptedContents);
-        _sb_assert(payload, "wrapMessage(): failed to assemble payload");
-        _sb_assert(payload.byteLength < MAX_SB_BODY_SIZE, `[Channel.finalizeMessage]: body must be smaller than ${MAX_SB_BODY_SIZE / 1024} KiB (we got ${payload.byteLength / 1024} KiB)})`);
-        msg.ts = await Snackabra.dateNow();
-        const view = new DataView(new ArrayBuffer(8));
-        view.setFloat64(0, msg.ts);
-        _sb_assert(msg.protocol, "[Channel.finalizeMessage()] Protocol not set (internal error)");
-        msg.c = await sbCrypto.encrypt(payload, await msg.protocol.encryptionKey(msg), { iv: msg.iv, additionalData: view });
-        msg.s = await sbCrypto.sign(this.signKey, msg.c);
+        if (msg.stringMessage !== true) {
+            if (!msg.ts)
+                msg.ts = await Snackabra.dateNow();
+            if (!msg._id)
+                msg._id = Channel.composeMessageKey(this.channelId, msg.ts, msg.i2);
+            msg = await sbCrypto.wrap(msg.unencryptedContents, this.userId, msg.protocol ? await msg.protocol.encryptionKey(msg) : await this.protocol.encryptionKey(msg), msg.salt, this.signKey);
+        }
+        else {
+        }
         return stripChannelMessage(msg);
     }
     async #_send(message) {
         await this.ready;
         const msg = message.msg;
-        let rez;
         if (msg.stringMessage) {
-            if (DBG2)
+            if (DBG)
                 console.log("++++ [Channel#_send] - sending string message");
-            rez = await this.callApi('/send', msg.c);
-            message.resolve(rez);
+            message.resolve(this.callApi('/send', msg.c));
         }
         else {
-            const finalMessage = await this.finalizeMessage(msg);
-            if (DBG2)
-                console.log(SEP, "[Channel] sending finalized message (async/rest):\n", finalMessage, SEP);
-            rez = await this.callApi('/send', finalMessage);
-            message.resolve(rez);
+            if (DBG)
+                console.log("[Channel] sending message (async/rest):", msg);
+            message.resolve(this.callApi('/send', this.finalizeMessage(msg)));
         }
-        return (rez);
     }
     async send(contents, options = {}) {
         return new Promise(async (resolve, reject) => {
-            if (DBG2)
-                console.log(SEP, "[Channel.send] called.", SEP, "contents:\n", contents);
             const msg = await this.packageMessage(contents, options);
-            if (DBG2)
-                console.log(SEP, "packed message:\n", msg);
             this.sendQueue.enqueue({
                 msg: msg,
                 resolve: resolve,
                 reject: reject,
                 _send: this.#_send.bind(this)
             });
-            console.log(SEPx);
         });
     }
     create(storageToken, channelServer = this.channelServer) {
@@ -2048,10 +1996,7 @@ class Channel extends SBChannelKeys {
         });
     }
     getLastMessageTimes() {
-        throw new SBError("Channel.getLastMessageTimes(): deprecated");
-    }
-    getLatestTimestamp() {
-        return this.callApi('/getLatestTimestamp');
+        throw new SBError("Channel.getLastMessageTimes(): not supported in 2.0 yet");
     }
     async messageQueueManager() {
         await this.ready;
@@ -2060,34 +2005,20 @@ class Channel extends SBChannelKeys {
                 .then(async (msg) => {
                 if (msg) {
                     if (DBG2)
-                        console.log(SEP, "[messageQueueManager] Channel message queue is sending message\n", msg.msg);
-                    if (DBG2)
-                        console.log(msg);
-                    await msg._send(msg)
-                        .then((ret) => {
-                        if (DBG2)
-                            console.log(SEP, "[messageQueueManager] Got response from registered '_send':\n", ret, SEP);
-                        msg.resolve(ret);
-                    })
-                        .catch((e) => {
-                        if (DBG2)
-                            console.log(SEP, "[messageQueueManager] Got exception from 'send' operation:", e, SEP);
-                        msg.reject(e);
-                    });
+                        console.log("[messageQueueManager] Channel message queue is sending message");
+                    await msg._send(msg);
                 }
                 else {
-                    if (DBG2)
+                    if (DBG0)
                         console.log("[messageQueueManager] Channel message queue is empty and closed");
                     return;
                 }
             })
                 .catch((message) => {
-                if (DBG2)
-                    console.log(SEP, "[messageQueueManager] Got exception from DEQUEUE operation:\n", JSON.stringify(message), SEP);
-                if (DBG2)
+                if (DBG0)
+                    console.log(SEPx, "[messageQueueManager] Got exception:", message, SEPx);
+                if (DBG0)
                     console.log("[messageQueueManager] Channel message queue is closing down");
-                if (DBG2)
-                    console.log(message);
                 message.reject('shutDown');
             });
         }
@@ -2172,8 +2103,7 @@ class Channel extends SBChannelKeys {
         const prefix = this.hashB32;
         if (DBG)
             console.log(`==== ChannelApi.getPage: calling fetch with: ${prefix}`);
-        const page = await sbFetch(this.channelServer + '/api/v2/page/' + prefix)
-            .catch((e) => { throw new SBError(`[Channel.getPage] fetch failed: ${e}`); });
+        const page = await sbFetch(this.channelServer + '/api/v2/page/' + prefix);
         const contentType = page.headers.get('content-type');
         if (contentType !== 'sb384payloadV3')
             throw new SBError("[Channel.getPage] Can only handle 'sb384payloadV3' content type, use 'fetch()'");
@@ -2273,7 +2203,7 @@ class Channel extends SBChannelKeys {
         }
         return [min, max];
     }
-    static messageKeySetToPrefix = (keys) => {
+    static timestampLongestPrefix = (keys) => {
         if (keys.size === 0)
             return '0';
         const [lowest, highest] = Channel.getLexicalExtremes(keys);
@@ -2284,16 +2214,6 @@ class Channel extends SBChannelKeys {
         while (i < s1.length && i < s2.length && s1[i] === s2[i])
             i++;
         return s1.substring(0, i);
-    };
-    static timestampLongestPrefix = (s1, s2) => {
-        if (s1 && s2 && typeof s1 === 'string' && typeof s2 === 'string' && s1.length === 26 && s2.length === 26) {
-            let i = 0;
-            while (i < s1.length && i < s2.length && s1[i] === s2[i])
-                i++;
-            return s1.substring(0, i);
-        }
-        else
-            throw new SBError(`[timestampLongestPrefix]: invalid input:\n '${s1}' or '${s2}'`);
     };
     static base4StringToTimestamp(tsStr) {
         const regex = /^[0-3]{26}$/;
@@ -2324,9 +2244,6 @@ __decorate([
     Memoize,
     Ready
 ], Channel.prototype, "api", null);
-__decorate([
-    Ready
-], Channel.prototype, "getLatestTimestamp", null);
 __decorate([
     Ready,
     Owner
@@ -2445,13 +2362,13 @@ class ChannelSocket extends Channel {
             this.#ws.websocket.addEventListener('message', initialListener);
             let resolveTimeout = setTimeout(() => {
                 if (!this[_a.ReadyFlag]) {
-                    const msg = "[ChannelSocket] Socket not resolving after waiting, fatal.";
+                    const msg = "[ChannelSocket] - this socket is not resolving (waited 10s) ...";
                     console.warn(msg);
                     reject(msg);
                 }
                 else {
                     if (DBG2)
-                        console.log("[ChannelSocket] resolved correctly", this);
+                        console.log("ChannelSocket() - this socket resolved", this);
                 }
             }, 2000);
             this.#ws.websocket.addEventListener('open', async () => {
@@ -2468,28 +2385,27 @@ class ChannelSocket extends Channel {
             this.#ws.websocket.addEventListener('close', (e) => {
                 this.#ws.closed = true;
                 if (!e.wasClean) {
-                    console.log(`[ChannelSocket] closed but NOT cleanly: ${e.reason} from ${this.channelServer}`);
+                    console.log(`ChannelSocket() was closed (and NOT cleanly: ${e.reason} from ${this.channelServer}`);
                 }
                 else {
                     if (e.reason.includes("does not have an owner"))
                         reject(`No such channel on this server (${this.channelServer})`);
                     else
-                        console.log('[ChannelSocket] Closed (cleanly): ', e.reason);
+                        console.log('ChannelSocket() was closed (cleanly): ', e.reason);
                 }
                 reject('wbSocket() closed before it was opened (?)');
             });
             this.#ws.websocket.addEventListener('error', (e) => {
                 this.#ws.closed = true;
-                if (DBG)
-                    console.log('[ChannelSocket] Error: ', e);
-                reject('[ChannelSocket] Websocket error event ' + e);
+                console.log('ChannelSocket() error: ', e);
+                reject('ChannelSocket creation error (see log)');
             });
         });
     }
     #processMessage = async (e) => {
         const msg = e.data;
-        if (DBG2)
-            console.log(SEP, "[ChannelSocket] Received socket message:\n", msg, SEP);
+        if (DBG)
+            console.log("[ChannelSocket] Received socket message:", msg);
         var message = null;
         _sb_assert(msg, "[ChannelSocket] received empty message");
         if (typeof msg === 'string') {
@@ -2550,8 +2466,8 @@ class ChannelSocket extends Channel {
             clearTimeout(t);
             this.#ackTimer.delete(ack_id);
         }
-        if (DBG2)
-            console.log("[ChannelSocket] New message, client andserver time stamp: ", message.sts);
+        if (DBG0)
+            console.log("[ChannelSocket] New message, client and server time stamps: ", message.ts, message.sts);
         const m = await this.extractMessage(message);
         if (m) {
             if (DBG)
@@ -2582,22 +2498,20 @@ class ChannelSocket extends Channel {
             console.log("==== jslib ChannelSocket: Tracing enabled ====");
     }
     async #_send(qMsg) {
-        const _message = qMsg.msg;
-        if (this.#traceSocket || DBG2)
-            console.log("++++++++ [ChannelSocket.#_send()] will send message:", _message);
-        if (DBG2)
-            console.log("++++++++ [ChannelSocket.#_send()] finalized message:", _message);
+        const message = qMsg.msg;
+        if (this.#traceSocket)
+            console.log("++++++++ #_send() will send message:", message);
+        const msg = await this.finalizeMessage(message);
         let messagePayload = null;
-        if (_message.stringMessage === true) {
-            messagePayload = _message.unencryptedContents;
+        if (msg.stringMessage === true) {
+            messagePayload = msg.unencryptedContents;
         }
         else {
-            const msg = await this.finalizeMessage(_message);
             messagePayload = assemblePayload(msg);
             _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message");
             const hash = await crypto.subtle.digest('SHA-256', msg.c);
             const messageHash = arrayBufferToBase64url(hash);
-            if (DBG2 || this.#traceSocket)
+            if (DBG || this.#traceSocket)
                 console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash);
             this.#ack.set(messageHash, qMsg.resolve);
             this.#ackTimer.set(messageHash, setTimeout(() => {
@@ -2607,40 +2521,25 @@ class ChannelSocket extends Channel {
                         qMsg.reject("shutDown");
                         return;
                     }
-                    const msg = `<websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})>`;
+                    const msg = `Websocket request timed out (no ack) after ${this.#ws.timeout}ms (${messageHash})`;
                     console.error(msg);
                     qMsg.reject(msg);
                 }
                 else {
                     if (this.#traceSocket)
                         console.log("++++++++ ChannelSocket.send() completed sending");
-                    qMsg.resolve("<received ACK, success>");
+                    qMsg.resolve("success");
                 }
             }, this.#ws.timeout));
         }
-        if (!messagePayload) {
-            const msg = "ChannelSocket.send(): no message payload (Internal Error)";
-            qMsg.reject(msg);
-            return (msg);
-        }
-        else {
-            try {
-                this.#ws.websocket.send(messagePayload);
-                return "<websocket accepted message>";
-            }
-            catch (e) {
-                const msg = `<websocket error upon send(): ${e}>`;
-                console.error(msg);
-                qMsg.reject(msg);
-                return (msg);
-            }
-        }
+        if (!messagePayload)
+            qMsg.reject("ChannelSocket.send(): no message payload (Internal Error)");
+        else
+            this.#ws.websocket.send(messagePayload);
     }
     async send(contents, options) {
         await this.ready;
-        _sb_assert(this.#ws && this.#ws.websocket, "[ChannelSocket.send()] called before ready");
-        if (DBG2)
-            console.log(SEP, "[ChannelSocket] sending, contents:\n", JSON.stringify(contents), SEP);
+        _sb_assert(this.#ws && this.#ws.websocket, "ChannelSocket.send() called before ready");
         if (this.#ws.closed) {
             if (this.#traceSocket)
                 console.info("send() triggered reset of #readyPromise() (normal)");
@@ -2663,22 +2562,13 @@ class ChannelSocket extends Channel {
                 case 0:
                 case 2:
                 case 3:
-                    const errMsg = `[ChannelSocket.send()] Tried sending but socket not OPEN - it is ${readyState === 0 ? 'CONNECTING' : readyState === 2 ? 'CLOSING' : 'CLOSED'}`;
+                    const errMsg = `socket not OPEN - it is ${readyState === 0 ? 'CONNECTING' : readyState === 2 ? 'CLOSING' : 'CLOSED'}`;
                     reject(errMsg);
                     break;
                 default:
                     _sb_exception('ChannelSocket', `socket in unknown state (${readyState})`);
             }
         });
-    }
-    async reset() {
-        if (this.#ws && this.#ws.websocket) {
-            if (this.#ws.websocket.readyState === 1) {
-                this.#ws.websocket.close();
-            }
-            this.#ws.closed = true;
-            this.channelSocketReady = this.#channelSocketReadyFactory();
-        }
     }
     async close() {
         console.log("++++ ChannelSocket.close() called ... closing down stuff ...");
@@ -2694,7 +2584,7 @@ class ChannelSocket extends Channel {
         else {
             console.log("++++ ChannelSocket.close() called ... but no socket to close?");
         }
-        this.channelSocketReady = Promise.reject("[ChannelSocket] This channel socket has been closed (by client request)");
+        this.channelSocketReady = Promise.reject("[ChannelSocket] ChannelSocket close() was called");
         this[_a.ReadyFlag] = false;
     }
 }
@@ -2975,10 +2865,7 @@ class Snackabra {
                 resolve(data.storageServer);
             })
                 .catch((error) => {
-                if (!Snackabra.isShutdown) {
-                    console.error("[Snackabra] fetching storage server name failed (fatal):\n", error);
-                    reject(error);
-                }
+                reject(error);
             });
         }));
     }
