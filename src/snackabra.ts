@@ -3206,7 +3206,7 @@ class Channel extends SBChannelKeys {
         reject: reject,
         _send: this.#_send.bind(this)
       })
-      console.log(SEPx)
+      if (DBG2) console.log(SEPx)
     })
   }
 
@@ -4555,13 +4555,13 @@ class Snackabra {
         //     });
 
         // let's refactor the above to use 'SBApiFetch' instead
-        if (DBG0) console.log(`++++ Snackabra constructor: fetching storage server name from '${this.#channelServer + '/api/v2/info'}' ++++`)
+        if (DBG) console.log(`++++ Snackabra constructor: fetching storage server name from '${this.#channelServer + '/api/v2/info'}' ++++`)
         SBApiFetch(this.#channelServer + '/api/v2/info')
           .then((retValue) => {
-            if (DBG0) console.log("Channel server info:", retValue)
+            if (DBG) console.log("Channel server info:", retValue)
             _sb_assert(retValue.storageServer, 'Channel server did not provide storage server name, cannot initialize')
             this.#channelServerInfo = retValue
-            if (DBG0) console.log("Channel server info:", this.#channelServerInfo)
+            if (DBG) console.log("Channel server info:", this.#channelServerInfo)
             resolve(retValue.storageServer)
           })
           .catch((error: Error) => {
