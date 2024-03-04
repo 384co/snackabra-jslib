@@ -17,6 +17,7 @@ export interface SBChannelHandle {
     channelServer?: string;
     channelData?: SBChannelData;
 }
+export declare function _check_SBChannelHandle(data: SBChannelHandle): boolean | "" | SBStorageToken;
 export declare function validate_SBChannelHandle(data: SBChannelHandle): SBChannelHandle;
 export interface SBChannelData {
     channelId: SBChannelId;
@@ -114,6 +115,7 @@ export interface SBObjectHandle {
     savedSize?: number;
     type?: string;
 }
+export declare function _check_SBObjectHandle(h: SBObjectHandle): boolean;
 export declare function validate_SBObjectHandle(h: SBObjectHandle): SBObjectHandle;
 export declare function stringify_SBObjectHandle(h: SBObjectHandle): Promise<SBObjectHandle>;
 export type SB384Hash = string;
@@ -121,6 +123,27 @@ export type SBUserId = SB384Hash;
 export type SBChannelId = SB384Hash;
 export type SBUserPublicKey = string;
 export type SBUserPrivateKey = string;
+export interface MessageHistory {
+    type: 'entry' | 'directory';
+    version: '20240228001';
+    channelId: SBChannelId;
+    ownerPublicKey: SBUserPublicKey;
+    created: number;
+    channelServer?: string;
+    from: string;
+    to: string;
+    count: number;
+}
+export interface MessageHistoryEntry extends MessageHistory {
+    type: 'entry';
+    messages: Map<string, ArrayBuffer>;
+}
+export interface MessageHistoryDirectory extends MessageHistory {
+    type: 'directory';
+    depth: number;
+    lastModified: number;
+    entries: Map<string, MessageHistoryDirectory | SBObjectHandle>;
+}
 export declare class MessageBus {
     #private;
     bus: {
@@ -277,7 +300,8 @@ interface EnqueuedMessage {
     msg: ChannelMessage;
     resolve: (value: any) => any;
     reject: (reason: any) => any;
-    _send: (msg: EnqueuedMessage) => any;
+    _send: (msg: ChannelMessage) => any;
+    retryCount: number;
 }
 declare class Channel extends SBChannelKeys {
     #private;
@@ -311,7 +335,7 @@ declare class Channel extends SBChannelKeys {
     }>;
     getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
     getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>>;
-    getHistory(): Promise<SBObjectHandle>;
+    getHistory(): Promise<MessageHistoryDirectory>;
     setPage(options: {
         page: any;
         prefix?: number;
@@ -338,6 +362,7 @@ declare class Channel extends SBChannelKeys {
     static LOWEST_TIMESTAMP: string;
     static HIGHEST_TIMESTAMP: string;
     static timestampToBase4String(tsNum: number): string;
+    static base4stringToDate(tsStr: string): string;
     static getLexicalExtremes<T extends number | string>(set: Set<T>): [T, T] | [];
     static messageKeySetToPrefix: (keys: Set<string>) => string;
     static timestampLongestPrefix: (s1: string, s2: string) => string;
@@ -361,7 +386,7 @@ declare class ChannelSocket extends Channel {
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set enableTrace(b: boolean);
     send(contents: any, options?: MessageOptions): Promise<string>;
-    reset(): Promise<void>;
+    reset(): void;
     close(): Promise<void>;
 }
 export interface Shard {

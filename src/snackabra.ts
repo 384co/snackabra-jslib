@@ -86,7 +86,7 @@ export interface SBChannelHandle {
 }
 
 // returns true of false, does not throw
-function _check_SBChannelHandle(data: SBChannelHandle) {
+export function _check_SBChannelHandle(data: SBChannelHandle) {
   return (
     data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
     && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
@@ -409,7 +409,7 @@ export interface EncryptParams {
 var DBG = false;
 var DBG2 = false; // note, if this is true then DBG will be true too
 
-var DBG0 = true // internal, when not flipped should be set 'DBG0 = DBG2'
+var DBG0 = DBG2 // internal, set it to 'true' or 'DBG2'
 if (DBG0) console.log("++++ Setting DBG0 to TRUE ++++");
 
 // in addition, for convenience (such as in test suites) we 'pick up' configuration.DEBUG
@@ -542,17 +542,28 @@ export interface SBObjectHandle {
 
 }
 
-export function validate_SBObjectHandle(h: SBObjectHandle) {
-  if (!h) throw new SBError(`invalid SBObjectHandle (null or undefined)`)
-  else if (h[SB_OBJECT_HANDLE_SYMBOL]) return h as SBObjectHandle
-  else if (
-       (!h.version || h.version === '3') // anything 'this' code sees needs to be v3
+export function _check_SBObjectHandle(h: SBObjectHandle) {
+  return (
+       (!h.version || h.version === currentSBOHVersion) // anything 'this' code sees needs to be v3
     && h.id && typeof h.id === 'string' && h.id.length === 43
     && (!h.key || (typeof h.key === 'string' && h.key.length === 43))
     && (!h.verification || typeof h.verification === 'string' || typeof h.verification === 'object')
     && (!h.iv || typeof h.iv === 'string' || h.iv instanceof Uint8Array)
     && (!h.salt || typeof h.salt === 'string' || h.salt instanceof ArrayBuffer)
-  ) {
+  )
+}
+
+export function validate_SBObjectHandle(h: SBObjectHandle) {
+  if (!h) throw new SBError(`invalid SBObjectHandle (null or undefined)`)
+  else if (h[SB_OBJECT_HANDLE_SYMBOL]) return h as SBObjectHandle
+  else if (_check_SBObjectHandle(h)) {
+  //      (!h.version || h.version === '3') // anything 'this' code sees needs to be v3
+  //   && h.id && typeof h.id === 'string' && h.id.length === 43
+  //   && (!h.key || (typeof h.key === 'string' && h.key.length === 43))
+  //   && (!h.verification || typeof h.verification === 'string' || typeof h.verification === 'object')
+  //   && (!h.iv || typeof h.iv === 'string' || h.iv instanceof Uint8Array)
+  //   && (!h.salt || typeof h.salt === 'string' || h.salt instanceof ArrayBuffer)
+  // ) {
     return { ...h, [SB_OBJECT_HANDLE_SYMBOL]: true } as SBObjectHandle
   } else {
     if (DBG) console.error('invalid SBObjectHandle ... trying to ingest:\n', h)
@@ -591,6 +602,70 @@ type jwkStruct = {
   ySign: 0 | 1;
   d?: string
 }
+
+
+/**
+ * 'MessageHistory' is where Messages go to retire. It's an infinitely-scaleable
+ * (in a practical sense) structure that can be used to store messages in a
+ * flexible way. Chunks of messages are stored as shards, in the form of a
+ * payload wrapped Map (key->message), where each message in turn is a
+ * payload-wrapped ChannelMessage.
+ *
+ * This can be thought of as a flexible 'key-value store archive format' (where
+ * the keys are globally unique and monotonically increasing).
+ *
+ * The channel server keeps the 'latest' messages (by some definition) in a
+ * straight KV format; overflow (or archiving) is done by processing these into
+ * this structure.
+ *
+ * Note that depending on at what stage this object is in, it can either be
+ * mutable or immutable. While immutable, the timestamps track updates. Once
+ * (and eventually) encapsulated into a shard and it becomes immutable, then
+ * 'lastModified' documents that point of time.
+ *
+ * Note that this structure is not particularly opinionated about how it should
+ * organize itself. Since any components that are shardified are immutable, any
+ * future processing requirements can re-map as needed. Our initial design
+ * priority is to be flexible, and simple, in particular to keep bug rate low.
+ */
+export interface MessageHistory {
+  type: 'entry' | 'directory'
+  version: '20240228001',
+  channelId: SBChannelId,
+  ownerPublicKey: SBUserPublicKey,
+  created: number, // timestamp of creation
+  channelServer?: string,
+  from: string, // 'inclusive'
+  to: string, // 'inclusive'
+  count: number, // (total) count of messages, zero means empty
+}
+
+/**
+ * A single messagehistory shard: a Map<string, ArrayBuffer> where each buffer
+ * is a payload-wrapped ChannelMessage, in turn payload-wrapped and shardified.
+ * If the shard is missing, count must be zero (and vice versa).
+ * 
+ * An entry is always shardified.
+ */
+export interface MessageHistoryEntry extends MessageHistory {
+  type: 'entry',
+  messages: Map<string, ArrayBuffer>
+}
+
+/**
+ * Directory of message history structures. entries can be 'direct' objects, or
+ * to handle (arbitrary) scaling then at any point they can be 'sharded' (eg
+ * payload-wrapped); the string key is always the 'from' ('first') of whatever
+ * is referenced by Map (directly or indirectly)
+ */
+export interface MessageHistoryDirectory extends MessageHistory {
+  type: 'directory',
+  depth: number, // 0 is direct, 1 is shardified, 2 is doubly shardified, etc
+  lastModified: number, // timestamp of last modification
+  // an 'entry' is ALWAYS shardified, a 'directory' can be inline or shardified
+  entries: Map<string, MessageHistoryDirectory | SBObjectHandle>
+}
+
 
 //#endregion - Interfaces - Types
 
@@ -668,13 +743,13 @@ export class MessageQueue<T> {
     }
   }
   async dequeue(): Promise<T | null> {
-    if (DBG2) console.log(`[MessageQueue] Dequeueing. There are ${this.queue.length} messages left`)
+    if (DBG) console.log(`[MessageQueue] Dequeueing. There are ${this.queue.length} messages left`)
     if (this.queue.length > 0) {
       const item = this.queue.shift()!;
       if (this.closed)
         return Promise.reject(item);
       else {
-        if (DBG2) console.log(SEP, SEP, SEP, `[MessageQueue] Dequeueing. Returning item.\n`, item, SEP)
+        if (DBG) console.log(SEP, SEP, SEP, `[MessageQueue] Dequeueing. Returning item.\n`, item, SEP)
         return Promise.resolve(item);
       }
     } else {
@@ -2561,7 +2636,7 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
 
   async encryptionKey(msg: /* SBMessage */ ChannelMessage): Promise<CryptoKey> {
     _sb_assert(msg.salt, "Protocol called without salt (Internal Error)")
-    if (DBG) console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt)
+    if (DBG2) console.log("CALLING Protocol_AES_GCM_384.encryptionKey(), salt:", msg.salt)
     return this.#getMessageKey(msg.salt!)
   }
 
@@ -2902,7 +2977,8 @@ interface EnqueuedMessage {
   msg: ChannelMessage,
   resolve: (value: any) => any,
   reject: (reason: any) => any,
-  _send: (msg: EnqueuedMessage) => any,
+  _send: (msg: ChannelMessage) => any,
+  retryCount: number, // note, must be 0 or positive
 }
 
 /**
@@ -3013,7 +3089,7 @@ class Channel extends SBChannelKeys {
     try {
       msgRaw = validate_ChannelMessage(msgRaw)
       if (!msgRaw) {
-        if (DBG2) console.warn("++++ [extractMessage]: message is not valid (probably an error)", msgRaw)
+        if (DBG0) console.warn("++++ [extractMessage]: message is not valid (probably an error)", msgRaw)
         return undefined
       }
       const f = msgRaw.f // protocols may use 'from', so needs to be in channel visitor map
@@ -3022,15 +3098,15 @@ class Channel extends SBChannelKeys {
         return undefined
       }
       if (!this.visitors.has(f)) {
-        if (DBG2) console.log("++++ [extractMessage]: need to update visitor table ...")
+        if (DBG0) console.log("++++ [extractMessage]: need to update visitor table ...")
         const visitorMap = await this.callApi('/getPubKeys')
         if (!visitorMap || !(visitorMap instanceof Map)) {
-          if (DBG) console.error("++++ [extractMessage]: visitorMap is not valid (probably an error)")
+          if (DBG0) console.error("++++ [extractMessage]: visitorMap is not valid (probably an error)")
           return undefined
         }
-        if (DBG) console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP)
+        if (DBG0) console.log(SEP, "visitorMap:\n", visitorMap, "\n", SEP)
         for (const [k, v] of visitorMap) {
-          if (DBG) console.log("++++ [extractMessage]: adding visitor:", k, v)
+          if (DBG0) console.log("++++ [extractMessage]: adding visitor:", k, v)
           this.visitors.set(k, v)
         }
       }
@@ -3039,7 +3115,7 @@ class Channel extends SBChannelKeys {
       _sb_assert(this.protocol, "Protocol not set (internal error)")
       const k = await this.protocol?.decryptionKey(this, msgRaw)
       if (!k) {
-        if (DBG) console.error("++++ [extractMessage]: no decryption key provided by protocol (probably an error)")
+        if (DBG0 || DBG) console.error("++++ [extractMessage]: no decryption key provided by protocol (probably an error)")
         return undefined
       }
       if (!msgRaw.ts) throw new SBError(`unwrap() - no timestamp in encrypted message`)
@@ -3051,7 +3127,7 @@ class Channel extends SBChannelKeys {
       try {
         bodyBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: view }, k, t! as ArrayBuffer)
       } catch (e: any) {
-        if (DBG) console.error("[extractMessage] Could not decrypt message (exception) [L2898]:", e.message)
+        if (DBG0 || DBG) console.error("[extractMessage] Could not decrypt message (exception) [L2898]:", e.message)
         return undefined
       }
       if (!msgRaw._id)
@@ -3067,10 +3143,10 @@ class Channel extends SBChannelKeys {
         // eol: <needs to be calculated>, // ToDo: various places for TTL/EOL processing
         _id: msgRaw._id!,
       }
-      if (DBG2) console.log("[extractMessage] Extracted message (before validation):", msg)
+      if (DBG2) console.log("[Channel.extractMessage] Extracted message (before validation):", msg.body)
       return validate_Message(msg)
     } catch (e: any) {
-      if (DBG2) console.error("[extractMessage] Could not process message (exception) [L2782]:", e.message)
+      if (DBG0 || DBG) console.error("[extractMessage] Could not process message (exception) [L2782]:", e.message)
       return undefined
     }
   }
@@ -3168,22 +3244,16 @@ class Channel extends SBChannelKeys {
   }
 
   // actually carries out (async) send of message
-  async #_send(message: EnqueuedMessage): Promise<any> {
-    await this.ready
-    const msg = message.msg
-    let rez: any
-    if (msg.stringMessage) {
-      if (DBG2) console.log("++++ [Channel#_send] - sending string message")
-      // 'regular' Channel resolves on API call
-      rez = await this.callApi('/send', msg.c)
-      message.resolve(rez)
-    } else {
-      const finalMessage = await this.finalizeMessage(msg)
-      if (DBG2) console.log(SEP, "[Channel] sending finalized message (async/rest):\n", finalMessage, SEP)
-      rez = await this.callApi('/send', finalMessage)
-      message.resolve(rez)
-    }
-    return (rez)
+  #_send(msg: ChannelMessage) {
+    return new Promise(async (resolve, reject) => {
+      await this.ready
+      const content = msg.stringMessage === true
+        ? msg.unencryptedContents
+        : await this.finalizeMessage(msg)
+      await this.callApi('/send', content)
+        .then((rez: any) => { resolve(rez) })
+        .catch((e: any) => { reject(e) });
+    });
   }
 
   /**
@@ -3204,7 +3274,8 @@ class Channel extends SBChannelKeys {
         msg: msg,
         resolve: resolve,
         reject: reject,
-        _send: this.#_send.bind(this)
+        _send: this.#_send.bind(this),
+        retryCount: WEBSOCKET_RETRY_COUNT, 
       })
       if (DBG2) console.log(SEPx)
     })
@@ -3244,40 +3315,48 @@ class Channel extends SBChannelKeys {
   }
 
   /**
-   * Gets the latest known timestamp on the server.
+   * Gets the latest known timestamp on the server. Returns it in prefix string format.
    */
   @Ready getLatestTimestamp(): Promise<string> {
     return this.callApi('/getLatestTimestamp')
   }
 
   async messageQueueManager() {
+    if (DBG) console.log(SEP, "[messageQueueManager] Channel message queue is starting up", SEP)
     await this.ready
+    if (DBG) console.log(SEP, "[messageQueueManager] ... continuing to start up", SEP)  
     while (true) {
       await this.sendQueue.dequeue()
-        .then(async (msg) => {
-          if (msg) {
-            if (DBG2) console.log(SEP, "[messageQueueManager] Channel message queue is sending message\n", msg.msg)
-            if (DBG2) console.log(msg)
-            await msg._send(msg)
-            .then((ret: any) => {
-              if (DBG2) console.log(SEP, "[messageQueueManager] Got response from registered '_send':\n", ret, SEP)
-              msg.resolve(ret)
-            })
-            .catch((e: any) => {
-              if (DBG2) console.log(SEP, "[messageQueueManager] Got exception from 'send' operation:", e, SEP)
-              msg.reject(e)
-            });
+        .then(async (qMsg) => {
+          if (DBG) console.log(SEP, "[messageQueueManager] ... pulled 'msg' from queue:\n", qMsg?.msg.unencryptedContents, SEP)
+          if (qMsg) {
+            if (DBG) console.log(SEP, "[messageQueueManager] Channel message queue is calling '_send' on message\n", qMsg.msg.unencryptedContents)
+            if (DBG2) console.log(qMsg.msg)
+            let latestError = null
+            while (qMsg.retryCount-- >= 0) {
+              if (DBG) console.log(SEP, "[messageQueueManager] ... trying message send (", qMsg.retryCount, "retries left)\n", qMsg.msg.unencryptedContents, SEP)
+              try {
+                const ret = await qMsg._send(qMsg.msg)
+                if (DBG) console.log(SEP, "[messageQueueManager] Got response from registered '_send':\n", ret, SEP)
+                qMsg.resolve(ret)
+                break
+              } catch (e) {
+                if (DBG) console.log(SEP, "[messageQueueManager] Got exception from '_send' operation, might retry", e, SEP)
+                latestError = '[ERROR] ' + e
+              }
+            }
+            // if we're here, we've run out of retries
+            qMsg.reject(latestError)
           } else {
             // 'null' signals queue is empty and closed
-            if (DBG2) console.log("[messageQueueManager] Channel message queue is empty and closed")
-            return
+            if (DBG) console.log("[messageQueueManager] Channel message queue is empty and closed")
           }
         })
         .catch((message: EnqueuedMessage) => {
-          if (DBG2) console.log(SEP, "[messageQueueManager] Got exception from DEQUEUE operation:\n", JSON.stringify(message), SEP)
+          if (DBG) console.log(SEP, "[messageQueueManager] Got exception from DEQUEUE operation:\n", JSON.stringify(message), SEP)
           // queue will reject (with the message) if it's closing down
-          if (DBG2) console.log("[messageQueueManager] Channel message queue is closing down")
-          if (DBG2) console.log(message)
+          if (DBG) console.log("[messageQueueManager] Channel message queue is closing down")
+          if (DBG) console.log(message)
           message.reject('shutDown')
         })
     }
@@ -3350,14 +3429,13 @@ class Channel extends SBChannelKeys {
   /**
    * Returns map of message keys from the server corresponding to the request.
    */
-  getHistory(): Promise<SBObjectHandle> {
+  getHistory(): Promise<MessageHistoryDirectory> {
     return new Promise(async (resolve, _reject) => {
       await this.channelReady
       _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)")
       const response = await this.callApi('/getHistory')
-      // resolve(validate_SBChannelHandle(handle))
-      console.log("getHistory result:\n", response)
-      resolve(response.shardHandle)
+      // console.log("getHistory result:\n", response)
+      resolve(response as MessageHistoryDirectory)
     });
   }
 
@@ -3571,6 +3649,11 @@ class Channel extends SBChannelKeys {
     return tsNum.toString(4).padStart(22, "0") + "0000" // total length 26
   }
 
+  static base4stringToDate(tsStr: string) {
+    const ts = parseInt(tsStr.slice(0, -4), 4)
+    return new Date(ts).toISOString()
+  }
+
   static getLexicalExtremes<T extends number | string>(set: Set<T>): [T, T] | [] {
     if (set.size === 0) return [];
     let min: T, max: T = min = set.values().next().value;
@@ -3649,6 +3732,14 @@ class Channel extends SBChannelKeys {
 
 } /* class Channel */
 
+// time we wait for a send() not to do anything before we interpret it as an
+// error and reset, and time we wait when creating a websocket before we
+// interpret the attempt as failed, and finally number of times to retry
+// before giving up on a message (each retry will reset the socket)
+const WEBSOCKET_MESSAGE_TIMEOUT = 200 // ms
+const WEBSOCKET_SETUP_TIMEOUT = 2000 // ms
+const WEBSOCKET_RETRY_COUNT = 3
+
 /**
    * ChannelSocket extends Channel. Has same basic functionality as Channel, but
    * is synchronous and uses websockets, eg lower latency and higher throughput.
@@ -3723,7 +3814,7 @@ class ChannelSocket extends Channel {
         // websocket: new WebSocket(url),
         ready: false,
         closed: false,
-        timeout: 2000
+        timeout: WEBSOCKET_MESSAGE_TIMEOUT
       }
       if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
         // either it's new, or it's closed, or it's in the process of closing
@@ -3782,7 +3873,7 @@ class ChannelSocket extends Channel {
         } else {
           if (DBG2) console.log("[ChannelSocket] resolved correctly", this)
         }
-      }, 2000);
+      }, WEBSOCKET_SETUP_TIMEOUT);
 
       this.#ws.websocket.addEventListener('open', async () => {
         this.#ws!.closed = false
@@ -3792,6 +3883,7 @@ class ChannelSocket extends Channel {
         if (DBG) console.log("++++++++ readyPromise() sending init")
         // auth is done on setup, it's not needed for the 'ready' signal
         this.#ws!.websocket!.send(assemblePayload({ ready: true })!)
+        if (DBG) console.log("++++++++ readyPromise() ... no immediate errors for init")
       });
 
       this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
@@ -3911,71 +4003,61 @@ class ChannelSocket extends Channel {
     if (b) console.log("==== jslib ChannelSocket: Tracing enabled ====")
   }
 
-  // actually send the message on the socket
-  async #_send(qMsg: EnqueuedMessage): Promise<string> {
-    const _message = qMsg.msg
-    if (this.#traceSocket || DBG2) console.log("++++++++ [ChannelSocket.#_send()] will send message:", _message)
-    if (DBG2) console.log("++++++++ [ChannelSocket.#_send()] finalized message:", _message)
-    let messagePayload: ArrayBuffer | string | null = null
-    if (_message.stringMessage === true) {
-      messagePayload = _message.unencryptedContents // we don't actually send a ChannelMessage
-    } else {
-      const msg = await this.finalizeMessage(_message)
-      messagePayload = assemblePayload(msg)
-      _sb_assert(messagePayload, "ChannelSocket.send(): failed to assemble message")
-      // we keep track of a hash of things we've sent so we can track when we see them
-      // todo: 'hash' should probably be an sbm property
-      const hash = await crypto.subtle.digest('SHA-256', msg.c! as ArrayBuffer)
-      const messageHash = arrayBufferToBase64url(hash)
-      if (DBG2 || this.#traceSocket)
-        console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash)
-      this.#ack.set(messageHash, qMsg.resolve)
-      this.#ackTimer.set(messageHash, setTimeout(() => {
-        // we could just resolve on message return, but we want to print out error message
-        if (this.#ack.has(messageHash)) {
-          this.#ack.delete(messageHash)
-          if (Snackabra.isShutdown) { qMsg.reject("shutDown"); return; } // we don't want to print this out if we're shutting down
-          const msg = `<websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})>`
-          console.error(msg)
-          qMsg.reject(msg)
-        } else {
-          // ChannelSocket resolves on seeing message return
-          if (this.#traceSocket) console.log("++++++++ ChannelSocket.send() completed sending")
-          qMsg.resolve("<received ACK, success>")
+  // actually send the message on the socket; returns a description of the outcome
+  #_send(msg: ChannelMessage) {
+    if (DBG) console.log("[ChannelSocket] #_send() called")
+    return new Promise(async (resolve, reject) => {
+      if (DBG) console.log(SEP, "++++++++ [ChannelSocket.#_send()] called, will return promise to send:", msg.unencryptedContents, SEP)
+      if (msg.stringMessage === true) {
+        try {
+          // 'string' messages are not tracked with an 'ack' by jslib; that
+          // would need to be done at another location of whatever protocol the
+          // message corresponds to.
+          const contents = msg.unencryptedContents
+          if (DBG) console.log("[ChannelSocket] actually sending string message:", contents)
+          this.#ws!.websocket!.send(contents)
+          resolve("success")
+        } catch (e) {
+          reject(`<websocket error upon send() of a string message: ${e}>`)
         }
-      }, this.#ws!.timeout))
-    }
+      } else {
+        // if it's not simple, then it's more complicated
+        msg = await this.finalizeMessage(msg)
+        const messagePayload = assemblePayload(msg)
+        if (!messagePayload) reject("ChannelSocket.send(): no message payload (Internal Error)")
 
-    // THIS IS WHERE we actually send the payload ...
-    if (!messagePayload) {
-      const msg = "ChannelSocket.send(): no message payload (Internal Error)"
-      qMsg.reject(msg)
-      return(msg)
-    } else {
-      try {
-        this.#ws!.websocket!.send(messagePayload)
-        return "<websocket accepted message>"
-      } catch (e) {
-        // we try to reset the socket once, and then we give up
-        console.error("++++ [ChannelSocket] websocket error upon send(), will try reset() once")
-        let eMsg = `<websocket error upon send(): ${e}>`
-        await this.reset()
-        if (this.#ws && this.#ws.websocket && this.#ws!.websocket!.readyState === 1) {
-          try {
-            this.#ws!.websocket!.send(messagePayload)
-            console.info("++++ [ChannelSocket] websocket retry and send() worked!")
-            return "<websocket accepted message (upon retry)>"
-          } catch (e) {
-            eMsg = `<websocket error upon send() and retry: ${e}>`
+        // we keep track of a hash of things to manage 'ack'
+        const hash = await crypto.subtle.digest('SHA-256', msg.c! as ArrayBuffer)
+        const messageHash = arrayBufferToBase64url(hash)
+        if (DBG2 || this.#traceSocket)
+          console.log("++++++++ ChannelSocket.send(): Which has hash:", messageHash)
+        this.#ack.set(messageHash, resolve)
+        this.#ackTimer.set(messageHash, setTimeout(async () => {
+          if (this.#ack.has(messageHash)) {
+            this.#ack.delete(messageHash)
+            if (Snackabra.isShutdown) { reject("shutDown"); return; } // if we're shutting things down, we're done
+            if (DBG) console.error(`[ChannelSocket] websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})`)
+            this.reset() // for timeouts, we try to reset the socket
+            await this.ready // wait for it to start up again
+            if (DBG)  console.error(`[ChannelSocket] ... channel socket should be ready again`);
+            reject(`<websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})>`)
+          } else {
+            // ChannelSocket resolves on seeing message return
+            if (DBG || this.#traceSocket) console.log("++++++++ ChannelSocket.send() completed sending")
+            resolve("<received ACK, success, message sent and mirrored back>")
           }
-        } else {
-          console.error("++++ [ChannelSocket] websocket reset did not work, rejecting on original error")
+        }, this.#ws!.timeout))
+        if (DBG) console.log("[ChannelSocket] actually sending message:", messagePayload)
+        try {
+          // THIS IS WHERE we actually send an SBMessage payload ...
+          this.#ws!.websocket!.send(messagePayload!)
+        } catch (e) {
+          // print out stack at this time
+          console.error(new Error().stack)
+          reject(`<websocket error upon send() of a message: ${e}>`)
         }
-        console.error(eMsg)
-        qMsg.reject(eMsg)
-        return(eMsg)
       }
-    }
+    });
   }
 
   /**
@@ -3996,7 +4078,7 @@ class ChannelSocket extends Channel {
         ; (this as any)[ChannelSocket.ReadyFlag] = false;
     }
     return new Promise(async (resolve, reject) => {
-      if (!this.ChannelSocketReadyFlag) reject("ChannelSocket.send() is confused - ready or not?")
+      if (!this.ChannelSocketReadyFlag) reject("ChannelSocket.send() is NOT ready, perhaps it's resetting?")
       const readyState = this.#ws!.websocket!.readyState
       switch (readyState) {
         case 1: // OPEN
@@ -4032,11 +4114,13 @@ class ChannelSocket extends Channel {
           //   }, this.#ws!.timeout))
           // }
 
+          if (DBG) console.log("[ChannelSocket.send()] enqueueing message: ", contents)
           this.sendQueue.enqueue({
-            msg: await this.packageMessage(contents, options),
+            msg: this.packageMessage(contents, options),
             resolve: resolve,
             reject: reject,
-            _send: this.#_send.bind(this)
+            _send: this.#_send.bind(this),
+            retryCount: WEBSOCKET_RETRY_COUNT
           })
 
           // // THIS IS WHERE we actually send the payload ...
@@ -4057,8 +4141,14 @@ class ChannelSocket extends Channel {
     })
   }
 
-  // re-connects the websocket
-  async reset() {
+  /**
+   * Reconnects (resets) a ChannelSocket. Note that this is NOT asynchronous,
+   * instead it will immediately cause 'ChannelSocket.ready' to be reset to a new
+   * promise; ergo, wait on that after calling this before expecting the channel
+   * to have successfully reset.
+   */
+  reset() {
+    if (DBG) console.log("++++ ChannelSocket.reset() called ... for ChannelID:", this.channelId)
     if (this.#ws && this.#ws.websocket) {
       if (this.#ws.websocket.readyState === 1) {
         this.#ws.websocket.close()
@@ -4069,7 +4159,9 @@ class ChannelSocket extends Channel {
   }
 
   async close() {
-    console.log("++++ ChannelSocket.close() called ... closing down stuff ...")
+    if (DBG) console.log("++++ ChannelSocket.close() called ... closing down stuff ...")
+    // print out stack trace of our current location
+    if (DBG) console.log(new Error().stack)
     // let other side know we're shutting down
     if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
       this.#ws.websocket.send(assemblePayload({ close: true })!)
