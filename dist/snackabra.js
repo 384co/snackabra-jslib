@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 091)';
+const version = '2.0.0-alpha.5 (build 093)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function _check_SBStorageToken(data) {
@@ -2507,14 +2507,31 @@ class ChannelSocket extends Channel {
             if (DBG)
                 console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
             const thisWsWebsocket = this.#ws.websocket;
-            const initialListener = (e) => {
-                if (e.data && typeof e.data === 'string') {
-                    const json = jsonParseWrapper(e.data, "L3909");
-                    if (json && json.hasOwnProperty('ready')) {
+            const initialListener = async (e) => {
+                if (!e.data) {
+                    if (DBG0 || DBG)
+                        console.error("[ChannelSocket] received empty message");
+                    reject("[ChannelSocket] received empty message (should be a 'ready' message)");
+                }
+                let serverReadyMessage = null;
+                if (typeof e.data === 'string') {
+                    serverReadyMessage = jsonParseWrapper(e.data, "L3909");
+                }
+                else if (e.data instanceof ArrayBuffer) {
+                    serverReadyMessage = extractPayload(e.data).payload;
+                }
+                else if (e.data instanceof Blob) {
+                    serverReadyMessage = extractPayload(await e.data.arrayBuffer()).payload;
+                }
+                else {
+                    _sb_exception("L3987", "[ChannelSocket] received something other than string or ArrayBuffer");
+                }
+                if (serverReadyMessage) {
+                    if (serverReadyMessage.ready) {
                         if (DBG0 || DBG)
                             console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", e.data);
-                        if (json.hasOwnProperty('latestTimestamp')) {
-                            this.lastTimestampPrefix = json.latestTimestamp;
+                        if (serverReadyMessage.latestTimestamp) {
+                            this.lastTimestampPrefix = serverReadyMessage.latestTimestamp;
                             if (DBG2)
                                 console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix);
                         }
@@ -2531,7 +2548,10 @@ class ChannelSocket extends Channel {
                     }
                 }
                 else {
-                    reject("[ChannelSocket] cannot parse first message (should be a 'ready' message)");
+                    const msg = "[ChannelSocket] received empty message, or could not parse it (should be a 'ready' message)";
+                    if (DBG0 || DBG)
+                        console.error(msg);
+                    reject(msg);
                 }
             };
             this.#ws.websocket.addEventListener('message', initialListener);
@@ -2555,7 +2575,7 @@ class ChannelSocket extends Channel {
                 await this.ready;
                 if (DBG)
                     console.log("++++++++ readyPromise() sending init");
-                this.#ws.websocket.send(assemblePayload({ ready: true }));
+                this.#ws.websocket.send('ready');
                 if (DBG)
                     console.log("++++++++ readyPromise() ... no immediate errors for init");
             });
@@ -2587,6 +2607,7 @@ class ChannelSocket extends Channel {
             console.log(SEP, "[ChannelSocket] Received socket message:\n", msg, SEP);
         var message = null;
         _sb_assert(msg, "[ChannelSocket] received empty message");
+        Snackabra.heardFromServer();
         if (typeof msg === 'string') {
             const _message = jsonOrString(msg);
             if (!_message)
@@ -2597,9 +2618,9 @@ class ChannelSocket extends Channel {
                         console.log("[ChannelSocket] Received 'latestTimestamp' message:", _message);
                     Snackabra.heardFromServer();
                     if (_message > this.lastTimestampPrefix) {
-                        this.lastTimestampPrefix = _message;
-                        if (DBG2)
-                            console.log("[ChannelSocket] Updated 'latestTimestamp' to:", _message);
+                        if (DBG0)
+                            console.log(SEP, "[ChannelSocket] Received newer timestamp, will request those messages", SEP);
+                        this.#ws.websocket.send(this.lastTimestampPrefix);
                     }
                     setTimeout(() => {
                         if (this.#ws.closed)
@@ -2617,7 +2638,12 @@ class ChannelSocket extends Channel {
                     return;
                 }
             }
-            message = _message;
+            else {
+                if (DBG0 || DBG)
+                    console.log("[ChannelSocket] Received unrecognized 'string' message, will discard:\n", _message);
+                this.#ws.websocket.send(assemblePayload({ error: `Cannot parse 'string' message (''${_message})` }));
+                return;
+            }
         }
         else if (msg instanceof ArrayBuffer) {
             message = extractPayload(msg).payload;
@@ -2626,11 +2652,12 @@ class ChannelSocket extends Channel {
             message = extractPayload(await msg.arrayBuffer()).payload;
         }
         else {
-            _sb_exception("L3594", "[ChannelSocket] received unknown message type");
+            this.#ws.websocket.send(assemblePayload({ error: `Received unknown 'type' of message (??)` }));
+            return;
         }
         _sb_assert(message, "[ChannelSocket] cannot extract message");
         if (message.ready) {
-            if (DBG)
+            if (DBG0 || DBG)
                 console.log("++++++++ #processMessage: received ready message\n", message);
             return;
         }
@@ -2829,7 +2856,7 @@ class ChannelSocket extends Channel {
         if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
             if (DBG0)
                 console.log("++++ ChannelSocket.close() ... sending close message ...");
-            this.#ws.websocket.send(assemblePayload({ close: true }));
+            this.#ws.websocket.send('close');
         }
         else {
             if (DBG0)

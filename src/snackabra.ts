@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 091)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 093)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -3957,13 +3957,42 @@ class ChannelSocket extends Channel {
       if (DBG) console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
 
       const thisWsWebsocket = this.#ws.websocket
-      const initialListener = (e: MessageEvent<any>) => {
-        if (e.data && typeof e.data === 'string') {
-          const json = jsonParseWrapper(e.data, "L3909")
-          if (json && json.hasOwnProperty('ready')) {
+      const initialListener = async (e: MessageEvent<any>) => {
+        if (!e.data) {
+          if (DBG0 || DBG) console.error("[ChannelSocket] received empty message")
+          reject("[ChannelSocket] received empty message (should be a 'ready' message)")
+        }
+        let serverReadyMessage: { ready: boolean, messageCount: number, latestTimestamp: string } | null = null
+
+        if (typeof e.data === 'string') {
+          serverReadyMessage = jsonParseWrapper(e.data, "L3909")
+          // const json = jsonParseWrapper(e.data, "L3909")
+          // if (json && json.hasOwnProperty('ready')) {
+          //   if (DBG0 || DBG) console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", e.data)
+          //   if (json.hasOwnProperty('latestTimestamp')) {
+          //     this.lastTimestampPrefix = json.latestTimestamp
+          //     if (DBG2) console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix)
+          //   } else console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'")
+          //   thisWsWebsocket.removeEventListener('message', initialListener);
+          //   thisWsWebsocket.addEventListener('message', this.#processMessage);
+          //   this.#setupPing();
+          //   (this as any)[ChannelSocket.ReadyFlag] = true;
+          //   resolve(this);
+          // } else {
+          //   reject("[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data));
+          // }
+        } else if (e.data instanceof ArrayBuffer) {
+          serverReadyMessage = extractPayload(e.data).payload
+        } else if (e.data instanceof Blob) {
+          serverReadyMessage = extractPayload(await e.data.arrayBuffer()).payload
+        } else {
+          _sb_exception("L3987", "[ChannelSocket] received something other than string or ArrayBuffer")
+        }
+        if (serverReadyMessage) {
+          if (serverReadyMessage.ready) {
             if (DBG0 || DBG) console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", e.data)
-            if (json.hasOwnProperty('latestTimestamp')) {
-              this.lastTimestampPrefix = json.latestTimestamp
+            if (serverReadyMessage.latestTimestamp) {
+              this.lastTimestampPrefix = serverReadyMessage.latestTimestamp
               if (DBG2) console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix)
             } else console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'")
             thisWsWebsocket.removeEventListener('message', initialListener);
@@ -3975,7 +4004,9 @@ class ChannelSocket extends Channel {
             reject("[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data));
           }
         } else {
-          reject("[ChannelSocket] cannot parse first message (should be a 'ready' message)");
+          const msg = "[ChannelSocket] received empty message, or could not parse it (should be a 'ready' message)"
+          if (DBG0 || DBG) console.error(msg)
+          reject(msg)
         }
       };
 
@@ -4015,7 +4046,8 @@ class ChannelSocket extends Channel {
         await this.ready
         if (DBG) console.log("++++++++ readyPromise() sending init")
         // auth is done on setup, it's not needed for the 'ready' signal
-        this.#ws!.websocket!.send(assemblePayload({ ready: true })!)
+        // this.#ws!.websocket!.send(assemblePayload({ ready: true })!)
+        this.#ws!.websocket!.send('ready')
         if (DBG) console.log("++++++++ readyPromise() ... no immediate errors for init")
       });
 
@@ -4047,6 +4079,7 @@ class ChannelSocket extends Channel {
     if (DBG2) console.log(SEP, "[ChannelSocket] Received socket message:\n", msg, SEP)
     var message: ChannelMessage | null = null
     _sb_assert(msg, "[ChannelSocket] received empty message")
+    Snackabra.heardFromServer(); // do this on every message to track online status
     if (typeof msg === 'string') {
       // could be a simple JSON message, or a low-level server message (eg just a string)
       const _message: any = jsonOrString(msg)
@@ -4057,8 +4090,15 @@ class ChannelSocket extends Channel {
           if (DBG2) console.log("[ChannelSocket] Received 'latestTimestamp' message:", _message)
           Snackabra.heardFromServer()
           if (_message > this.lastTimestampPrefix) {
-            this.lastTimestampPrefix = _message
-            if (DBG2) console.log("[ChannelSocket] Updated 'latestTimestamp' to:", _message)
+            // hm ok we got a message upon ping that's newer than what we've
+            // seen; we fire off a request for anything newer than we last saw.
+            // we know we're connected since, well, we just got this message ...
+
+            if (DBG0) console.log(SEP,"[ChannelSocket] Received newer timestamp, will request those messages",SEP)
+            this.#ws!.websocket!.send(this.lastTimestampPrefix)
+            
+            // this.lastTimestampPrefix = _message
+            // if (DBG2) console.log("[ChannelSocket] Updated 'latestTimestamp' to:", _message)
           }
           // we only have one 'ping' outstanding at a time
           setTimeout(() => {
@@ -4072,20 +4112,25 @@ class ChannelSocket extends Channel {
           this.onMessage(_message)
           return
         }
+      } else {
+        // currently, a timestamp is the only 'pure' string that should arrive
+        if (DBG0 || DBG) console.log("[ChannelSocket] Received unrecognized 'string' message, will discard:\n", _message)
+        this.#ws!.websocket!.send(assemblePayload({ error: `Cannot parse 'string' message (''${_message})` })!);
+        return;
       }
-      message = _message as ChannelMessage
     } else if (msg instanceof ArrayBuffer) {
       message = extractPayload(msg).payload
     } else if (msg instanceof Blob) {
       message = extractPayload(await msg.arrayBuffer()).payload
     } else {
-      _sb_exception("L3594", "[ChannelSocket] received unknown message type")
+      this.#ws!.websocket!.send(assemblePayload({ error: `Received unknown 'type' of message (??)` })!);
+      return;
     }
     _sb_assert(message, "[ChannelSocket] cannot extract message")
 
     // we catch server-specific messages here, and then pass the rest to the user
     if (message!.ready) {
-      if (DBG) console.log("++++++++ #processMessage: received ready message\n", message)
+      if (DBG0 || DBG) console.log("++++++++ #processMessage: received ready message\n", message)
       return
     }
     if (message!.error) {
@@ -4333,7 +4378,8 @@ class ChannelSocket extends Channel {
     clearInterval(this.#pingInterval);
     if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
       if (DBG0) console.log("++++ ChannelSocket.close() ... sending close message ...")
-      this.#ws.websocket.send(assemblePayload({ close: true })!)
+      // this.#ws.websocket.send(assemblePayload({ close: true })!)
+      this.#ws.websocket.send('close')
     } else {
       if (DBG0) console.log("++++ ChannelSocket.close() ... no open socket to send close message ...", this.#ws?.websocket)
     }
