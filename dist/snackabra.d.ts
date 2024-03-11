@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 087)";
+declare const version = "2.0.0-alpha.5 (build 091)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -9,6 +9,7 @@ export interface SBStorageToken {
     created?: number;
     used?: boolean;
 }
+export declare function _check_SBStorageToken(data: SBStorageToken): boolean | "";
 export declare function validate_SBStorageToken(data: SBStorageToken): SBStorageToken;
 export interface SBChannelHandle {
     [SB_CHANNEL_HANDLE_SYMBOL]?: boolean;
@@ -24,6 +25,7 @@ export interface SBChannelData {
     ownerPublicKey: SBUserPublicKey;
     storageToken?: SBStorageToken;
 }
+export declare function _check_SBChannelData(data: SBChannelData): boolean | "" | SBStorageToken;
 export declare function validate_SBChannelData(data: any): SBChannelData;
 export type SBStorageTokenHash = string;
 export interface Message {
@@ -142,7 +144,8 @@ export interface MessageHistoryDirectory extends MessageHistory {
     type: 'directory';
     depth: number;
     lastModified: number;
-    entries: Map<string, MessageHistoryDirectory | SBObjectHandle>;
+    shards?: Map<string, SBObjectHandle>;
+    subdirectories?: Map<string, MessageHistoryDirectory>;
 }
 export declare class MessageBus {
     #private;
@@ -225,6 +228,7 @@ declare class SB384 {
     #private;
     sb384Ready: Promise<SB384>;
     static ReadyFlag: symbol;
+    errorState: boolean;
     constructor(key?: CryptoKey | JsonWebKey | SBUserPublicKey | SBUserPrivateKey, forcePrivate?: boolean);
     get SB384ReadyFlag(): any;
     get ready(): Promise<SB384>;
@@ -295,6 +299,7 @@ export interface MessageOptions {
     subChannel?: string;
     protocol?: SBProtocol;
     sendString?: boolean;
+    retries?: number;
 }
 interface EnqueuedMessage {
     msg: ChannelMessage;
@@ -305,13 +310,14 @@ interface EnqueuedMessage {
 }
 declare class Channel extends SBChannelKeys {
     #private;
-    protocol: SBProtocol;
     channelReady: Promise<Channel>;
     static ReadyFlag: symbol;
     locked?: boolean;
     static defaultProtocol: SBProtocol;
+    protocol?: SBProtocol;
     visitors: Map<SBUserId, SBUserPrivateKey>;
     sendQueue: MessageQueue<EnqueuedMessage>;
+    isClosed: boolean;
     constructor();
     constructor(newChannel: null, protocol: SBProtocol);
     constructor(key: SBUserPrivateKey, protocol?: SBProtocol);
@@ -366,6 +372,7 @@ declare class Channel extends SBChannelKeys {
     static getLexicalExtremes<T extends number | string>(set: Set<T>): [T, T] | [];
     static messageKeySetToPrefix: (keys: Set<string>) => string;
     static timestampLongestPrefix: (s1: string, s2: string) => string;
+    static timestampRegex: RegExp;
     static base4StringToTimestamp(tsStr: string): number;
     static base4StringToDate(tsStr: string): string;
     static deComposeMessageKey(key: string): {
@@ -380,6 +387,7 @@ declare class ChannelSocket extends Channel {
     channelSocketReady: Promise<ChannelSocket>;
     static ReadyFlag: symbol;
     onMessage: (_m: Message | string) => void;
+    lastTimestampPrefix: string;
     constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message | string) => void, protocol?: SBProtocol);
     get ready(): Promise<ChannelSocket>;
     get ChannelSocketReadyFlag(): boolean;
@@ -408,25 +416,38 @@ export declare class StorageApi {
     static getData(handle: SBObjectHandle): ArrayBuffer | undefined;
     static getPayload(handle: SBObjectHandle): any;
 }
-declare class Snackabra {
+declare class EventEmitter {
+    private static events;
+    static on(eventName: string, listener: Function): void;
+    static off(eventName: string, listener: Function): void;
+    static emit(eventName: string, ...args: any[]): void;
+}
+type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
+declare class Snackabra extends EventEmitter {
     #private;
     static lastTimeStamp: number;
     static activeFetches: Map<symbol, AbortController>;
-    static activeChannelSockets: Set<WebSocket>;
     static isShutdown: boolean;
+    static lastTimestampPrefix: string;
+    static onlineStatus: ServerOnlineStatus;
+    static defaultChannelServer: string;
     constructor(channelServer: string, options?: {
         DEBUG?: boolean;
         DEBUG2?: boolean;
         sbFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     } | boolean);
     static dateNow(): Promise<number>;
-    static get defaultChannelServer(): string;
+    static heardFromServer(): void;
+    static checkUnknownNetworkStatus(): void;
+    static haveNotHeardFromServer(): void;
+    static addChannelSocket(socket: ChannelSocket): void;
+    static removeChannelSocket(socket: ChannelSocket): void;
     getPage(prefix: string): Promise<any>;
     create(budgetChannel: Channel): Promise<SBChannelHandle>;
     create(storageToken: SBStorageToken): Promise<SBChannelHandle>;
     connect(handleOrKey: SBChannelHandle | SBUserPrivateKey): Channel;
     connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message | string) => void): ChannelSocket;
-    closeAll(): Promise<void>;
+    static closeAll(): Promise<void>;
     get storage(): StorageApi;
     getStorageServer(): Promise<string>;
     get crypto(): SBCrypto;

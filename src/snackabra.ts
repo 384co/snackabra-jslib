@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 087)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 091)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -40,7 +40,10 @@ export interface SBStorageToken {
   used?: boolean,
 }
 
-function _check_SBStorageToken(data: SBStorageToken) {
+// generally speaking, '_check_' functions return true if the object looks like
+// it's a valid instance of the corresponding type
+
+export function _check_SBStorageToken(data: SBStorageToken) {
   return (
     data.hash && typeof data.hash === 'string' && data.hash.length > 0
     && (!data.size || Number.isInteger(data.size) && data.size > 0)
@@ -91,7 +94,7 @@ export function _check_SBChannelHandle(data: SBChannelHandle) {
     data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
     && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
     && (!data.channelServer || typeof data.channelServer === 'string')
-    && (!data.channelData || _checkChannelData(data.channelData))
+    && (!data.channelData || _check_SBChannelData(data.channelData))
   )
 }
 
@@ -120,7 +123,7 @@ export interface SBChannelData {
   storageToken?: SBStorageToken,
 }
 
-function _checkChannelData(data: SBChannelData) {
+export function _check_SBChannelData(data: SBChannelData) {
   return (
     data.channelId && data.channelId.length === 43
     && data.ownerPublicKey && typeof data.ownerPublicKey === 'string' && data.ownerPublicKey.length > 0
@@ -130,7 +133,7 @@ function _checkChannelData(data: SBChannelData) {
 
 export function validate_SBChannelData(data: any): SBChannelData {
   if (!data) throw new SBError(`invalid SBChannelData (null or undefined)`)
-  else if (_checkChannelData(data)) {
+  else if (_check_SBChannelData(data)) {
     return data as SBChannelData
   } else {
     if (DBG) console.error('invalid SBChannelData ... trying to ingest:\n', data)
@@ -341,7 +344,7 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
     // 'subChannel': 'i2' is a bit more complicated, it must be 4xbase62 (plus boundary '_'), so we regex against [a-zA-Z0-9_]
     && (!body.i2 || (typeof body.i2 === 'string' && /^[a-zA-Z0-9_]{4}$/.test(body.i2)))
     // body.ttl must be 0-15 (4 bits)
-    && (!body.ttl || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
+    && (body.ttl === undefined || (Number.isInteger(body.ttl) && body.ttl >= 0 && body.ttl <= 15))
   ) {
     return { ...body, [SB_CHANNEL_MESSAGE_SYMBOL]: true } as ChannelMessage
   } else {
@@ -409,7 +412,7 @@ export interface EncryptParams {
 var DBG = false;
 var DBG2 = false; // note, if this is true then DBG will be true too
 
-var DBG0 = DBG2 // internal, set it to 'true' or 'DBG2'
+var DBG0 = false // internal, set it to 'true' or 'DBG2'
 if (DBG0) console.log("++++ Setting DBG0 to TRUE ++++");
 
 // in addition, for convenience (such as in test suites) we 'pick up' configuration.DEBUG
@@ -479,6 +482,23 @@ export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One min
 // this library essentially only supports '3'
 export type SBObjectHandleVersions = '1' | '2' | '3'
 const currentSBOHVersion: SBObjectHandleVersions = '3'
+
+if (typeof WeakRef === "undefined") {
+  class PolyfillWeakRef<T> {
+    private _target: T;
+    constructor(target: T) {
+      this._target = target;
+    }
+    deref(): T | undefined {
+      return this._target;
+    }
+  }
+  Object.defineProperty(PolyfillWeakRef.prototype, Symbol.toStringTag, {
+    value: 'WeakRef',
+    configurable: true,
+  });
+  globalThis.WeakRef = PolyfillWeakRef as any;
+}
 
 /**
  * SBObjectHandle
@@ -656,14 +676,17 @@ export interface MessageHistoryEntry extends MessageHistory {
  * Directory of message history structures. entries can be 'direct' objects, or
  * to handle (arbitrary) scaling then at any point they can be 'sharded' (eg
  * payload-wrapped); the string key is always the 'from' ('first') of whatever
- * is referenced by Map (directly or indirectly)
+ * is referenced by Map (directly or indirectly).
+ * 
+ * 'depth' of '0' means all the entries are 'direct', eg they are all shards
+ * of sets of messages; depth '1' means 
  */
 export interface MessageHistoryDirectory extends MessageHistory {
   type: 'directory',
-  depth: number, // 0 is direct, 1 is shardified, 2 is doubly shardified, etc
+  depth: number,
   lastModified: number, // timestamp of last modification
-  // an 'entry' is ALWAYS shardified, a 'directory' can be inline or shardified
-  entries: Map<string, MessageHistoryDirectory | SBObjectHandle>
+  shards?: Map<string, SBObjectHandle>
+  subdirectories?: Map<string, MessageHistoryDirectory>,
 }
 
 
@@ -767,13 +790,14 @@ export class MessageQueue<T> {
   }
   // 'close' will stop queue from accepting more data
   close(reason?: string) {
-    if (DBG) console.log(`[MessageQueue] Closing. There are ${this.queue.length} messages left. Close reason: ${reason}`)
+    if (DBG0) console.log(`[MessageQueue] Closing. There are ${this.queue.length} messages left. Close reason: ${reason}`)
     this.closed = true;
     this.error = reason || 'close';
     if (this.reject) this.reject(this.error);
   }
   // wait for queue to drain
   async drain(reason?: string) {
+    if (DBG0) console.log(`[MessageQueue] Draining.`)
     if (!this.closed) this.close(reason || 'drain')
     while (this.queue.length > 0) {
       if (DBG) console.log(`[MessageQueue] Draining. There are ${this.queue.length} messages left.`)
@@ -788,12 +812,18 @@ export class MessageQueue<T> {
 //#region - Utility functions (exported)
 
 async function closeSocket(socket: WebSocket) {
+  console.log("[closeSocket] closing socket", socket)
   if (socket.readyState !== WebSocket.CLOSED)
     await new Promise<void>((resolve) => {
-      socket.addEventListener('close', () => resolve(), { once: true });
-      socket.close();
+      socket.addEventListener('close', () => {
+        console.log("[Snackabra.closeSocket] ... socket confirmed closed", socket)
+        resolve();
+      }, { once: true });
+      socket.close(1000); // not allowed to say '1001'
     });
-  Snackabra.activeChannelSockets.delete(socket);
+  else {
+    console.warn('[Snackabra] websocket already closed')
+  }
 }
 
 export class SBError extends Error {
@@ -805,7 +835,7 @@ export class SBError extends Error {
     else
       this.stack = (new Error(message)).stack;
     if (DBG2) {
-      let atLine = null
+      let atLine: string | null = null
       if (this.stack) {
         const stackLines = this.stack!.split("\n");
         for (let i = 1; i < stackLines.length; i++) {
@@ -2073,6 +2103,7 @@ export function Ready(target: any, propertyKey: string /* ClassGetterDecoratorCo
     descriptor.get = function () {
       const obj = target.constructor.name
       const readyFlagSymbol = target.constructor.ReadyFlag;
+      // todo: consider adding 'errorState' as general blocker
       // if (DBG) console.log(`Ready: ${obj}.${propertyKey} constructor:`, target.constructor)
       _sb_assert(readyFlagSymbol in this, `'readyFlagSymbol' missing yet getter accessed with @Ready pattern (fatal)`);
       _sb_assert((this as any)[readyFlagSymbol], `'${obj}.${propertyKey}' getter accessed but object not 'ready' (fatal)`);
@@ -2275,6 +2306,8 @@ class SB384 {
 
   #hash?: SB384Hash // generic 'identifier', see hash getter below
   #hashB32?: string // base32 version of hash (first 12 sets eg 48 chars)
+
+  errorState = false; // catch errors and blocks; helps with async error/cleanup sequence
 
   /**
    * As a fundamental object, SB384 can be initialized from a number starting points:
@@ -2878,6 +2911,7 @@ export interface MessageOptions {
   subChannel?: string, // 'i2' in ChannelMessage, Owner only
   protocol?: SBProtocol,
   sendString?: boolean, // if true, just send the string, no other processing
+  retries?: number, // optional override of defaults (0 for no retries)
 }
 
 /**
@@ -3014,12 +3048,16 @@ class Channel extends SBChannelKeys {
   // #cursor: string = ''; // last (oldest) message key seen
 
   static defaultProtocol: SBProtocol = new Protocol_ECDH() // default
+  protocol?: SBProtocol = Channel.defaultProtocol
 
   visitors: Map<SBUserId, SBUserPrivateKey> = new Map()
 
   // all messages come through this queue; that includes 'ChannelSocket'
   // messages, but need not include all objects that inherits from 'Channel'
   sendQueue: MessageQueue<EnqueuedMessage> = new MessageQueue()
+
+  // explicitly tracks if 'close' has been called
+  isClosed = false
 
   /**
    * Channel supports creation from scratch, from a handle, or from a key.
@@ -3051,26 +3089,33 @@ class Channel extends SBChannelKeys {
    * @param protocol - SBProtocol
    */
   constructor(handle: SBChannelHandle, protocol?: SBProtocol)
-  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey | null, public protocol: SBProtocol = Channel.defaultProtocol) {
+  constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey | null, protocol?: SBProtocol) {
     if (DBG) console.log("Channel() constructor called with handleOrKey:\n", handleOrKey)
     if (handleOrKey === null)
       super()
     else
       super(handleOrKey);
-    this.messageQueueManager(); // fire it up
+    this.protocol = protocol ? protocol : Channel.defaultProtocol
+    this
+    .messageQueueManager() // fire it up
+    .then(() => { if (DBG0) console.log("Channel() constructor - messageQueueManager() is DONE") })
+    .catch(e => { throw e })
     this.channelReady =
       this.sbChannelKeysReady
         .then(() => {
           // owner 'userId' is same as channelId, always added
           this.visitors.set(this.channelId!, this.channelData.ownerPublicKey);
           (this as any)[Channel.ReadyFlag] = true;
-          this.protocol.setChannel(this); // if protocol needs to do something 
+          this.protocol!.setChannel(this); // if protocol needs to do something 
           return this;
         })
         .catch(e => { throw e; });
   }
 
-  get ready() { return this.channelReady }
+  get ready() {
+    _sb_assert(!this.isClosed, "[Channel] Channel is closed, blocking on'ready' will reject")
+    return this.channelReady
+  }
   get ChannelReadyFlag(): boolean { return (this as any)[Channel.ReadyFlag] }
 
   @Memoize @Ready get api() { return this } // for compatibility
@@ -3132,7 +3177,7 @@ class Channel extends SBChannelKeys {
       }
       if (!msgRaw._id)
         msgRaw._id = Channel.composeMessageKey (this.channelId!, msgRaw.sts!, msgRaw.i2)
-      if(msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
+      if (DBG && msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
       const msg: Message = {
         body: extractPayload(bodyBuffer).payload,
         channelId: this.channelId!,
@@ -3180,10 +3225,11 @@ class Channel extends SBChannelKeys {
     if (options) {
       if (options.sendTo) msg.t = options.sendTo
       if (options.subChannel) throw new SBError(`wrapMessage(): subChannel not yet supported`) // would be i2
+      if (options.ttl !== undefined) msg.ttl = options.ttl
       if (options.sendString) {
         // low-level messages are not encrypted or signed or validated etc
         _sb_assert(typeof contents === 'string', "[packageMessage] sendString is true, but contents is not a string")
-        _sb_assert(!options.ttl, "[packageMessage] sendString implies TTL=0")
+        _sb_assert(options.ttl === undefined || options.ttl === 0, `[packageMessage] sendString implies TTL=0 (we got ${options.ttl})`)
         msg.ttl = 0
         msg.stringMessage = true
       }
@@ -3191,7 +3237,7 @@ class Channel extends SBChannelKeys {
     if (msg.stringMessage !== true) {
       // 'proper' message, we prep for encryption, signing, etc
       msg.protocol = options.protocol ? options.protocol : this.protocol // default to channel's unless overriden
-      if (!msg.ttl) msg.ttl = 15
+      if (msg.ttl === undefined) msg.ttl = 15; // note, '0' is valid
       // there is always pre-generated salt and nonce, whether or not the protocol needs them
       if (!msg.salt) msg.salt = crypto.getRandomValues(new Uint8Array(16)).buffer
       if (!msg.iv) msg.iv = crypto.getRandomValues(new Uint8Array(12))
@@ -3268,14 +3314,15 @@ class Channel extends SBChannelKeys {
   async send(contents: any, options: MessageOptions = {}): Promise<string> {
     return new Promise(async (resolve, reject) => {
       if (DBG2) console.log(SEP, "[Channel.send] called.", SEP, "contents:\n", contents)
-      const msg = await this.packageMessage(contents, options)
+      const msg = this.packageMessage(contents, options)
       if (DBG2) console.log(SEP, "packed message:\n", msg)
+      if (DBG0 && msg.ttl !== undefined) console.log(SEP, "enqueuing message with TTL value: ", msg.ttl, SEP)
       this.sendQueue.enqueue({
         msg: msg,
         resolve: resolve,
         reject: reject,
         _send: this.#_send.bind(this),
-        retryCount: WEBSOCKET_RETRY_COUNT, 
+        retryCount: options.retries !== undefined ? options.retries : 0 // default no retry
       })
       if (DBG2) console.log(SEPx)
     })
@@ -3325,23 +3372,24 @@ class Channel extends SBChannelKeys {
     if (DBG) console.log(SEP, "[messageQueueManager] Channel message queue is starting up", SEP)
     await this.ready
     if (DBG) console.log(SEP, "[messageQueueManager] ... continuing to start up", SEP)  
-    while (true) {
+    let keepRunning = true
+    while (keepRunning) {
       await this.sendQueue.dequeue()
         .then(async (qMsg) => {
-          if (DBG) console.log(SEP, "[messageQueueManager] ... pulled 'msg' from queue:\n", qMsg?.msg.unencryptedContents, SEP)
+          if (DBG2) console.log(SEP, "[messageQueueManager] ... pulled 'msg' from queue:\n", qMsg?.msg.unencryptedContents, SEP)
           if (qMsg) {
-            if (DBG) console.log(SEP, "[messageQueueManager] Channel message queue is calling '_send' on message\n", qMsg.msg.unencryptedContents)
+            if (DBG2) console.log(SEP, "[messageQueueManager] Channel message queue is calling '_send' on message\n", qMsg.msg.unencryptedContents)
             if (DBG2) console.log(qMsg.msg)
             let latestError = null
             while (qMsg.retryCount-- >= 0) {
-              if (DBG) console.log(SEP, "[messageQueueManager] ... trying message send (", qMsg.retryCount, "retries left)\n", qMsg.msg.unencryptedContents, SEP)
+              if (DBG2) console.log(SEP, "[messageQueueManager] ... trying message send (", qMsg.retryCount, "retries left)\n", qMsg.msg.unencryptedContents, SEP)
               try {
                 const ret = await qMsg._send(qMsg.msg)
-                if (DBG) console.log(SEP, "[messageQueueManager] Got response from registered '_send':\n", ret, SEP)
+                if (DBG2) console.log(SEP, "[messageQueueManager] Got response from registered '_send':\n", ret, SEP)
                 qMsg.resolve(ret)
                 break
               } catch (e) {
-                if (DBG) console.log(SEP, "[messageQueueManager] Got exception from '_send' operation, might retry", e, SEP)
+                if (DBG2) console.log(SEP, "[messageQueueManager] Got exception from '_send' operation, might retry", e, SEP)
                 latestError = '[ERROR] ' + e
               }
             }
@@ -3349,21 +3397,35 @@ class Channel extends SBChannelKeys {
             qMsg.reject(latestError)
           } else {
             // 'null' signals queue is empty and closed
-            if (DBG) console.log("[messageQueueManager] Channel message queue is empty and closed")
+            if (DBG2) console.log("[messageQueueManager] Channel message queue is empty and closed")
+            keepRunning = false
           }
         })
-        .catch((message: EnqueuedMessage) => {
-          if (DBG) console.log(SEP, "[messageQueueManager] Got exception from DEQUEUE operation:\n", JSON.stringify(message), SEP)
-          // queue will reject (with the message) if it's closing down
-          if (DBG) console.log("[messageQueueManager] Channel message queue is closing down")
-          if (DBG) console.log(message)
-          message.reject('shutDown')
+        .catch((e: any) => {
+          // if error contains string 'shutDown', then we close quietly, otherwise we reject
+          if (e === 'shutDown') {
+            if (DBG2) console.log("[messageQueueManager] Channel message queue is shutting down")
+            return
+          } else {
+            if (DBG2) console.error("[messageQueueManager] Channel message queue is shutting down with error:", e)
+            throw new SBError("[messageQueueManager] Channel message queue is shutting down with error: " + e.message)
+          }
         })
+        // .catch((message: EnqueuedMessage) => {
+        //   if (DBG2 || DBG) console.log(SEP, "[messageQueueManager] Got exception from DEQUEUE operation:\n", JSON.stringify(message), SEP)
+        //   // queue will reject (with the message) if it's closing down
+        //   if (DBG2 || DBG) console.log("[messageQueueManager] Channel message queue is closing down")
+        //   if (DBG2 || DBG) console.log(message)
+        //   // check if 'shutDown' is in
+        //   message.resolve('shutDown')
+        // })
     }
   }
 
   // 'Channel' on a close will close and drain
   async close() {
+    if (DBG) console.log("[Channel.close] called (will drain queue)")
+    this.isClosed = true
     await this.sendQueue.drain('shutDown')
   }
 
@@ -3687,13 +3749,14 @@ class Channel extends SBChannelKeys {
     } else throw new SBError(`[timestampLongestPrefix]: invalid input:\n '${s1}' or '${s2}'`);
   }
 
+  static timestampRegex = /^[0-3]{26}$/;
+
   /**
    * Reverse of timestampToBase4String. Strict about the format
    * (needs to be `[0-3]{26}`), returns 0 if there's any issue.
    */
   static base4StringToTimestamp(tsStr: string) {
-    const regex = /^[0-3]{26}$/;
-    if (!tsStr || typeof tsStr !== 'string' || tsStr.length !== 26 || !regex.test(tsStr)) return 0
+    if (!tsStr || typeof tsStr !== 'string' || tsStr.length !== 26 || !Channel.timestampRegex.test(tsStr)) return 0
     return parseInt(tsStr.slice(0, -4), 4);
   }
 
@@ -3736,9 +3799,14 @@ class Channel extends SBChannelKeys {
 // error and reset, and time we wait when creating a websocket before we
 // interpret the attempt as failed, and finally number of times to retry
 // before giving up on a message (each retry will reset the socket)
-const WEBSOCKET_MESSAGE_TIMEOUT = 200 // ms
+const WEBSOCKET_MESSAGE_TIMEOUT = 20000 // ms   // ... testing resilience
 const WEBSOCKET_SETUP_TIMEOUT = 2000 // ms
 const WEBSOCKET_RETRY_COUNT = 3
+
+// time in ms between 'ping' messages; in other words, on average we are about
+// half of this behind IF the socket has hibernated. if the edge server stack
+// does not support hibernation, then the channel server will respond instead.
+const WEBSOCKET_PING_INTERVAL = 1000
 
 /**
    * ChannelSocket extends Channel. Has same basic functionality as Channel, but
@@ -3779,6 +3847,14 @@ class ChannelSocket extends Channel {
   #ackTimer: Map<string, number> = new Map()
   #traceSocket: boolean = false // should not be true in production
 
+  // last timestamp we've seen
+  lastTimestampPrefix: string = '0'.repeat(26);
+  #pingInterval: number = 0;
+
+  // // moved to snackabra
+  // #latestPing = Date.now(); // updated by 'ping'
+  // #online = true; // updated by 'ping'
+
   constructor(
       handleOrKey: SBChannelHandle | SBUserPrivateKey,
       onMessage: (m: Message | string) => void,
@@ -3804,6 +3880,45 @@ class ChannelSocket extends Channel {
     this.channelSocketReady = this.#channelSocketReadyFactory()
   }
 
+  #setupPing() {
+    if (DBG0) console.log(SEP, "[ChannelSocket] Setting up 'ping' messages ... ", SEP)
+
+    // we regularly check how long it's been since we heard from the server;
+    // every channelsocket does this
+    this.#pingInterval = setInterval(() => {
+      if (this.isClosed) {
+        console.error("[ChannelSocket] we are closed, removing ping interval")
+        return // close down quietly
+      }
+      Snackabra.haveNotHeardFromServer()
+    }, WEBSOCKET_PING_INTERVAL * 0.5);
+
+    // and we fire off the first one
+    this.#ws!.websocket!.send('ping')
+
+    // const pingTimer = setInterval(() => {
+    //   if (this.isClosed) return // close down quietly
+    //   if (DBG2) console.log(SEP, "[ChannelSocket] Sending 'ping' (timestamp request) message.", SEP)
+    //   try {
+    //     this.#ws!.websocket!.send('ping')
+    //     // set a timer that is 0.8 * the interval, to time out if this doesn't respond
+    //     setTimeout(() => {
+    //       if (this.isClosed) return // close down quietly
+    //       if (DBG) console.warn("[ChannelSocket] 'ping' message timed out")
+    //       this.errorState = true;
+    //     }, interval * 0.8);
+    //   } catch (e) {
+    //     if (this.isClosed) {
+    //       if (DBG2) console.log("[ChannelSocket] we are closed, removing interval")
+    //       clearInterval(pingTimer)
+    //     } else {
+    //       if (DBG) console.warn("[SBChannelStream.startSocket] Failed to send 'ping' message:", e)
+    //       this.errorState = true;
+    //     }
+    //   }
+    // }, interval);
+  }
+
   #channelSocketReadyFactory() {
     return new Promise<ChannelSocket>(async (resolve, reject) => {
       if (DBG) console.log("++++ STARTED ChannelSocket.readyPromise()")
@@ -3818,7 +3933,12 @@ class ChannelSocket extends Channel {
       }
       if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
         // either it's new, or it's closed, or it's in the process of closing
-        // if (this.#ws.websocket) await closeSocket(this.#ws.websocket)
+        if (this.#ws.websocket) {
+          console.warn("[ChannelSocket] websocket is in a bad state, closing it ... will await")
+          await closeSocket(this.#ws.websocket)
+          // Snackabra.activeChannelSockets.delete(this); // avoid possible race condition
+          Snackabra.addChannelSocket(this)
+        }
         // a WebSocket connection is always a 'GET', and there's no way to provide a body
         const apiBodyBuf = assemblePayload(await this.buildApiBody(url))
         _sb_assert(apiBodyBuf, "Internal Error [L3598]")
@@ -3827,22 +3947,35 @@ class ChannelSocket extends Channel {
         // if (DBG) console.log(SEP, SEP, "++++ ChannelSocket() - created new websocket", this.#ws.websocket , SEP, SEP)
 
         // let Snackabra know about this socket
-        Snackabra.activeChannelSockets.add(this.#ws.websocket)
+        // Snackabra.activeChannelSockets.add(this.#ws.websocket)
+        Snackabra.addChannelSocket(this)
+        // console.log("Added a socket. Current active sockets:")
+        // for (const socket of Snackabra.activeChannelSockets.values())
+        //   console.log("readyState:", socket.readyState, "URL:", socket.url.slice(0, 100) + '...');
       }
 
       if (DBG) console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
 
       const thisWsWebsocket = this.#ws.websocket
       const initialListener = (e: MessageEvent<any>) => {
-        if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3253")?.hasOwnProperty('ready')) {
-          thisWsWebsocket.removeEventListener('message', initialListener);
-          thisWsWebsocket.addEventListener('message', this.#processMessage);
-          if (DBG) console.log(SEP, "Received ready", SEP);
-          (this as any)[ChannelSocket.ReadyFlag] = true;
-          resolve(this);
+        if (e.data && typeof e.data === 'string') {
+          const json = jsonParseWrapper(e.data, "L3909")
+          if (json && json.hasOwnProperty('ready')) {
+            if (DBG0 || DBG) console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", e.data)
+            if (json.hasOwnProperty('latestTimestamp')) {
+              this.lastTimestampPrefix = json.latestTimestamp
+              if (DBG2) console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix)
+            } else console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'")
+            thisWsWebsocket.removeEventListener('message', initialListener);
+            thisWsWebsocket.addEventListener('message', this.#processMessage);
+            this.#setupPing();
+            (this as any)[ChannelSocket.ReadyFlag] = true;
+            resolve(this);
+          } else {
+            reject("[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data));
+          }
         } else {
-          if (DBG) console.log(SEP, "Received non-ready (?):\n", e.data, "\n", SEP);
-          reject("[ChannelSocket] received something other than 'ready' as first message");
+          reject("[ChannelSocket] cannot parse first message (should be a 'ready' message)");
         }
       };
 
@@ -3894,7 +4027,7 @@ class ChannelSocket extends Channel {
           if (e.reason.includes("does not have an owner"))
             // reject(`No such channel on this server (${this.#sbServer.channel_server})`)
             reject(`No such channel on this server (${this.channelServer})`)
-          else console.log('[ChannelSocket] Closed (cleanly): ', e.reason)
+          else console.log('[ChannelSocket] Closed (cleanly), with reason: ', e.reason)
         }
         reject('wbSocket() closed before it was opened (?)')
       });
@@ -3909,6 +4042,7 @@ class ChannelSocket extends Channel {
   }
 
   #processMessage = async (e: MessageEvent<any>) => {
+    _sb_assert(!this.errorState, "[ChannelSocket] in error state (Internal Error L4018)")
     const msg = e.data
     if (DBG2) console.log(SEP, "[ChannelSocket] Received socket message:\n", msg, SEP)
     var message: ChannelMessage | null = null
@@ -3918,9 +4052,26 @@ class ChannelSocket extends Channel {
       const _message: any = jsonOrString(msg)
       if (!_message) _sb_exception("L3287", "[ChannelSocket] Cannot parse message: " + msg)
       if (typeof _message === 'string') {
-        if (DBG) console.log("[ChannelSocket] Received simple string message, will forward\n", _message)
-        this.onMessage(_message)
-        return
+        // check if it matches a timestamp prefix string
+        if (Channel.timestampRegex.test(_message)) {
+          if (DBG2) console.log("[ChannelSocket] Received 'latestTimestamp' message:", _message)
+          Snackabra.heardFromServer()
+          if (_message > this.lastTimestampPrefix) {
+            this.lastTimestampPrefix = _message
+            if (DBG2) console.log("[ChannelSocket] Updated 'latestTimestamp' to:", _message)
+          }
+          // we only have one 'ping' outstanding at a time
+          setTimeout(() => {
+            if (this.#ws!.closed) return;
+            if (DBG2) console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.")
+            this.#ws!.websocket!.send('ping')
+          }, WEBSOCKET_PING_INTERVAL)
+          return; // done
+        } else {
+          if (DBG0 || DBG2) console.log("[ChannelSocket] Received simple string message, will forward\n", _message)
+          this.onMessage(_message)
+          return
+        }
       }
       message = _message as ChannelMessage
     } else if (msg instanceof ArrayBuffer) {
@@ -3983,7 +4134,12 @@ class ChannelSocket extends Channel {
     }
   }
 
-  get ready() { return this.channelSocketReady }
+  get ready() {
+    _sb_assert(!this.errorState, "[ChannelSocket] in error state (Internal Error L4104)")
+    _sb_assert(!this.isClosed, "[ChannelSocket] We are closed, blocking on'ready' will reject")
+    return this.channelSocketReady
+  }
+
   // get readyFlag(): boolean { return this.#ChannelSocketReadyFlag }
   get ChannelSocketReadyFlag(): boolean { return (this as any)[ChannelSocket.ReadyFlag] }
 
@@ -4005,26 +4161,33 @@ class ChannelSocket extends Channel {
 
   // actually send the message on the socket; returns a description of the outcome
   #_send(msg: ChannelMessage) {
-    if (DBG) console.log("[ChannelSocket] #_send() called")
+    _sb_assert(!this.errorState, "[ChannelSocket] in error state (Internal Error L4130)")
+    if (DBG2) console.log("[ChannelSocket] #_send() called")
     return new Promise(async (resolve, reject) => {
-      if (DBG) console.log(SEP, "++++++++ [ChannelSocket.#_send()] called, will return promise to send:", msg.unencryptedContents, SEP)
+      if (DBG2) console.log(SEP, "++++++++ [ChannelSocket.#_send()] called, will return promise to send:", msg.unencryptedContents, SEP)
+      if (this.#ws!.closed) {
+        if (DBG2) console.error("[ChannelSocket] #_send() to a CLOSED socket")
+        reject('<websocket closed>'); return;
+      }
       if (msg.stringMessage === true) {
         try {
           // 'string' messages are not tracked with an 'ack' by jslib; that
           // would need to be done at another location of whatever protocol the
           // message corresponds to.
           const contents = msg.unencryptedContents
-          if (DBG) console.log("[ChannelSocket] actually sending string message:", contents)
+          if (DBG2) console.log("[ChannelSocket] actually sending string message:", contents)
           this.#ws!.websocket!.send(contents)
           resolve("success")
         } catch (e) {
-          reject(`<websocket error upon send() of a string message: ${e}>`)
+          reject(`<websocket error upon send() of a string message: ${e}>`); return;
         }
       } else {
         // if it's not simple, then it's more complicated
         msg = await this.finalizeMessage(msg)
         const messagePayload = assemblePayload(msg)
-        if (!messagePayload) reject("ChannelSocket.send(): no message payload (Internal Error)")
+        if (!messagePayload) {
+          reject("ChannelSocket.send(): no message payload (Internal Error)"); return;
+        }
 
         // we keep track of a hash of things to manage 'ack'
         const hash = await crypto.subtle.digest('SHA-256', msg.c! as ArrayBuffer)
@@ -4037,24 +4200,27 @@ class ChannelSocket extends Channel {
             this.#ack.delete(messageHash)
             if (Snackabra.isShutdown) { reject("shutDown"); return; } // if we're shutting things down, we're done
             if (DBG) console.error(`[ChannelSocket] websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})`)
-            this.reset() // for timeouts, we try to reset the socket
-            await this.ready // wait for it to start up again
-            if (DBG)  console.error(`[ChannelSocket] ... channel socket should be ready again`);
-            reject(`<websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})>`)
+            // update: no we don't reset at low levels, turns out to confuse responsibilities
+            // this.reset() // for timeouts, we try to reset the socket
+            // await this.ready // wait for it to start up again
+            // if (DBG)  console.error(`[ChannelSocket] ... channel socket should be ready again`);
+            reject(`<websocket request timed out (no ack) after ${this.#ws!.timeout}ms (${messageHash})>`);
+            return;
           } else {
             // ChannelSocket resolves on seeing message return
             if (DBG || this.#traceSocket) console.log("++++++++ ChannelSocket.send() completed sending")
             resolve("<received ACK, success, message sent and mirrored back>")
           }
         }, this.#ws!.timeout))
-        if (DBG) console.log("[ChannelSocket] actually sending message:", messagePayload)
+        if (DBG2) console.log("[ChannelSocket] actually sending message:", messagePayload)
         try {
           // THIS IS WHERE we actually send an SBMessage payload ...
+          if (DBG2) console.log("[ChannelSocket] actually sending message:", messagePayload)
           this.#ws!.websocket!.send(messagePayload!)
         } catch (e) {
           // print out stack at this time
-          console.error(new Error().stack)
-          reject(`<websocket error upon send() of a message: ${e}>`)
+          console.error("Failed to send on socket:\n", e, '\n', new Error().stack)
+          reject(`<websocket error upon send() of a message: ${e}>`); return;
         }
       }
     });
@@ -4068,6 +4234,7 @@ class ChannelSocket extends Channel {
     */
   @VerifyParameters
   async send(contents: any, options?: MessageOptions): Promise<string> {
+    if (DBG2) console.log("++++ ChannelSocket.send() called ...")
     await this.ready
     _sb_assert(this.#ws && this.#ws.websocket, "[ChannelSocket.send()] called before ready")
     if (DBG2) console.log(SEP, "[ChannelSocket] sending, contents:\n", JSON.stringify(contents), SEP)
@@ -4114,7 +4281,8 @@ class ChannelSocket extends Channel {
           //   }, this.#ws!.timeout))
           // }
 
-          if (DBG) console.log("[ChannelSocket.send()] enqueueing message: ", contents)
+          // console.log("[ChannelSocket.send()] enqueueing message: ", contents)
+          // console.log("TTL at point of channel socket send() is: ", options?.ttl)
           this.sendQueue.enqueue({
             msg: this.packageMessage(contents, options),
             resolve: resolve,
@@ -4142,46 +4310,58 @@ class ChannelSocket extends Channel {
   }
 
   /**
-   * Reconnects (resets) a ChannelSocket. Note that this is NOT asynchronous,
-   * instead it will immediately cause 'ChannelSocket.ready' to be reset to a new
-   * promise; ergo, wait on that after calling this before expecting the channel
-   * to have successfully reset.
+   * Reconnects (resets) a ChannelSocket. This will not block (it's
+   * synchronous), and 'ready' will resolve when the socket is ready again.
    */
   reset() {
-    if (DBG) console.log("++++ ChannelSocket.reset() called ... for ChannelID:", this.channelId)
+    if (DBG0) console.trace("++++ ChannelSocket.reset() called ... for ChannelID:", this.channelId)
     if (this.#ws && this.#ws.websocket) {
       if (this.#ws.websocket.readyState === 1) {
         this.#ws.websocket.close()
       }
       this.#ws.closed = true
+      // we also delete the old entry on the active sockets list
+      Snackabra.removeChannelSocket(this)
+      // and reset our readiness
       this.channelSocketReady = this.#channelSocketReadyFactory()
     }
   }
 
   async close() {
-    if (DBG) console.log("++++ ChannelSocket.close() called ... closing down stuff ...")
-    // print out stack trace of our current location
-    if (DBG) console.log(new Error().stack)
-    // let other side know we're shutting down
+    if (DBG0 || DBG) console.log("++++ ChannelSocket.close() called ... closing down stuff ...")
+    this.isClosed = true;
+    clearInterval(this.#pingInterval);
     if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
+      if (DBG0) console.log("++++ ChannelSocket.close() ... sending close message ...")
       this.#ws.websocket.send(assemblePayload({ close: true })!)
+    } else {
+      if (DBG0) console.log("++++ ChannelSocket.close() ... no open socket to send close message ...", this.#ws?.websocket)
     }
     // first close and drain the sendQueue; there may be socket messages that
     // are in flight, but this will push 'reject' to all of them
     await super.close()
     // at this point there shouldn't be outstanding transactions that are queue
     // up to be sent on the websocket; proceed to clean up the websocket
-    if (this.#ws && this.#ws.websocket) {
-      Snackabra.activeChannelSockets.delete(this.#ws.websocket)
-      this.#ws.websocket.close()
-      this.#ws.closed = true
-    } else {
-      console.log("++++ ChannelSocket.close() called ... but no socket to close?")
-    }
+
+    Snackabra.removeChannelSocket(this)
+
+    // if (this.#ws && this.#ws.websocket) {
+    //   // Snackabra.activeChannelSockets.delete(this.#ws.websocket)
+    //   Snackabra.removeChannelSocket(this)
+    //   this.#ws.websocket.close()
+    //   this.#ws.closed = true
+    // } else {
+    //   console.log("++++ ChannelSocket.close() called ... but no socket to close?")
+    // }
 
     // set ready to permanently reject
-    this.channelSocketReady = Promise.reject("[ChannelSocket] This channel socket has been closed (by client request)")
     ; (this as any)[ChannelSocket.ReadyFlag] = false;
+
+    // we would like to throw if anybody anywhere tries to await on our 'ready',
+    // but this turns out to be a major headache to debug because of JS
+    // limitations in tracking stacks. instead we in effect have a different
+    // state, namely 'isClosed' can be true being true while still 'ready'.
+    // this.channelSocketReady = Promise.reject("[ChannelSocket] This channel socket has been closed (by client request)")
   }
 
   // /** @type {JsonWebKey} */ @Memoize @Ready get exportable_owner_pubKey() { return this.keys.ownerKey }
@@ -4550,9 +4730,30 @@ export class StorageApi {
 /******************************************************************************************************/
 //#region Snackabra and exports
 
-const SnackabraDefaults = {
-  channelServer: ''
+// const SnackabraDefaults = {
+//   channelServer: ''
+// }
+
+class EventEmitter {
+  private static events: { [key: string]: Function[] } = {};
+  static on(eventName: string, listener: Function) {
+    if (!this.events[eventName]) this.events[eventName] = [];
+    this.events[eventName].push(listener);
+  }
+  static off(eventName: string, listener: Function) {
+    if (!this.events[eventName]) return;
+    const index = this.events[eventName].indexOf(listener);
+    if (index > -1) this.events[eventName].splice(index, 1);
+  }
+  static emit(eventName: string, ...args: any[]) {
+    const listeners = this.events[eventName];
+    if (!listeners || listeners.length === 0) return;
+    listeners.forEach(listener => listener(...args));
+  }
 }
+
+
+type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 
 /**
   * Main class. It corresponds to a single channel server. Most apps
@@ -4579,7 +4780,7 @@ const SnackabraDefaults = {
   * for accessing channel and storage servers. For example, to provide
   * a specific service binding for a web worker.
  */
-class Snackabra {
+class Snackabra extends EventEmitter {
   #channelServer: string
   #storage: StorageApi
   #version = version
@@ -4590,10 +4791,20 @@ class Snackabra {
   
   // shared global set of fetches, sockets, etc, for closeAll()
   public static activeFetches = new Map<symbol, AbortController>()
+
   // static abortPromises = new Map<symbol, Promise<unknown>>()
-  // static activeChannelSockets = new Map<symbol, ChannelSocket>()
-  public static activeChannelSockets = new Set<WebSocket>()
+
+  static #activeChannelSockets = new Set<ChannelSocket>()
   public static isShutdown = false // flipped 'true' when closeAll() is called
+
+  public static lastTimestampPrefix: string = '0'.repeat(26)
+  static #latestPing = Date.now(); // updated by 'ping'
+
+  // public static online = true; // updated by 'ping'
+  public static onlineStatus: ServerOnlineStatus = 'unknown'
+
+  // overwritten by whatever most recent new Snackabra(), but defaults to localhost
+  static defaultChannelServer =  'http://localhost:3845'
 
   constructor(
     channelServer: string,
@@ -4605,9 +4816,10 @@ class Snackabra {
     }
     | boolean
     ) {
-    console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`)
+      super()
+      console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`)
     _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter')
-    SnackabraDefaults.channelServer = channelServer
+    if (channelServer) Snackabra.defaultChannelServer = channelServer
     if (typeof options === 'boolean') options = { DEBUG: options }
     if (options && options.DEBUG && options.DEBUG === true) DBG = true;
     if (options && DBG && options.DEBUG2 && options.DEBUG2 === true) DBG2 = true;
@@ -4665,8 +4877,7 @@ class Snackabra {
 
 
     }));
-    
-
+  
   }
 
   // any operations that require a precise timestamp (such as messages) can use
@@ -4689,12 +4900,70 @@ class Snackabra {
     // return timestamp;
   }
   
+  /**
+   * Call when somethings been heard from any channel server; this is used to
+   * track whether we are online or not.
+   */
+  static heardFromServer() {
+    Snackabra.#latestPing = Date.now()
+    switch (Snackabra.onlineStatus) {
+      case 'offline':
+        if (DBG) console.info("[Snackabra] We are BACK online")
+        this.emit('online')
+        this.emit('reconnected')
+        Snackabra.onlineStatus = 'online'
+        break
+      case 'online':
+        // still online, unless socket count is zero
+        break
+      case 'unknown':
+        if (DBG) console.info("[Snackabra] We are now ONLINE")
+        this.emit('online')
+        Snackabra.onlineStatus = 'online'
+        break
+    }
+    this.checkUnknownNetworkStatus()
+  }
 
-  static get defaultChannelServer(): string {
-    const s = SnackabraDefaults.channelServer
-    if (s.length > 0) return s
-    else throw new SBError("No default channel server; you need to have 'new Snackabra(...)' somewhere.")
-    // return SnackabraDefaults.channelServer
+  static checkUnknownNetworkStatus() {
+    if (Snackabra.#activeChannelSockets.size === 0) {
+      if (Snackabra.onlineStatus !== 'unknown')
+        this.emit('unknownNetworkStatus')
+      Snackabra.onlineStatus = 'unknown'
+    }
+  }
+
+  /**
+   * Call when we haven't heard from any channel server for a while, and we
+   * think we should have.
+   */
+  static haveNotHeardFromServer() {
+    if (Date.now() - Snackabra.#latestPing > WEBSOCKET_PING_INTERVAL * 1.1) {
+      if (DBG0) console.warn("[Snackabra] 'ping' message seems to have timed out")
+      if (Snackabra.onlineStatus === 'online') {
+        if (Snackabra.#activeChannelSockets.size > 0) {
+          if (DBG) console.warn("[Snackabra] OFFLINE")
+          Snackabra.onlineStatus = 'offline'
+          this.emit('offline')
+        } else {
+          if (DBG) console.warn("[Snackabra] No active channel sockets, online status is now UNKNOWN")
+          Snackabra.onlineStatus = 'unknown'
+          Snackabra.onlineStatus = 'offline'
+          this.emit('unknownNetworkStatus')
+        }
+      }
+    }
+    this.checkUnknownNetworkStatus()
+  }
+
+  static addChannelSocket(socket: ChannelSocket) {
+    Snackabra.#activeChannelSockets.add(socket)
+  }
+
+  static removeChannelSocket(socket: ChannelSocket) {
+    if (Snackabra.#activeChannelSockets.has(socket))
+      Snackabra.#activeChannelSockets.delete(socket)
+    this.checkUnknownNetworkStatus()
   }
 
   /**
@@ -4809,14 +5078,21 @@ class Snackabra {
 
   /**
    * Closes all active operations and connections, including any fetches
-   * and websockets.
+   * and websockets. This closes EVERYTHING (globally).
    */
-  async closeAll() {
-    if (Snackabra.isShutdown) return; // only one instance of closeAll()
+  static async closeAll() {
+    console.log(SEP, "==== Snackabra.closeAll() called ====", SEP)
+    if (Snackabra.isShutdown) {
+      console.warn("closeAll() called, but it was already shutting down")
+      return; // only one instance of closeAll()
+    }
     Snackabra.isShutdown = true;
     Snackabra.activeFetches.forEach(controller => controller.abort('Snackabra.closeAll() called'));
     Snackabra.activeFetches.clear();
-    await Promise.all(Array.from(Snackabra.activeChannelSockets).map(closeSocket));
+    await Promise.all(Array.from(Snackabra.#activeChannelSockets).map(close));
+    // we block a fraction of a second here to give everything time to propagate
+    console.log("... waiting for everything to close ...")
+    await new Promise(resolve => setTimeout(resolve, 2000));
   }
 
   /** Returns the storage API */
