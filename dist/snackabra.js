@@ -2475,6 +2475,7 @@ class ChannelSocket extends Channel {
         this.#pingInterval = setInterval(() => {
             if (this.isClosed) {
                 console.error("[ChannelSocket] we are closed, removing ping interval");
+                clearInterval(this.#pingInterval);
                 return;
             }
             Snackabra.haveNotHeardFromServer();
@@ -2608,36 +2609,28 @@ class ChannelSocket extends Channel {
         var message = null;
         _sb_assert(msg, "[ChannelSocket] received empty message");
         Snackabra.heardFromServer();
+        if (typeof msg === 'string' && Channel.timestampRegex.test(msg)) {
+            if (DBG2)
+                console.log("[ChannelSocket] Received 'latestTimestamp' message:", msg);
+            Snackabra.heardFromServer();
+            if (msg > this.lastTimestampPrefix) {
+                if (DBG0)
+                    console.log(SEP, "[ChannelSocket] Received newer timestamp, will request those messages", SEP);
+                this.#ws.websocket.send(this.lastTimestampPrefix);
+            }
+            setTimeout(() => {
+                if (this.#ws.closed)
+                    return;
+                if (DBG2)
+                    console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.");
+                this.#ws.websocket.send('ping');
+            }, WEBSOCKET_PING_INTERVAL);
+            return;
+        }
         if (typeof msg === 'string') {
             const _message = jsonOrString(msg);
             if (!_message)
                 _sb_exception("L3287", "[ChannelSocket] Cannot parse message: " + msg);
-            if (typeof _message === 'string') {
-                if (Channel.timestampRegex.test(_message)) {
-                    if (DBG2)
-                        console.log("[ChannelSocket] Received 'latestTimestamp' message:", _message);
-                    Snackabra.heardFromServer();
-                    if (_message > this.lastTimestampPrefix) {
-                        if (DBG0)
-                            console.log(SEP, "[ChannelSocket] Received newer timestamp, will request those messages", SEP);
-                        this.#ws.websocket.send(this.lastTimestampPrefix);
-                    }
-                    setTimeout(() => {
-                        if (this.#ws.closed)
-                            return;
-                        if (DBG2)
-                            console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.");
-                        this.#ws.websocket.send('ping');
-                    }, WEBSOCKET_PING_INTERVAL);
-                    return;
-                }
-                else {
-                    if (DBG0 || DBG2)
-                        console.log("[ChannelSocket] Received simple string message, will forward\n", _message);
-                    this.onMessage(_message);
-                    return;
-                }
-            }
             else {
                 if (DBG0 || DBG)
                     console.log("[ChannelSocket] Received unrecognized 'string' message, will discard:\n", _message);
@@ -2673,6 +2666,10 @@ class ChannelSocket extends Channel {
         _sb_assert(message.channelId === this.channelId, "[ChannelSocket] received message for wrong channel?");
         if (this.#traceSocket)
             console.log("[ChannelSocket] Received socket message:", message);
+        if (DBG0)
+            console.log("[ChannelSocket] Updated 'latestTimestamp' to:", msg);
+        _sb_assert(message.sts, "[ChannelSocket] Message missing server timestamp Internal Error (L4145)");
+        this.lastTimestampPrefix = _a.timestampToBase4String(message.sts);
         _sb_assert(message.c && message.c instanceof ArrayBuffer, "[ChannelSocket] Internal Error (L3675)");
         const hash = await crypto.subtle.digest('SHA-256', message.c);
         const ack_id = arrayBufferToBase64url(hash);

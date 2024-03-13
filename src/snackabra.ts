@@ -3888,6 +3888,7 @@ class ChannelSocket extends Channel {
     this.#pingInterval = setInterval(() => {
       if (this.isClosed) {
         console.error("[ChannelSocket] we are closed, removing ping interval")
+        clearInterval(this.#pingInterval)
         return // close down quietly
       }
       Snackabra.haveNotHeardFromServer()
@@ -4080,39 +4081,33 @@ class ChannelSocket extends Channel {
     var message: ChannelMessage | null = null
     _sb_assert(msg, "[ChannelSocket] received empty message")
     Snackabra.heardFromServer(); // do this on every message to track online status
+
+    // string [0-3]* are magical, they imply a 'latest' time stamp prefix from server
+    if (typeof msg === 'string' && Channel.timestampRegex.test(msg)) {
+      if (DBG2) console.log("[ChannelSocket] Received 'latestTimestamp' message:", msg)
+      Snackabra.heardFromServer()
+      if (msg > this.lastTimestampPrefix) {
+        // if this is *newer* than we were last at, we ping back *our* latest
+        // string; if everything after that is still buffered by the server, it'll
+        // respond with them, otherwise the server will close the websocket
+        if (DBG0) console.log(SEP, "[ChannelSocket] Received newer timestamp, will request those messages", SEP)
+        this.#ws!.websocket!.send(this.lastTimestampPrefix)
+      }
+      // we only have one 'ping' outstanding at a time
+      setTimeout(() => {
+        if (this.#ws!.closed) return;
+        if (DBG2) console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.")
+        this.#ws!.websocket!.send('ping')
+      }, WEBSOCKET_PING_INTERVAL)
+      // these messages are absorbed
+      return;
+    }
+
     if (typeof msg === 'string') {
       // could be a simple JSON message, or a low-level server message (eg just a string)
       const _message: any = jsonOrString(msg)
       if (!_message) _sb_exception("L3287", "[ChannelSocket] Cannot parse message: " + msg)
-      if (typeof _message === 'string') {
-        // check if it matches a timestamp prefix string
-        if (Channel.timestampRegex.test(_message)) {
-          if (DBG2) console.log("[ChannelSocket] Received 'latestTimestamp' message:", _message)
-          Snackabra.heardFromServer()
-          if (_message > this.lastTimestampPrefix) {
-            // hm ok we got a message upon ping that's newer than what we've
-            // seen; we fire off a request for anything newer than we last saw.
-            // we know we're connected since, well, we just got this message ...
-
-            if (DBG0) console.log(SEP,"[ChannelSocket] Received newer timestamp, will request those messages",SEP)
-            this.#ws!.websocket!.send(this.lastTimestampPrefix)
-            
-            // this.lastTimestampPrefix = _message
-            // if (DBG2) console.log("[ChannelSocket] Updated 'latestTimestamp' to:", _message)
-          }
-          // we only have one 'ping' outstanding at a time
-          setTimeout(() => {
-            if (this.#ws!.closed) return;
-            if (DBG2) console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.")
-            this.#ws!.websocket!.send('ping')
-          }, WEBSOCKET_PING_INTERVAL)
-          return; // done
-        } else {
-          if (DBG0 || DBG2) console.log("[ChannelSocket] Received simple string message, will forward\n", _message)
-          this.onMessage(_message)
-          return
-        }
-      } else {
+      else {
         // currently, a timestamp is the only 'pure' string that should arrive
         if (DBG0 || DBG) console.log("[ChannelSocket] Received unrecognized 'string' message, will discard:\n", _message)
         this.#ws!.websocket!.send(assemblePayload({ error: `Cannot parse 'string' message (''${_message})` })!);
@@ -4145,6 +4140,10 @@ class ChannelSocket extends Channel {
     _sb_assert(message.channelId === this.channelId, "[ChannelSocket] received message for wrong channel?")
 
     if (this.#traceSocket) console.log("[ChannelSocket] Received socket message:", message)
+
+    if (DBG0) console.log("[ChannelSocket] Updated 'latestTimestamp' to:", msg)
+    _sb_assert(message.sts, "[ChannelSocket] Message missing server timestamp Internal Error (L4145)")
+    this.lastTimestampPrefix = ChannelSocket.timestampToBase4String(message!.sts!)
 
     // if (!message._id)
     //   message._id = composeMessageKey(message.channelId!, message.sts!, message.i2)
