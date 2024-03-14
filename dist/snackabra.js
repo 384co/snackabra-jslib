@@ -2865,9 +2865,6 @@ class ChannelSocket extends Channel {
     }
 }
 _a = ChannelSocket;
-__decorate([
-    VerifyParameters
-], ChannelSocket.prototype, "send", null);
 function validate_Shard(s) {
     if (!s)
         throw new SBError(`invalid SBObjectHandle (null or undefined)`);

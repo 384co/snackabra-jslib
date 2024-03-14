@@ -4276,8 +4276,7 @@ class ChannelSocket extends Channel {
     * Returns a promise that resolves to "success" when sent,
     * or an error message if it fails.
     */
-  @VerifyParameters
-  async send(contents: any, options?: MessageOptions): Promise<string> {
+    async send(contents: any, options?: MessageOptions): Promise<string> {
     if (DBG2) console.log("++++ ChannelSocket.send() called ...")
     await this.ready
     _sb_assert(this.#ws && this.#ws.websocket, "[ChannelSocket.send()] called before ready")
