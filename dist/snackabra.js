@@ -1317,37 +1317,11 @@ function Owner(target, propertyKey, descriptor) {
         };
     }
 }
-function VerifyParameters(_target, _propertyKey, descriptor) {
-    if ((descriptor) && (descriptor.value)) {
-        const operation = descriptor.value;
-        descriptor.value = function (...args) {
-            for (let x of args) {
-                const m = x.constructor.name;
-                if (isSBClass(m))
-                    _sb_assert(SBValidateObject(x, m), `invalid parameter: ${x} (expecting ${m})`);
-            }
-            return operation.call(this, ...args);
-        };
-    }
-}
-const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle', 'SBChannelHandle', 'ChannelApiBody'];
 const SB_CHANNEL_MESSAGE_SYMBOL = Symbol('SB_CHANNEL_MESSAGE_SYMBOL');
 const SB_CHANNEL_API_BODY_SYMBOL = Symbol('SB_CHANNEL_API_BODY_SYMBOL');
 const SB_CHANNEL_HANDLE_SYMBOL = Symbol('SBChannelHandle');
-const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage');
 const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle');
 const SB_STORAGE_TOKEN_SYMBOL = Symbol.for('SBStorageToken');
-function isSBClass(s) {
-    return typeof s === 'string' && SB_CLASS_ARRAY.includes(s);
-}
-function SBValidateObject(obj, type) {
-    switch (type) {
-        case 'SBMessage': return SB_MESSAGE_SYMBOL in obj;
-        case 'SBObjectHandle': return SB_OBJECT_HANDLE_SYMBOL in obj;
-        case 'SBChannelHandle': return SB_OBJECT_HANDLE_SYMBOL in obj;
-        default: return false;
-    }
-}
 export const sbCrypto = new SBCrypto();
 const SEP = '\n' + '='.repeat(76) + '\n';
 const SEPx = '='.repeat(76) + '\n';
@@ -1863,6 +1837,7 @@ class Channel extends SBChannelKeys {
     visitors = new Map();
     sendQueue = new MessageQueue();
     isClosed = false;
+    previous = undefined;
     constructor(handleOrKey, protocol) {
         if (DBG)
             console.log("Channel() constructor called with handleOrKey:\n", handleOrKey);
@@ -2673,6 +2648,9 @@ class ChannelSocket extends Channel {
         _sb_assert(message.c && message.c instanceof ArrayBuffer, "[ChannelSocket] Internal Error (L3675)");
         const hash = await crypto.subtle.digest('SHA-256', message.c);
         const ack_id = arrayBufferToBase64url(hash);
+        if (this.previous)
+            message.p = this.previous;
+        this.previous = ack_id;
         if (DBG)
             console.log("[ChannelSocket] Received message with hash:", ack_id);
         const r = this.#ack.get(ack_id);
@@ -3057,6 +3035,8 @@ export class StorageApi {
         throw new SBError(`[fetchData] failed to fetch from any server`);
     }
     static getData(handle) {
+        if (typeof handle === 'undefined')
+            return undefined;
         const h = validate_SBObjectHandle(handle);
         if (!h.data)
             return undefined;

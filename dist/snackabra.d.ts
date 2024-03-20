@@ -38,6 +38,7 @@ export interface Message {
     serverTimestamp: number;
     eol?: number;
     _id: string;
+    previous?: string;
 }
 export declare function validate_Message(data: Message): Message;
 export interface ChannelApiBody {
@@ -66,6 +67,7 @@ export interface ChannelMessage {
     sts?: number;
     timestampPrefix?: string;
     _id?: string;
+    p?: string;
     unencryptedContents?: any;
     stringMessage?: boolean;
     ready?: boolean;
@@ -318,6 +320,7 @@ declare class Channel extends SBChannelKeys {
     visitors: Map<SBUserId, SBUserPrivateKey>;
     sendQueue: MessageQueue<EnqueuedMessage>;
     isClosed: boolean;
+    previous: string | undefined;
     constructor();
     constructor(newChannel: null, protocol: SBProtocol);
     constructor(key: SBUserPrivateKey, protocol?: SBProtocol);
@@ -413,7 +416,7 @@ export declare class StorageApi {
     static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey>;
     storeData(contents: any, budgetSource: SBChannelHandle | Channel | SBStorageToken): Promise<SBObjectHandle>;
     fetchData(handle: SBObjectHandle): Promise<SBObjectHandle>;
-    static getData(handle: SBObjectHandle): ArrayBuffer | undefined;
+    static getData(handle: SBObjectHandle | undefined): ArrayBuffer | undefined;
     static getPayload(handle: SBObjectHandle): any;
 }
 declare class EventEmitter {

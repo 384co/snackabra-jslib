@@ -182,6 +182,7 @@ export interface Message {
   serverTimestamp: number; // reconstructed from timestampPrefix
   eol?: number; // end of life (timestamp), if present
   _id: string;
+  previous?: string; // if present, hash of previous message from this sender
 }
 
 export function validate_Message(data: Message): Message {
@@ -308,6 +309,7 @@ export interface ChannelMessage {
   sts?: number, //  timestamp from server
   timestampPrefix?: string, // string/base4 encoding of timestamp (see timestampToBase4String)
   _id?: string, // channelId + '_' + subChannel + '_' + timestampPrefix
+  p?: string; // if present, hash of previous message from this sender
 
   // whatever is being sent; should (must) be stripped when sent. when
   // encrypted, this is packaged as payload first (signing is done on the
@@ -2130,22 +2132,22 @@ function Owner(target: any, propertyKey: string /* ClassGetterDecoratorContext *
   }
 }
 
-// Decorator
-// asserts any types that are SB classes are valid
-// we're not quite doing this yet. interfaces would be more important to handle in this manner,
-// however even with new (upcoming) additional type metadata for decorators, can't yet be done.
-function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecoratorContext */, descriptor?: PropertyDescriptor): any {
-  if ((descriptor) && (descriptor.value)) {
-    const operation = descriptor.value
-    descriptor.value = function (...args: any[]) {
-      for (let x of args) {
-        const m = x.constructor.name
-        if (isSBClass(m)) _sb_assert(SBValidateObject(x, m), `invalid parameter: ${x} (expecting ${m})`)
-      }
-      return operation.call(this, ...args)
-    }
-  }
-}
+// // Decorator
+// // asserts any types that are SB classes are valid
+// // we're not quite doing this yet. interfaces would be more important to handle in this manner,
+// // however even with new (upcoming) additional type metadata for decorators, can't yet be done.
+// function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecoratorContext */, descriptor?: PropertyDescriptor): any {
+//   if ((descriptor) && (descriptor.value)) {
+//     const operation = descriptor.value
+//     descriptor.value = function (...args: any[]) {
+//       for (let x of args) {
+//         const m = x.constructor.name
+//         if (isSBClass(m)) _sb_assert(SBValidateObject(x, m), `invalid parameter: ${x} (expecting ${m})`)
+//       }
+//       return operation.call(this, ...args)
+//     }
+//   }
+// }
 
 // // Decorator
 // // turns any exception into a reject
@@ -2166,33 +2168,32 @@ function VerifyParameters(_target: any, _propertyKey: string /* ClassMethodDecor
 //   }
 // }
 
-const SB_CLASS_ARRAY = ['SBMessage', 'SBObjectHandle', 'SBChannelHandle', 'ChannelApiBody'] as const
 
-type SB_CLASS_TYPES = typeof SB_CLASS_ARRAY[number]
-type SB_CLASSES = /* SBMessage | */ SBObjectHandle | SBChannelHandle
+// type SB_CLASS_TYPES = typeof SB_CLASS_ARRAY[number]
+// type SB_CLASSES = /* SBMessage | */ SBObjectHandle | SBChannelHandle
 
 const SB_CHANNEL_MESSAGE_SYMBOL = Symbol('SB_CHANNEL_MESSAGE_SYMBOL')
 const SB_CHANNEL_API_BODY_SYMBOL = Symbol('SB_CHANNEL_API_BODY_SYMBOL')
 const SB_CHANNEL_HANDLE_SYMBOL = Symbol('SBChannelHandle')
-const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage')
+// const SB_MESSAGE_SYMBOL = Symbol.for('SBMessage')
 const SB_OBJECT_HANDLE_SYMBOL = Symbol.for('SBObjectHandle')
 const SB_STORAGE_TOKEN_SYMBOL = Symbol.for('SBStorageToken')
 
-function isSBClass(s: SB_CLASSES): boolean {
-  return typeof s === 'string' && SB_CLASS_ARRAY.includes(s as SB_CLASS_TYPES)
-}
+// function isSBClass(s: SB_CLASSES): boolean {
+//   return typeof s === 'string' && SB_CLASS_ARRAY.includes(s as SB_CLASS_TYPES)
+// }
 
-function SBValidateObject(obj: SBChannelHandle, type: 'SBChannelHandle'): boolean
-function SBValidateObject(obj: SBObjectHandle, type: 'SBObjectHandle'): boolean
-// function SBValidateObject(obj: SBMessage, type: 'SBMessage'): boolean
-function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean {
-  switch (type) {
-    case 'SBMessage': return SB_MESSAGE_SYMBOL in obj
-    case 'SBObjectHandle': return SB_OBJECT_HANDLE_SYMBOL in obj
-    case 'SBChannelHandle': return SB_OBJECT_HANDLE_SYMBOL in obj
-    default: return false
-  }
-}
+// function SBValidateObject(obj: SBChannelHandle, type: 'SBChannelHandle'): boolean
+// function SBValidateObject(obj: SBObjectHandle, type: 'SBObjectHandle'): boolean
+// // function SBValidateObject(obj: SBMessage, type: 'SBMessage'): boolean
+// function SBValidateObject(obj: SB_CLASSES | any, type: SB_CLASS_TYPES): boolean {
+//   switch (type) {
+//     case 'SBMessage': return SB_MESSAGE_SYMBOL in obj
+//     case 'SBObjectHandle': return SB_OBJECT_HANDLE_SYMBOL in obj
+//     case 'SBChannelHandle': return SB_OBJECT_HANDLE_SYMBOL in obj
+//     default: return false
+//   }
+// }
 
 //#endregion
 
@@ -3058,6 +3059,9 @@ class Channel extends SBChannelKeys {
 
   // explicitly tracks if 'close' has been called
   isClosed = false
+
+  // ToDo: add support in channel server
+  previous: string | undefined = undefined // previous message hash
 
   /**
    * Channel supports creation from scratch, from a handle, or from a key.
@@ -4152,6 +4156,10 @@ class ChannelSocket extends Channel {
     _sb_assert(message.c && message.c instanceof ArrayBuffer, "[ChannelSocket] Internal Error (L3675)")
     const hash = await crypto.subtle.digest('SHA-256', message.c! as ArrayBuffer)
     const ack_id = arrayBufferToBase64url(hash)
+    // ToDo: track (chain) hashes of previous messages from same sender;
+    // also, bootstrap upon a reconnect what latest message hash was
+    if (this.previous) message.p = this.previous
+    this.previous = ack_id
     if (DBG) console.log("[ChannelSocket] Received message with hash:", ack_id)
     const r = this.#ack.get(ack_id)
     if (r) {
@@ -4276,7 +4284,7 @@ class ChannelSocket extends Channel {
     * Returns a promise that resolves to "success" when sent,
     * or an error message if it fails.
     */
-    async send(contents: any, options?: MessageOptions): Promise<string> {
+  async send(contents: any, options?: MessageOptions): Promise<string> {
     if (DBG2) console.log("++++ ChannelSocket.send() called ...")
     await this.ready
     _sb_assert(this.#ws && this.#ws.websocket, "[ChannelSocket.send()] called before ready")
@@ -4702,7 +4710,7 @@ export class StorageApi {
    * stored as a 'weakref', meaning, you can hang on to the handle as your
    * 'cache', and use ''getData()'' to safely retrieve the data.
    */
-  async fetchData(handle: SBObjectHandle) {
+  async fetchData(handle: SBObjectHandle): Promise<SBObjectHandle> {
     const h = validate_SBObjectHandle(handle) // throws if there's an issue
     if (DBG) console.log("fetchData(), handle:", h)
 
@@ -4740,9 +4748,11 @@ export class StorageApi {
 
   /**
    * Convenience wrapper for object handles: returns the data if it's present,
-   * returns null if it's not, and throws an error if the handle is invalid.
+   * returns undefined if it's not, and throws an error if the handle is invalid.
+   * Accepts 'undefined' for easier chaining.
    */
-  static getData(handle: SBObjectHandle): ArrayBuffer | undefined {
+  static getData(handle: SBObjectHandle | undefined): ArrayBuffer | undefined {
+    if (typeof handle === 'undefined') return undefined
     const h = validate_SBObjectHandle(handle)
     if (!h.data) return undefined
     if (h.data instanceof WeakRef) {
