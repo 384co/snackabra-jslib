@@ -45,7 +45,8 @@ export interface SBStorageToken {
 
 export function _check_SBStorageToken(data: SBStorageToken) {
   return (
-    data.hash && typeof data.hash === 'string' && data.hash.length > 0
+    Object.getPrototypeOf(data) === Object.prototype
+    && data.hash && typeof data.hash === 'string' && data.hash.length > 0
     && (!data.size || Number.isInteger(data.size) && data.size > 0)
     && (!data.motherChannel || typeof data.motherChannel === 'string')
     && (!data.created || Number.isInteger(data.created))
@@ -91,7 +92,8 @@ export interface SBChannelHandle {
 // returns true of false, does not throw
 export function _check_SBChannelHandle(data: SBChannelHandle) {
   return (
-    data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
+    Object.getPrototypeOf(data) === Object.prototype
+    && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
     && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
     && (!data.channelServer || typeof data.channelServer === 'string')
     && (!data.channelData || _check_SBChannelData(data.channelData))
@@ -125,7 +127,8 @@ export interface SBChannelData {
 
 export function _check_SBChannelData(data: SBChannelData) {
   return (
-    data.channelId && data.channelId.length === 43
+    Object.getPrototypeOf(data) === Object.prototype
+    && data.channelId && data.channelId.length === 43
     && data.ownerPublicKey && typeof data.ownerPublicKey === 'string' && data.ownerPublicKey.length > 0
     && (!data.storageToken || validate_SBStorageToken(data.storageToken))
   )
@@ -566,7 +569,8 @@ export interface SBObjectHandle {
 
 export function _check_SBObjectHandle(h: SBObjectHandle) {
   return (
-       (!h.version || h.version === currentSBOHVersion) // anything 'this' code sees needs to be v3
+    Object.getPrototypeOf(h) === Object.prototype
+    && (!h.version || h.version === currentSBOHVersion) // anything 'this' code sees needs to be v3
     && h.id && typeof h.id === 'string' && h.id.length === 43
     && (!h.key || (typeof h.key === 'string' && h.key.length === 43))
     && (!h.verification || typeof h.verification === 'string' || typeof h.verification === 'object')
@@ -5118,8 +5122,10 @@ class Snackabra extends EventEmitter {
       }
     } else {
       handle = handleOrKey as SBChannelHandle
+      if (!_check_SBChannelHandle(handle))
+        throw new SBError('[Snackabra.connect] Invalid parameter (not a channel handle)')
     }
-    _sb_assert(handle && handle.userPrivateKey, '[Snackabra.connect] Invalid parameter (at least need owner private key)')
+    _sb_assert(handle !== undefined && handle && handle.userPrivateKey, '[Snackabra.connect] Invalid parameter (at least need owner private key)')
     if (handle.channelServer && handle.channelServer !== this.#channelServer)
       throw new SBError(`[Snackabra.connect] channel server in handle ('${handle.channelServer}') does not match what SB was set up with ('${this.#channelServer}')`)
     if (!handle.channelServer) handle.channelServer = this.#channelServer

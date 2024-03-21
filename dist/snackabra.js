@@ -9,7 +9,8 @@ const version = '2.0.0-alpha.5 (build 093)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function _check_SBStorageToken(data) {
-    return (data.hash && typeof data.hash === 'string' && data.hash.length > 0
+    return (Object.getPrototypeOf(data) === Object.prototype
+        && data.hash && typeof data.hash === 'string' && data.hash.length > 0
         && (!data.size || Number.isInteger(data.size) && data.size > 0)
         && (!data.motherChannel || typeof data.motherChannel === 'string')
         && (!data.created || Number.isInteger(data.created))
@@ -32,7 +33,8 @@ export function validate_SBStorageToken(data) {
     }
 }
 export function _check_SBChannelHandle(data) {
-    return (data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
+    return (Object.getPrototypeOf(data) === Object.prototype
+        && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
         && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
         && (!data.channelServer || typeof data.channelServer === 'string')
         && (!data.channelData || _check_SBChannelData(data.channelData)));
@@ -52,7 +54,8 @@ export function validate_SBChannelHandle(data) {
     }
 }
 export function _check_SBChannelData(data) {
-    return (data.channelId && data.channelId.length === 43
+    return (Object.getPrototypeOf(data) === Object.prototype
+        && data.channelId && data.channelId.length === 43
         && data.ownerPublicKey && typeof data.ownerPublicKey === 'string' && data.ownerPublicKey.length > 0
         && (!data.storageToken || validate_SBStorageToken(data.storageToken)));
 }
@@ -217,7 +220,8 @@ if (typeof WeakRef === "undefined") {
     globalThis.WeakRef = PolyfillWeakRef;
 }
 export function _check_SBObjectHandle(h) {
-    return ((!h.version || h.version === currentSBOHVersion)
+    return (Object.getPrototypeOf(h) === Object.prototype
+        && (!h.version || h.version === currentSBOHVersion)
         && h.id && typeof h.id === 'string' && h.id.length === 43
         && (!h.key || (typeof h.key === 'string' && h.key.length === 43))
         && (!h.verification || typeof h.verification === 'string' || typeof h.verification === 'object')
@@ -3259,8 +3263,10 @@ class Snackabra extends EventEmitter {
         }
         else {
             handle = handleOrKey;
+            if (!_check_SBChannelHandle(handle))
+                throw new SBError('[Snackabra.connect] Invalid parameter (not a channel handle)');
         }
-        _sb_assert(handle && handle.userPrivateKey, '[Snackabra.connect] Invalid parameter (at least need owner private key)');
+        _sb_assert(handle !== undefined && handle && handle.userPrivateKey, '[Snackabra.connect] Invalid parameter (at least need owner private key)');
         if (handle.channelServer && handle.channelServer !== this.#channelServer)
             throw new SBError(`[Snackabra.connect] channel server in handle ('${handle.channelServer}') does not match what SB was set up with ('${this.#channelServer}')`);
         if (!handle.channelServer)
