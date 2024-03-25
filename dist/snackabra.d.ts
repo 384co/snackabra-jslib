@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 093)";
+declare const version = "2.0.0-alpha.5 (build 107)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -95,7 +95,7 @@ export interface EncryptParams {
     additionalData?: BufferSource;
     tagLength?: number;
 }
-declare function setDebugLevel(dbg1: boolean, dbg2?: boolean): void;
+declare function setDebugLevel(_dbg1: boolean, _dbg2?: boolean): void;
 export type MessageTtl = 0 | 3 | 4 | 5 | 6 | 7 | 8 | 15;
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];

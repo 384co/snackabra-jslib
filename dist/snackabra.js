@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 093)';
+const version = '2.0.0-alpha.5 (build 107)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function _check_SBStorageToken(data) {
@@ -176,29 +176,14 @@ export function stripChannelMessage(msg, serverMode = false) {
         ret.i2 = msg.i2;
     return ret;
 }
-var DBG = false;
-var DBG2 = false;
+if (typeof DBG === 'undefined')
+    globalThis.DBG = false;
+if (typeof DBG2 === 'undefined')
+    globalThis.DBG2 = false;
 var DBG0 = false;
 if (DBG0)
     console.log("++++ Setting DBG0 to TRUE ++++");
-if (globalThis.configuration && globalThis.configuration.DEBUG === true) {
-    DBG = true;
-    if (DBG)
-        console.warn("++++ Setting DBG to TRUE based on 'configuration.DEBUG' ++++");
-    if (globalThis.configuration.DEBUG2 === true) {
-        DBG2 = true;
-        if (DBG)
-            console.warn("++++ ALSO setting DBG2 (verbose) ++++");
-    }
-}
-function setDebugLevel(dbg1, dbg2) {
-    DBG = dbg1;
-    if (dbg2)
-        DBG2 = dbg1 && dbg2;
-    if (DBG)
-        console.warn("++++ [setDebugLevel]: setting DBG to TRUE ++++");
-    if (DBG2)
-        console.warn("++++ [setDebugLevel]: ALSO setting DBG2 to TRUE (verbose) ++++");
+function setDebugLevel(_dbg1, _dbg2) {
 }
 export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 14400, 129600, 864000, -1, -1, -1, -1, -1, Infinity];
 export const msgTtlToString = ['Ephemeral', '<reserved>', '<reserved>', 'One minute', 'Five minutes', 'Thirty minutes', 'Four hours', '36 hours', '10 days', '<reserved>', '<reserved>', '<reserved>', '<reserved>', '<reserved>', 'Permastore (no TTL)'];
@@ -3114,14 +3099,6 @@ class Snackabra extends EventEmitter {
             Snackabra.defaultChannelServer = channelServer;
         if (typeof options === 'boolean')
             options = { DEBUG: options };
-        if (options && options.DEBUG && options.DEBUG === true)
-            DBG = true;
-        if (options && DBG && options.DEBUG2 && options.DEBUG2 === true)
-            DBG2 = true;
-        if (DBG)
-            console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
-        if (DBG2)
-            console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
         if (options && options.sbFetch) {
             console.log("++++ Snackabra constructor: setting custom fetch function ++++");
             sbFetch = options.sbFetch;

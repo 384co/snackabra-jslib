@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 093)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 107)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -412,29 +412,39 @@ export interface EncryptParams {
   tagLength?: number;
 }
 
-// these are toggled/reset (globally) by ''new Snackabra(...)''
-// they will "stick" to whatever they were set to last
-var DBG = false;
-var DBG2 = false; // note, if this is true then DBG will be true too
+// ... testing moving this to build process
+declare var DBG: boolean;
+declare var DBG2: boolean;
+
+if (typeof DBG === 'undefined') (globalThis as any).DBG = false
+if (typeof DBG2 === 'undefined') (globalThis as any).DBG2 = false
+
+// // these are toggled/reset (globally) by ''new Snackabra(...)''
+// // they will "stick" to whatever they were set to last
+// var DBG = false;
+// var DBG2 = false; // note, if this is true then DBG will be true too
 
 var DBG0 = false // internal, set it to 'true' or 'DBG2'
 if (DBG0) console.log("++++ Setting DBG0 to TRUE ++++");
 
-// in addition, for convenience (such as in test suites) we 'pick up' configuration.DEBUG
-if ((globalThis as any).configuration && (globalThis as any).configuration.DEBUG === true) {
-  DBG = true
-  if (DBG) console.warn("++++ Setting DBG to TRUE based on 'configuration.DEBUG' ++++");
-  if ((globalThis as any).configuration.DEBUG2 === true) {
-    DBG2 = true
-    if (DBG) console.warn("++++ ALSO setting DBG2 (verbose) ++++");
-  }
-}
+// ... testing moving this to build process
+// // in addition, for convenience (such as in test suites) we 'pick up' configuration.DEBUG
+// if ((globalThis as any).configuration && (globalThis as any).configuration.DEBUG === true) {
+//   DBG = true
+//   if (DBG) console.warn("++++ Setting DBG to TRUE based on 'configuration.DEBUG' ++++");
+//   if ((globalThis as any).configuration.DEBUG2 === true) {
+//     DBG2 = true
+//     if (DBG) console.warn("++++ ALSO setting DBG2 (verbose) ++++");
+//   }
+// }
+
+// ... testing moving this to build process
 // ... and in some cases we need explit access to poke these
-function setDebugLevel(dbg1: boolean, dbg2?: boolean) {
-  DBG = dbg1
-  if (dbg2) DBG2 = dbg1 && dbg2
-  if (DBG) console.warn("++++ [setDebugLevel]: setting DBG to TRUE ++++");
-  if (DBG2) console.warn("++++ [setDebugLevel]: ALSO setting DBG2 to TRUE (verbose) ++++");
+function setDebugLevel(_dbg1: boolean, _dbg2?: boolean) {
+  // DBG = dbg1
+  // if (dbg2) DBG2 = dbg1 && dbg2
+  // if (DBG) console.warn("++++ [setDebugLevel]: setting DBG to TRUE ++++");
+  // if (DBG2) console.warn("++++ [setDebugLevel]: ALSO setting DBG2 to TRUE (verbose) ++++");
 }
 
 /**
@@ -4878,11 +4888,14 @@ class Snackabra extends EventEmitter {
       console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`)
     _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter')
     if (channelServer) Snackabra.defaultChannelServer = channelServer
+
     if (typeof options === 'boolean') options = { DEBUG: options }
-    if (options && options.DEBUG && options.DEBUG === true) DBG = true;
-    if (options && DBG && options.DEBUG2 && options.DEBUG2 === true) DBG2 = true;
-    if (DBG) console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
-    if (DBG2) console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
+
+    // testing with moving this to build process ... 
+    // if (options && options.DEBUG && options.DEBUG === true) DBG = true;
+    // if (options && DBG && options.DEBUG2 && options.DEBUG2 === true) DBG2 = true;
+    // if (DBG) console.warn("++++ Snackabra constructor: setting DBG to TRUE ++++");
+    // if (DBG2) console.warn("++++ Snackabra constructor: ALSO setting DBG2 to TRUE (verbose) ++++");
 
     // sets global setting for what network/fetch operation to use
     if (options && options.sbFetch) {
