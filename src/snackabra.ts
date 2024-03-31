@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 107)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 117)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -91,6 +91,7 @@ export interface SBChannelHandle {
 
 // returns true of false, does not throw
 export function _check_SBChannelHandle(data: SBChannelHandle) {
+  if (!data) return false
   return (
     Object.getPrototypeOf(data) === Object.prototype
     && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
@@ -516,65 +517,58 @@ if (typeof WeakRef === "undefined") {
 }
 
 /**
+ * This is the lowest-level format of shard information that's presented across
+ * an API. Internally, the storage server uses slightly different interfaces.
+ */
+export interface ShardInfo {
+  version?: SBObjectHandleVersions,
+  id: Base62Encoded, // strictly speaking, only id is needed
+  iv?: Uint8Array | Base62Encoded,
+  salt?: ArrayBuffer | Base62Encoded,
+  actualSize?: number, // actual size of underlying (packaged, padded, and encrypted) contents
+  verification?: Promise<string> | string,
+  data?: WeakRef<ArrayBuffer> | ArrayBuffer, // if present, the raw data (packaged, encrypted)
+}
+
+/**
  * SBObjectHandle
  *
- * SBObjectHandle is a string that encodes the object type, object id, and
- * object key. It is used to retrieve objects from the storage server.
- *
- * - version is a single character string that indicates the version of the
- *   object handle. Currently, the following versions are supported:
- *
- *   - '1' : version 1 (legacy)
- *   - '2' : version 2 (legacy)
- *   - '3' : version 3 (current)
+ * SBObjectHandle encodes necessary information for a shard, as well as some
+ * conveniences for making contents available after it's loaded.
  *
  * - id is a 43 character base62 string that identifies the object. It is used
  *   to retrieve the object from the storage server.
  *
+ * - version is a single character string that indicates the version of the
+ *   object handle. '1' and '2' are legacy, '3' is current.
  * - key is a 43 character base62
  *
  * - verification is a random (server specific) string that is used to verify
  *   that you're allowed to access the object (specifically, that somebody,
  *   perhaps you, has paid for the object).
  *
- * - iv and salt are optional and not tracked by shard servers etc, but
- *   facilitates app usage. During a period of time (the 'privacy window') you
- *   can request these from the storage server. After that window they get
- *   re-randomized, and if you didn't keep the values (for example, you received
- *   an object but didn't do anything with it), then they're gone.
- * 
- * - storageServer is optional, if provided it'll be asked first
+ * - iv and salt are optional, but provide some safeguards. Object server
+ *   will provide these for an object.
  *
  */
-export interface SBObjectHandle {
+export interface SBObjectHandle extends ShardInfo {
   [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
+  key?: Base62Encoded, // decryption key
+  storageServer?: string, // if present, clarifies where to get it (or where it was found)
+  payload?: any // if present, decrypted and extracted data
 
-  // strictly speaking, only 'id' is required
-  id: Base62Encoded,
+  // for some backwards compatibility, and means something different in jslib
+  // than in storage server. slowly being deprecated.
+  type?: string, 
 
-  verification?: Promise<string> | string,
-
-  version?: SBObjectHandleVersions,
-
-  key?: Base62Encoded,
-  iv?: Uint8Array | Base62Encoded,
-  salt?: ArrayBuffer | Base62Encoded,
-
-  storageServer?: string,
-
-  data?: WeakRef<ArrayBuffer> | ArrayBuffer, // if present, the actual data
-  payload?: any // if present, for convenience a spot for extractPayload(rawData).payload
-
-  // various additional properties are optional. note that core SB lib does not
-  // have a concept of a 'file'
-  fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
-  dateAndTime?: string, // time of shard creation
-  fileType?: string, // file type (mime)
-  lastModified?: number, // last modified time (of underlying file, if any)
-  actualSize?: number, // actual size of underlying file, if any
-  savedSize?: number, // size of shard (may be different from actualSize)
-  type?: string, // for some backwards compatibility, no longer used
-
+  // UPDATE: jslib has no 'file' concept, refactoring this out
+  // // various additional properties are optional. note that core SB lib does not
+  // // have a concept of a 'file'
+  // fileName?: string, // by convention will be "PAYLOAD" if it's a set of objects
+  // dateAndTime?: string, // time of shard creation
+  // fileType?: string, // file type (mime)
+  // lastModified?: number, // last modified time (of underlying file, if any)
+  // savedSize?: number, // size of shard (may be different from actualSize)
 }
 
 export function _check_SBObjectHandle(h: SBObjectHandle) {
@@ -593,13 +587,6 @@ export function validate_SBObjectHandle(h: SBObjectHandle) {
   if (!h) throw new SBError(`invalid SBObjectHandle (null or undefined)`)
   else if (h[SB_OBJECT_HANDLE_SYMBOL]) return h as SBObjectHandle
   else if (_check_SBObjectHandle(h)) {
-  //      (!h.version || h.version === '3') // anything 'this' code sees needs to be v3
-  //   && h.id && typeof h.id === 'string' && h.id.length === 43
-  //   && (!h.key || (typeof h.key === 'string' && h.key.length === 43))
-  //   && (!h.verification || typeof h.verification === 'string' || typeof h.verification === 'object')
-  //   && (!h.iv || typeof h.iv === 'string' || h.iv instanceof Uint8Array)
-  //   && (!h.salt || typeof h.salt === 'string' || h.salt instanceof ArrayBuffer)
-  // ) {
     return { ...h, [SB_OBJECT_HANDLE_SYMBOL]: true } as SBObjectHandle
   } else {
     if (DBG) console.error('invalid SBObjectHandle ... trying to ingest:\n', h)
@@ -619,7 +606,6 @@ export async function stringify_SBObjectHandle(h: SBObjectHandle) {
   return validate_SBObjectHandle(h)
 }
 
-
 // These are 256 bit hash identifiers (43 x base62)
 // (see SB384.hash for details)
 export type SB384Hash = string
@@ -638,7 +624,6 @@ type jwkStruct = {
   ySign: 0 | 1;
   d?: string
 }
-
 
 /**
  * 'MessageHistory' is where Messages go to retire. It's an infinitely-scaleable
@@ -1111,12 +1096,18 @@ function _sb_assert(val: unknown, msg: string) {
 }
 
 /**
- * Appends two buffers and returns a new buffer
+ * Appends an array of buffers and returns a new buffer
  */
-function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | ArrayBuffer): ArrayBuffer {
-  const tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
-  tmp.set(new Uint8Array(buffer1), 0);
-  tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
+function _appendBuffers(buffers: (Uint8Array | ArrayBuffer)[]): ArrayBuffer {
+  let totalLength = 0;
+  for (const buffer of buffers)
+    totalLength += buffer.byteLength;
+  const tmp = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const buffer of buffers) {
+    tmp.set(new Uint8Array(buffer), offset);
+    offset += buffer.byteLength;
+  }
   return tmp.buffer;
 }
 
@@ -1136,12 +1127,11 @@ function _appendBuffer(buffer1: Uint8Array | ArrayBuffer, buffer2: Uint8Array | 
  *   are 'deprecated' unless configured for a specific environment (e.g.,
  *   browser or Deno).
  *
- * Phew. In our case, since we're not processing large amounts of base64 data
- * (which btoa() and atob() are not well-suited for anyway), we choose to
- * implement our own base64 encoding/decoding functions for simplicity and
- * consistent cross-environment functionality. And since our only real use case
- * is JWK, we only implement the base64url variant. For all other
- * binary-in-text-form situations, we use base62.
+ * Since we're not processing large amounts of base64 data (for which btoa() and
+ * atob() are not well-suited anyway), we choose to implement our own base64
+ * encoding/decoding functions for simplicity and consistent cross-environment
+ * functionality. Our only real real need for this format is JWK, hence we only
+ * implement the base64url variant. For our own use cases, we use base62.
  */
 
 export const base64url = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -1278,10 +1268,6 @@ export function base64ToBase62(s: string): Base62Encoded {
 //#region Base32mi
 
 // duplicate code from 384lib (strongpin version 0.8)
-
-// parts of strongpin is patented pending by 384, inc. permission to use is granted
-// in conjunction with jslib in GPL-3.0-only context, and not for any other use,
-// as set out in more detail in the LICENSE file in the root of this repository.
 
 const base62mi = "0123456789ADMRTxQjrEywcLBdHpNufk" // "v05.05" (strongpinVersion ^0.6.0)
 const base62Regex = new RegExp(`[${base62mi}.concat(' ')]`); // lenient, allows spaces
@@ -1497,10 +1483,12 @@ function _assemblePayload(data: any): ArrayBuffer | null {
     // console.log(`[assemblePayload] JSON.stringify:\n`, JSON.stringify(metadata))
     const metadataBuffer = new TextEncoder().encode(JSON.stringify(metadata));
     const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
-    let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
-    for (let i = 0; i < BufferList.length; i++) {
-      payload = _appendBuffer(new Uint8Array(payload), BufferList[i]);
-    }
+    
+    // let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
+    // for (let i = 0; i < BufferList.length; i++) {
+    //   payload = _appendBuffer(new Uint8Array(payload), BufferList[i]);
+    // }
+    let payload = _appendBuffers([metadataSize.buffer, metadataBuffer, ...BufferList]);
 
     return payload;
   } catch (e) {
@@ -1517,7 +1505,7 @@ export function assemblePayload(data: any): ArrayBuffer | null {
   if (DBG && data instanceof ArrayBuffer) console.warn('[assemblePayload] Warning: data is already an ArrayBuffer, make sure you are not double-encoding');
   const mainPayload = _assemblePayload({ ver003: true, payload: data })
   if (!mainPayload) return null;
-  return _appendBuffer(new Uint8Array([0xAA, 0xBB, 0xBB, 0xAA]), mainPayload);
+  return _appendBuffers([new Uint8Array([0xAA, 0xBB, 0xBB, 0xAA]), mainPayload]);
 }
 
 function deserializeValue(buffer: ArrayBuffer, type: string): any {
@@ -1895,8 +1883,6 @@ export class SBCrypto {  /******************************************************
       }
     })
   }
-
-
 
   /**
    * SBCrypto.generatekeys()
@@ -2433,7 +2419,7 @@ class SB384 {
         }
 
         // can't put in getter since it's async
-        const channelBytes = _appendBuffer(base64ToArrayBuffer(this.#x!), base64ToArrayBuffer(this.#y!))
+        const channelBytes = _appendBuffers([base64ToArrayBuffer(this.#x!), base64ToArrayBuffer(this.#y!)])
         const rawHash = await crypto.subtle.digest('SHA-256', channelBytes)
         this.#hash = arrayBufferToBase62(rawHash)
 
@@ -2618,6 +2604,11 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
   constructor(passphrase: string, keyInfo: Protocol_KeyInfo) {
     this.#keyInfo = keyInfo; // todo: assert components
     this.#masterKey = this.initializeMasterKey(passphrase);
+  }
+
+  async ready () {
+    // only really needed for unit tests, that don't like to have dangling promises
+    await this.#masterKey
   }
 
   setChannel(_channel: Channel): void {
@@ -2860,10 +2851,10 @@ export class SBChannelKeys extends SB384 {
     const view = new DataView(viewBuf);
     view.setFloat64(0, timestamp);
     const pathAsArrayBuffer = new TextEncoder().encode(path).buffer
-    const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer)
+    const prefixBuf = _appendBuffers([viewBuf, pathAsArrayBuffer])
     const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload)! : undefined
     // sign with userId key, covering timestamp + path + apiPayload
-    const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf)
+    const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffers([prefixBuf, apiPayloadBuf]) : prefixBuf)
     const apiBody: ChannelApiBody = {
       channelId: this.#channelId!,
       path: path,
@@ -3059,7 +3050,7 @@ interface EnqueuedMessage {
 class Channel extends SBChannelKeys {
   channelReady: Promise<Channel>
   static ReadyFlag = Symbol('ChannelReadyFlag'); // see below for '(this as any)[Channel.ReadyFlag] = false;'
-  locked?: boolean = false // TODO: need to make sure we're tracking whenever this has changed
+  locked?: boolean = false // ToDo: need to make sure we're tracking whenever this has changed
   // #cursor: string = ''; // last (oldest) message key seen
 
   static defaultProtocol: SBProtocol = new Protocol_ECDH() // default
@@ -3931,7 +3922,7 @@ class ChannelSocket extends Channel {
     //       if (DBG2) console.log("[ChannelSocket] we are closed, removing interval")
     //       clearInterval(pingTimer)
     //     } else {
-    //       if (DBG) console.warn("[SBChannelStream.startSocket] Failed to send 'ping' message:", e)
+    //       if (DBG) console.warn("[ChannelStream.startSocket] Failed to send 'ping' message:", e)
     //       this.errorState = true;
     //     }
     //   }
@@ -4444,7 +4435,7 @@ class ChannelSocket extends Channel {
 // 'Shard' object is the format returned by storage server; this code
 // 'paraphrases' code in the storage server. it is essentially a variation
 // of SBObjectHandle, but (much) more restrictive.
-export interface Shard {
+interface Shard {
   version: '3',
   id: Base62Encoded,
   iv: Uint8Array,
@@ -4538,7 +4529,7 @@ export class StorageApi {
     else if ((dataSize + 4) < 1048576) _target = 2 ** Math.ceil(Math.log2(dataSize + 4)) // in between
     else _target = (Math.ceil((dataSize + 4) / 1048576)) * 1048576 // largest size
     // append the padding buffer
-    let finalArray = _appendBuffer(buf, (new Uint8Array(_target - dataSize)).buffer);
+    let finalArray = _appendBuffers([buf, (new Uint8Array(_target - dataSize)).buffer]);
     // set the (original) size in the last 4 bytes
     (new DataView(finalArray)).setUint32(_target - 4, dataSize)
     if (DBG2) console.log("padBuf bytes:", finalArray.slice(-4));
@@ -4589,6 +4580,25 @@ export class StorageApi {
     });
   }
 
+  /** derives final object ID */
+  static async getObjectId(iv: Uint8Array, salt: ArrayBuffer, encryptedData: ArrayBuffer): Promise<string> {
+    if (DBG2) console.log(
+      SEP,
+      "getObjectId()",
+      SEP, iv,
+      SEP, salt,
+      SEP, encryptedData,
+      SEP
+    )
+    const id = await crypto.subtle.digest('SHA-256',
+      _appendBuffers([
+        iv,
+        salt,
+        encryptedData
+      ]))
+    return arrayBufferToBase62(id)
+  }
+
   /**
    * Store 'contents' as a shard, returns an object handle. Note that 'contents' can be
    * anything, and is always packaged as a payload before storing.
@@ -4601,25 +4611,22 @@ export class StorageApi {
       const buf = assemblePayload(contents)!
       if (!buf) throw new SBError("[storeData] failed to assemble payload")
 
-      const bufSize = (buf as ArrayBuffer).byteLength // before padding
+      // const bufSize = (buf as ArrayBuffer).byteLength // before padding
       const paddedBuf = StorageApi.padBuf(buf)
       const fullHash = await sbCrypto.generateIdKey(paddedBuf)
 
       // 'phase 1': get salt and iv from storage server for this object
       const storageServer = await this.getStorageServer()
-      const requestQuery = storageServer + '/api/v2/storeRequest?id=' + arrayBufferToBase62(fullHash.idBinary)
-      const keyInfo = await SBApiFetch(requestQuery)
+      const idForKeyLookup = arrayBufferToBase62(fullHash.idBinary)
+      const requestQuery = storageServer + '/api/v2/storeRequest?id=' + idForKeyLookup
+      const keyInfo = await SBApiFetch(requestQuery) as { salt: ArrayBuffer, iv: Uint8Array }
       if (!keyInfo.salt || !keyInfo.iv)
         throw new SBError('[storeData] Failed to get key info (salt, nonce) from storage server')
 
-      const id = arrayBufferToBase62(fullHash.idBinary)
-
       const key = await StorageApi.getObjectKey(fullHash.keyMaterial, keyInfo.salt)
       const encryptedData = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv })
-
+      
       let storageToken: SBStorageToken
-      // const channel = channelOrHandle instanceof Channel ? channelOrHandle : new Channel(channelOrHandle)
-      // const storageToken = await channel.getStorageToken(encryptedData.byteLength)
       if (budgetSource instanceof Channel) {
         storageToken = await budgetSource.getStorageToken(encryptedData.byteLength)
       } else if (_check_SBChannelHandle(budgetSource as SBChannelHandle)) {
@@ -4629,6 +4636,9 @@ export class StorageApi {
       } else {
         throw new SBError("[storeData] invalid budget source (needs to be a channel, channel handle, or storage token)")
       }
+
+      // 'phase 1B': object id is created by hashing the encryptedData with the iv and salt
+      const id = await StorageApi.getObjectId(keyInfo.iv, keyInfo.salt, encryptedData)
 
       // 'phase 2': we store the object
       const storeQuery = storageServer + '/api/v2/storeData?id=' + id
@@ -4657,7 +4667,7 @@ export class StorageApi {
         key: arrayBufferToBase62(fullHash.keyMaterial),
         iv: keyInfo.iv,
         salt: keyInfo.salt,
-        actualSize: bufSize,
+        // actualSize: bufSize,
         verification: result.verification,
         storageServer: storageServer,
       }
@@ -4672,17 +4682,18 @@ export class StorageApi {
 
   // a wrapper: any failure conditions (exceptions) returns 'null', facilitates
   // trying different servers
-  async #_fetchData(useServer: string, url: string, h: SBObjectHandle): Promise<SBObjectHandle | null> {
+  async #_fetchData(useServer: string, url: string, h: SBObjectHandle): Promise<{ hash: string, handle: SBObjectHandle } | undefined> {
     try {
-      let shard: Shard = await SBApiFetch(useServer + url, { method: 'GET' })
-      shard = validate_Shard(shard)
+      let shard = validate_Shard(await SBApiFetch(useServer + url, { method: 'GET' }) as Shard)
+
+      // todo: technically this isn't necessary, since we now distinguish data from payload
       _sb_assert(h.key, "object handle 'key' is missing, cannot decrypt")
 
       // we merge shard info into our handle
       h.iv = shard.iv
       h.salt = shard.salt
       h.data = new WeakRef(shard.data)
-      h.actualSize = shard.actualSize
+      // h.actualSize = shard.actualSize
 
       if (DBG2) console.log("fetchData(), handle (and data) at this point:", h, shard.data)
 
@@ -4692,19 +4703,26 @@ export class StorageApi {
       const decryptedData = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: h.iv }, decryptionKey, shard.data)
       const buf = this.#unpadData(decryptedData)
       if (DBG2) console.log("shard.data (decrypted and unpadded):", buf)
+      // hashes are on the inner binary data (eg decrypted but not extracted)
+      const hash = arrayBufferToBase62(await window.crypto.subtle.digest('SHA-256', buf)).slice(0, 12);
       h.payload = extractPayload(buf).payload
       h.data = new WeakRef(shard.data) // once we've gotten the payload, we keep ref but we're chill about it
-      return (h)
+      return ({ hash: hash, handle: h })
     } catch (error) {
       if (DBG) console.log(`fetchData(): trying to get object on '${useServer}' failed: '${error}'`)
-      return (null)
+      return (undefined)
     }
   }
 
   /**
-   * This assumes you have a complete SBObjectHandle. Note that if you only have
-   * the 'id' and 'verification' fields, you can reconstruct / request the rest.
-   * The current interface will return both nonce, salt, and encrypted data.
+   * Fetches the data for a given object handle. Result will be referenced by
+   * the 'payload' property in the returned handle. This is the main 'read'
+   * workhorse.
+   *
+   * This will work if you have sufficient information in the passed
+   * SBObjectHandle. fetchData() will flesh out everything it can, and throw if
+   * it's not able to. It will return the same handle, with whatever additional
+   * parts it was able to fill in.
    *
    * Not that fetchData will prioritize checking with the storageServer in the
    * handle, if present. Next, it will always check localhost at port 3841 if a
@@ -4716,13 +4734,15 @@ export class StorageApi {
    * (default: 'arrayBuffer')
    * @returns Promise<ArrayBuffer | string> - the shard data
    *
-   * Note that this returns a handle, which is the same handle but might be
-   * updated (for example iv, salt filled in). Server will be updated with
-   * whatever server 'worked', etc.
+   * Note that 'storageServer' in the returned object might have changed, it
+   * will be whichever server fetchData() was able to fetch from (so could be
+   * local mirror for example, so be a bit careful with overwriting the original
+   * handle that was used).
    *
-   * The returned shard contents is referenced by 'data' in the handle. It's
-   * stored as a 'weakref', meaning, you can hang on to the handle as your
-   * 'cache', and use ''getData()'' to safely retrieve the data.
+   * The contents of the shard are decrypted and extracted into 'payload', and
+   * 'data' will contain the raw data prior to decryption and extraction, in
+   * case callee is interested. Note that to avoid unnecessary duplication of
+   * space, it is stored as a 'weakref' - use getData() to safely retrieve.
    */
   async fetchData(handle: SBObjectHandle): Promise<SBObjectHandle> {
     const h = validate_SBObjectHandle(handle) // throws if there's an issue
@@ -4749,10 +4769,12 @@ export class StorageApi {
       if (DBG) console.log('\n', SEP, "fetchData(), trying server: ", server, '\n', SEP)
       const queryString = '/api/v2/fetchData?id=' + h.id + '&verification=' + verification
       const result = await this.#_fetchData(server, queryString, h)
-      if (result !== null) {
+      if (result) {
+        const { hash, handle } = result
         if (DBG) console.log(`[fetchData] success: fetched from '${server}'`, result)
-        result.storageServer = server // store the one that worked
-        return (result)
+        handle.storageServer = server // store the one that worked
+        Snackabra.knownShards.set(hash, handle);
+        return (handle)
       }
     }
     // if these servers don't work, we throw an error
@@ -4761,9 +4783,10 @@ export class StorageApi {
 
 
   /**
-   * Convenience wrapper for object handles: returns the data if it's present,
-   * returns undefined if it's not, and throws an error if the handle is invalid.
-   * Accepts 'undefined' for easier chaining.
+   * Convenience wrapper for object handles: returns the 'data' if it's present,
+   * returns undefined if it's not, and throws an error if the handle is
+   * invalid. Accepts 'undefined' for easier chaining. Note that this is a
+   * low-level operation, you probably want to use fetchPayload() instead.
    */
   static getData(handle: SBObjectHandle | undefined): ArrayBuffer | undefined {
     if (typeof handle === 'undefined') return undefined
@@ -4781,14 +4804,26 @@ export class StorageApi {
   }
 
   /**
-   * Convenience wrapper for object handles: returns the payload.
+   * Convenience wrapper for object handles: returns the payload (eg contents of
+   * the shard). It can parse out if the payload is already present. If not, it
+   * will fetch the data and extract the payload.
+   *
+   * Note: this cannot take an undefined parameter, since it cannot return
+   * 'undefined' as a non-throwing response (because 'undefined' by itself is a
+   * permitted shard content).
+   *
+   * For the same reason, we can't have a non-throwing 'getPayload()' method,
+   * that would be analogous to 'getData()'. 
    */
-  static getPayload(handle: SBObjectHandle): any {
-    const h = validate_SBObjectHandle(handle)
-    if (h.payload) return h.payload
-    const data = StorageApi.getData(h)
-    if (!data) throw new SBError('[getPayload] no data or payload in handle, use fetchData()')
-    return extractPayload(data).payload
+  async fetchPayload(h: SBObjectHandle): Promise<any> {
+    if (!h) throw new SBError('[fetchPayload] No handle provided (cannot accept null or undefined)')
+    if (!h.payload && !h.data)
+      h = await this.fetchData(h)
+    if (h.payload)
+      return h.payload
+    if (h.data)
+      return StorageApi.getData(h)
+    throw new SBError('[fetchPayload] Failed to fetch data or payload')
   }
 
 } /* class StorageApi */
@@ -4849,6 +4884,14 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends EventEmitter {
+
+  // buffers (eg file contents) are tracked in two places, and any given one
+  // should not be in both:
+
+  // these are known shards that we've seen and know the handle for; this is
+  // global. hashed on decrypted (but not extracted) contents 
+  public static knownShards: Map<string, SBObjectHandle> = new Map();
+
   #channelServer: string
   #storage: StorageApi
   #version = version

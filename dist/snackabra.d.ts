@@ -1,4 +1,4 @@
-declare const version = "2.0.0-alpha.5 (build 107)";
+declare const version = "2.0.0-alpha.5 (build 117)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -100,23 +100,20 @@ export type MessageTtl = 0 | 3 | 4 | 5 | 6 | 7 | 8 | 15;
 export declare const msgTtlToSeconds: number[];
 export declare const msgTtlToString: string[];
 export type SBObjectHandleVersions = '1' | '2' | '3';
-export interface SBObjectHandle {
-    [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
-    id: Base62Encoded;
-    verification?: Promise<string> | string;
+export interface ShardInfo {
     version?: SBObjectHandleVersions;
-    key?: Base62Encoded;
+    id: Base62Encoded;
     iv?: Uint8Array | Base62Encoded;
     salt?: ArrayBuffer | Base62Encoded;
-    storageServer?: string;
-    data?: WeakRef<ArrayBuffer> | ArrayBuffer;
-    payload?: any;
-    fileName?: string;
-    dateAndTime?: string;
-    fileType?: string;
-    lastModified?: number;
     actualSize?: number;
-    savedSize?: number;
+    verification?: Promise<string> | string;
+    data?: WeakRef<ArrayBuffer> | ArrayBuffer;
+}
+export interface SBObjectHandle extends ShardInfo {
+    [SB_OBJECT_HANDLE_SYMBOL]?: boolean;
+    key?: Base62Encoded;
+    storageServer?: string;
+    payload?: any;
     type?: string;
 }
 export declare function _check_SBObjectHandle(h: SBObjectHandle): boolean;
@@ -266,6 +263,7 @@ export interface Protocol_KeyInfo {
 export declare class Protocol_AES_GCM_256 implements SBProtocol {
     #private;
     constructor(passphrase: string, keyInfo: Protocol_KeyInfo);
+    ready(): Promise<void>;
     setChannel(_channel: Channel): void;
     initializeMasterKey(passphrase: string): Promise<CryptoKey>;
     static genKey(): Promise<Protocol_KeyInfo>;
@@ -400,24 +398,17 @@ declare class ChannelSocket extends Channel {
     reset(): void;
     close(): Promise<void>;
 }
-export interface Shard {
-    version: '3';
-    id: Base62Encoded;
-    iv: Uint8Array;
-    salt: ArrayBuffer;
-    actualSize: number;
-    data: ArrayBuffer;
-}
 export declare class StorageApi {
     #private;
     constructor(stringOrPromise: Promise<string> | string);
     getStorageServer(): Promise<string>;
     static padBuf(buf: ArrayBuffer): ArrayBuffer;
     static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey>;
+    static getObjectId(iv: Uint8Array, salt: ArrayBuffer, encryptedData: ArrayBuffer): Promise<string>;
     storeData(contents: any, budgetSource: SBChannelHandle | Channel | SBStorageToken): Promise<SBObjectHandle>;
     fetchData(handle: SBObjectHandle): Promise<SBObjectHandle>;
     static getData(handle: SBObjectHandle | undefined): ArrayBuffer | undefined;
-    static getPayload(handle: SBObjectHandle): any;
+    fetchPayload(h: SBObjectHandle): Promise<any>;
 }
 declare class EventEmitter {
     private static events;
@@ -428,6 +419,7 @@ declare class EventEmitter {
 type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 declare class Snackabra extends EventEmitter {
     #private;
+    static knownShards: Map<string, SBObjectHandle>;
     static lastTimeStamp: number;
     static activeFetches: Map<symbol, AbortController>;
     static isShutdown: boolean;

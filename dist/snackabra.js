@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 107)';
+const version = '2.0.0-alpha.5 (build 117)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function _check_SBStorageToken(data) {
@@ -33,6 +33,8 @@ export function validate_SBStorageToken(data) {
     }
 }
 export function _check_SBChannelHandle(data) {
+    if (!data)
+        return false;
     return (Object.getPrototypeOf(data) === Object.prototype
         && data.userPrivateKey && typeof data.userPrivateKey === 'string' && data.userPrivateKey.length > 0
         && (!data.channelId || (typeof data.channelId === 'string' && data.channelId.length === 43))
@@ -582,10 +584,16 @@ function _sb_assert(val, msg) {
         throw new SBError(m);
     }
 }
-function _appendBuffer(buffer1, buffer2) {
-    const tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
-    tmp.set(new Uint8Array(buffer1), 0);
-    tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
+function _appendBuffers(buffers) {
+    let totalLength = 0;
+    for (const buffer of buffers)
+        totalLength += buffer.byteLength;
+    const tmp = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const buffer of buffers) {
+        tmp.set(new Uint8Array(buffer), offset);
+        offset += buffer.byteLength;
+    }
     return tmp.buffer;
 }
 export const base64url = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -871,10 +879,7 @@ function _assemblePayload(data) {
         }
         const metadataBuffer = new TextEncoder().encode(JSON.stringify(metadata));
         const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
-        let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
-        for (let i = 0; i < BufferList.length; i++) {
-            payload = _appendBuffer(new Uint8Array(payload), BufferList[i]);
-        }
+        let payload = _appendBuffers([metadataSize.buffer, metadataBuffer, ...BufferList]);
         return payload;
     }
     catch (e) {
@@ -888,7 +893,7 @@ export function assemblePayload(data) {
     const mainPayload = _assemblePayload({ ver003: true, payload: data });
     if (!mainPayload)
         return null;
-    return _appendBuffer(new Uint8Array([0xAA, 0xBB, 0xBB, 0xAA]), mainPayload);
+    return _appendBuffers([new Uint8Array([0xAA, 0xBB, 0xBB, 0xAA]), mainPayload]);
 }
 function deserializeValue(buffer, type) {
     switch (type) {
@@ -1442,7 +1447,7 @@ class SB384 {
                         namedCurve: "P-384",
                     }, true, ['verify']);
                 }
-                const channelBytes = _appendBuffer(base64ToArrayBuffer(this.#x), base64ToArrayBuffer(this.#y));
+                const channelBytes = _appendBuffers([base64ToArrayBuffer(this.#x), base64ToArrayBuffer(this.#y)]);
                 const rawHash = await crypto.subtle.digest('SHA-256', channelBytes);
                 this.#hash = arrayBufferToBase62(rawHash);
                 const hashBigInt = BigInt('0x' + Array.from(new Uint8Array(rawHash)).map(b => b.toString(16).padStart(2, '0')).join('')) >> 28n;
@@ -1575,6 +1580,9 @@ export class Protocol_AES_GCM_256 {
     constructor(passphrase, keyInfo) {
         this.#keyInfo = keyInfo;
         this.#masterKey = this.initializeMasterKey(passphrase);
+    }
+    async ready() {
+        await this.#masterKey;
     }
     setChannel(_channel) {
     }
@@ -1757,9 +1765,9 @@ export class SBChannelKeys extends SB384 {
         const view = new DataView(viewBuf);
         view.setFloat64(0, timestamp);
         const pathAsArrayBuffer = new TextEncoder().encode(path).buffer;
-        const prefixBuf = _appendBuffer(viewBuf, pathAsArrayBuffer);
+        const prefixBuf = _appendBuffers([viewBuf, pathAsArrayBuffer]);
         const apiPayloadBuf = apiPayload ? assemblePayload(apiPayload) : undefined;
-        const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffer(prefixBuf, apiPayloadBuf) : prefixBuf);
+        const sign = await sbCrypto.sign(this.signKey, apiPayloadBuf ? _appendBuffers([prefixBuf, apiPayloadBuf]) : prefixBuf);
         const apiBody = {
             channelId: this.#channelId,
             path: path,
@@ -2863,7 +2871,7 @@ export class StorageApi {
             _target = 2 ** Math.ceil(Math.log2(dataSize + 4));
         else
             _target = (Math.ceil((dataSize + 4) / 1048576)) * 1048576;
-        let finalArray = _appendBuffer(buf, (new Uint8Array(_target - dataSize)).buffer);
+        let finalArray = _appendBuffers([buf, (new Uint8Array(_target - dataSize)).buffer]);
         (new DataView(finalArray)).setUint32(_target - 4, dataSize);
         if (DBG2)
             console.log("padBuf bytes:", finalArray.slice(-4));
@@ -2903,20 +2911,29 @@ export class StorageApi {
             }
         });
     }
+    static async getObjectId(iv, salt, encryptedData) {
+        if (DBG2)
+            console.log(SEP, "getObjectId()", SEP, iv, SEP, salt, SEP, encryptedData, SEP);
+        const id = await crypto.subtle.digest('SHA-256', _appendBuffers([
+            iv,
+            salt,
+            encryptedData
+        ]));
+        return arrayBufferToBase62(id);
+    }
     async storeData(contents, budgetSource) {
         try {
             const buf = assemblePayload(contents);
             if (!buf)
                 throw new SBError("[storeData] failed to assemble payload");
-            const bufSize = buf.byteLength;
             const paddedBuf = _b.padBuf(buf);
             const fullHash = await sbCrypto.generateIdKey(paddedBuf);
             const storageServer = await this.getStorageServer();
-            const requestQuery = storageServer + '/api/v2/storeRequest?id=' + arrayBufferToBase62(fullHash.idBinary);
+            const idForKeyLookup = arrayBufferToBase62(fullHash.idBinary);
+            const requestQuery = storageServer + '/api/v2/storeRequest?id=' + idForKeyLookup;
             const keyInfo = await SBApiFetch(requestQuery);
             if (!keyInfo.salt || !keyInfo.iv)
                 throw new SBError('[storeData] Failed to get key info (salt, nonce) from storage server');
-            const id = arrayBufferToBase62(fullHash.idBinary);
             const key = await _b.getObjectKey(fullHash.keyMaterial, keyInfo.salt);
             const encryptedData = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv });
             let storageToken;
@@ -2932,6 +2949,7 @@ export class StorageApi {
             else {
                 throw new SBError("[storeData] invalid budget source (needs to be a channel, channel handle, or storage token)");
             }
+            const id = await _b.getObjectId(keyInfo.iv, keyInfo.salt, encryptedData);
             const storeQuery = storageServer + '/api/v2/storeData?id=' + id;
             const init = {
                 method: 'POST',
@@ -2955,7 +2973,6 @@ export class StorageApi {
                 key: arrayBufferToBase62(fullHash.keyMaterial),
                 iv: keyInfo.iv,
                 salt: keyInfo.salt,
-                actualSize: bufSize,
                 verification: result.verification,
                 storageServer: storageServer,
             };
@@ -2972,13 +2989,11 @@ export class StorageApi {
     }
     async #_fetchData(useServer, url, h) {
         try {
-            let shard = await SBApiFetch(useServer + url, { method: 'GET' });
-            shard = validate_Shard(shard);
+            let shard = validate_Shard(await SBApiFetch(useServer + url, { method: 'GET' }));
             _sb_assert(h.key, "object handle 'key' is missing, cannot decrypt");
             h.iv = shard.iv;
             h.salt = shard.salt;
             h.data = new WeakRef(shard.data);
-            h.actualSize = shard.actualSize;
             if (DBG2)
                 console.log("fetchData(), handle (and data) at this point:", h, shard.data);
             const h_key = base62ToArrayBuffer(h.key);
@@ -2987,14 +3002,15 @@ export class StorageApi {
             const buf = this.#unpadData(decryptedData);
             if (DBG2)
                 console.log("shard.data (decrypted and unpadded):", buf);
+            const hash = arrayBufferToBase62(await window.crypto.subtle.digest('SHA-256', buf)).slice(0, 12);
             h.payload = extractPayload(buf).payload;
             h.data = new WeakRef(shard.data);
-            return (h);
+            return ({ hash: hash, handle: h });
         }
         catch (error) {
             if (DBG)
                 console.log(`fetchData(): trying to get object on '${useServer}' failed: '${error}'`);
-            return (null);
+            return (undefined);
         }
     }
     async fetchData(handle) {
@@ -3014,11 +3030,13 @@ export class StorageApi {
                 console.log('\n', SEP, "fetchData(), trying server: ", server, '\n', SEP);
             const queryString = '/api/v2/fetchData?id=' + h.id + '&verification=' + verification;
             const result = await this.#_fetchData(server, queryString, h);
-            if (result !== null) {
+            if (result) {
+                const { hash, handle } = result;
                 if (DBG)
                     console.log(`[fetchData] success: fetched from '${server}'`, result);
-                result.storageServer = server;
-                return (result);
+                handle.storageServer = server;
+                Snackabra.knownShards.set(hash, handle);
+                return (handle);
             }
         }
         throw new SBError(`[fetchData] failed to fetch from any server`);
@@ -3043,14 +3061,16 @@ export class StorageApi {
             throw new SBError('Invalid data type in handle');
         }
     }
-    static getPayload(handle) {
-        const h = validate_SBObjectHandle(handle);
+    async fetchPayload(h) {
+        if (!h)
+            throw new SBError('[fetchPayload] No handle provided (cannot accept null or undefined)');
+        if (!h.payload && !h.data)
+            h = await this.fetchData(h);
         if (h.payload)
             return h.payload;
-        const data = _b.getData(h);
-        if (!data)
-            throw new SBError('[getPayload] no data or payload in handle, use fetchData()');
-        return extractPayload(data).payload;
+        if (h.data)
+            return _b.getData(h);
+        throw new SBError('[fetchPayload] Failed to fetch data or payload');
     }
 }
 _b = StorageApi;
@@ -3079,6 +3099,7 @@ class EventEmitter {
     }
 }
 class Snackabra extends EventEmitter {
+    static knownShards = new Map();
     #channelServer;
     #storage;
     #version = version;
