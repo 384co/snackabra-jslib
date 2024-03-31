@@ -182,7 +182,7 @@ if (typeof DBG === 'undefined')
     globalThis.DBG = false;
 if (typeof DBG2 === 'undefined')
     globalThis.DBG2 = false;
-var DBG0 = false;
+var DBG0 = true;
 if (DBG0)
     console.log("++++ Setting DBG0 to TRUE ++++");
 function setDebugLevel(_dbg1, _dbg2) {
@@ -1950,8 +1950,13 @@ class Channel extends SBChannelKeys {
         const ret = new Map();
         for (const [k, v] of msgMap) {
             const msg = await this.extractMessage(v);
-            if (msg)
+            if (msg) {
                 ret.set(k, msg);
+            }
+            else {
+                if (DBG0)
+                    console.warn("[extractMessageMap] - message not valid, skipping:", k, v);
+            }
         }
         return ret;
     }
@@ -3017,8 +3022,6 @@ export class StorageApi {
         const h = validate_SBObjectHandle(handle);
         if (DBG)
             console.log("fetchData(), handle:", h);
-        if (h.data && h.data instanceof WeakRef && h.data.deref())
-            return (h);
         const verification = await h.verification;
         const server1 = h.storageServer ? h.storageServer : null;
         const server2 = 'http://localhost:3841';

@@ -413,19 +413,14 @@ export interface EncryptParams {
   tagLength?: number;
 }
 
-// ... testing moving this to build process
+// these are typically set in the build process
 declare var DBG: boolean;
 declare var DBG2: boolean;
 
 if (typeof DBG === 'undefined') (globalThis as any).DBG = false
 if (typeof DBG2 === 'undefined') (globalThis as any).DBG2 = false
 
-// // these are toggled/reset (globally) by ''new Snackabra(...)''
-// // they will "stick" to whatever they were set to last
-// var DBG = false;
-// var DBG2 = false; // note, if this is true then DBG will be true too
-
-var DBG0 = false // internal, set it to 'true' or 'DBG2'
+var DBG0 = true // internal, set it to 'true' or 'DBG2'
 if (DBG0) console.log("++++ Setting DBG0 to TRUE ++++");
 
 // ... testing moving this to build process
@@ -3212,7 +3207,12 @@ class Channel extends SBChannelKeys {
     const ret = new Map<string, Message>()
     for (const [k, v] of msgMap) {
       const msg = await this.extractMessage(v)
-      if (msg) ret.set(k, msg)
+      if (msg) {
+        ret.set(k, msg)
+      } else {
+        if (DBG0) console.warn("[extractMessageMap] - message not valid, skipping:", k, v)
+      
+      }
     }
     return ret
   }
@@ -4681,7 +4681,8 @@ export class StorageApi {
   }
 
   // a wrapper: any failure conditions (exceptions) returns 'null', facilitates
-  // trying different servers
+  // trying different servers. gets shard contents from server, and decrypts it.
+  // populates handle. returns hash (of decrypted contents) and updated handle.
   async #_fetchData(useServer: string, url: string, h: SBObjectHandle): Promise<{ hash: string, handle: SBObjectHandle } | undefined> {
     try {
       let shard = validate_Shard(await SBApiFetch(useServer + url, { method: 'GET' }) as Shard)
@@ -4743,13 +4744,16 @@ export class StorageApi {
    * 'data' will contain the raw data prior to decryption and extraction, in
    * case callee is interested. Note that to avoid unnecessary duplication of
    * space, it is stored as a 'weakref' - use getData() to safely retrieve.
+   * 
+   * Note that as a side effect, Snackabra.knownShards is updated.
    */
   async fetchData(handle: SBObjectHandle): Promise<SBObjectHandle> {
     const h = validate_SBObjectHandle(handle) // throws if there's an issue
     if (DBG) console.log("fetchData(), handle:", h)
 
-    // we might be 'caching' as a weakref
-    if (h.data && h.data instanceof WeakRef && h.data.deref()) return (h); // the ref is still good
+    // ... not correct
+    // // we might be 'caching' as a weakref
+    // if (h.data && h.data instanceof WeakRef && h.data.deref()) return (h); // the ref is still good
 
     // Note: we don't use any local storage as a cache, since the shards
     // already have a 'namespace' for caching in the browser (regular network
