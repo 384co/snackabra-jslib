@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 117)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 118)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types

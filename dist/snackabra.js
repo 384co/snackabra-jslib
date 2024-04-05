@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 117)';
+const version = '2.0.0-alpha.5 (build 118)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function _check_SBStorageToken(data) {
