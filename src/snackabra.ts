@@ -20,7 +20,7 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 118)' // working on 2.0.0 release
+const version = '2.0.0-alpha.5 (build 121)' // working on 2.0.0 release
 
 /******************************************************************************************************/
 //#region Interfaces - Types
@@ -526,7 +526,7 @@ export interface ShardInfo {
 }
 
 /**
- * SBObjectHandle
+ * SBObjectHandle  (extends ShardInfo)
  *
  * SBObjectHandle encodes necessary information for a shard, as well as some
  * conveniences for making contents available after it's loaded.
@@ -550,6 +550,8 @@ export interface SBObjectHandle extends ShardInfo {
   [SB_OBJECT_HANDLE_SYMBOL]?: boolean,
   key?: Base62Encoded, // decryption key
   storageServer?: string, // if present, clarifies where to get it (or where it was found)
+
+  // ToDo: might want to transition to weakref
   payload?: any // if present, decrypted and extracted data
 
   // for some backwards compatibility, and means something different in jslib
@@ -1396,8 +1398,12 @@ function _assemblePayload(data: any): ArrayBuffer | null {
             BufferList.push(payload);
             break;
           case 'j': // JSON
-            const jsonValue = new TextEncoder().encode(JSON.stringify(value));
-            BufferList.push(jsonValue.buffer);
+            // const jsonValue = new TextEncoder().encode(JSON.stringify(value));
+            // 20240408 update: actually, it's the same as 'o' except we first call toJSON
+            // BufferList.push(jsonValue.buffer);
+            const toJSONvalue = _assemblePayload(value.toJSON(""));
+            if (!toJSONvalue) throw new SBError(`Failed to process toJSON for ${key}`);
+            BufferList.push(toJSONvalue);
             break;
           case 'n': // Number
             const numberValue = new Uint8Array(8);
@@ -1508,8 +1514,15 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
     case 'o':
       return _extractPayload(buffer);
     case 'j': // JSON
-      return jsonParseWrapper(new TextDecoder().decode(buffer), "L1322");
-    case 'n': // Number
+      // if it can be extracted as a JSON, then it was stored by JSON.stringify
+      try {
+        return JSON.parse(new TextDecoder().decode(buffer));
+      } catch (e) {
+        // otherwise treat it as 'o'
+        return _extractPayload(buffer);
+      }
+      // return jsonParseWrapper(new TextDecoder().decode(buffer), "L1322");
+      case 'n': // Number
       return new DataView(buffer).getFloat64(0);
     case 'i': // Integer (32 bit signed)
       return new DataView(buffer).getInt32(0);
@@ -4889,11 +4902,8 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
  */
 class Snackabra extends EventEmitter {
 
-  // buffers (eg file contents) are tracked in two places, and any given one
-  // should not be in both:
-
   // these are known shards that we've seen and know the handle for; this is
-  // global. hashed on decrypted (but not extracted) contents 
+  // global. hashed on decrypted (but not extracted) contents.
   public static knownShards: Map<string, SBObjectHandle> = new Map();
 
   #channelServer: string

@@ -5,7 +5,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 118)';
+const version = '2.0.0-alpha.5 (build 121)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function _check_SBStorageToken(data) {
@@ -796,8 +796,10 @@ function _assemblePayload(data) {
                         BufferList.push(payload);
                         break;
                     case 'j':
-                        const jsonValue = new TextEncoder().encode(JSON.stringify(value));
-                        BufferList.push(jsonValue.buffer);
+                        const toJSONvalue = _assemblePayload(value.toJSON(""));
+                        if (!toJSONvalue)
+                            throw new SBError(`Failed to process toJSON for ${key}`);
+                        BufferList.push(toJSONvalue);
                         break;
                     case 'n':
                         const numberValue = new Uint8Array(8);
@@ -900,7 +902,12 @@ function deserializeValue(buffer, type) {
         case 'o':
             return _extractPayload(buffer);
         case 'j':
-            return jsonParseWrapper(new TextDecoder().decode(buffer), "L1322");
+            try {
+                return JSON.parse(new TextDecoder().decode(buffer));
+            }
+            catch (e) {
+                return _extractPayload(buffer);
+            }
         case 'n':
             return new DataView(buffer).getFloat64(0);
         case 'i':
