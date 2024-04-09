@@ -20,8 +20,6 @@
 
 */
 
-const version = '2.0.0-alpha.5 (build 121)' // working on 2.0.0 release
-
 /******************************************************************************************************/
 //#region Interfaces - Types
 
@@ -4761,6 +4759,8 @@ export class StorageApi {
    * Note that as a side effect, Snackabra.knownShards is updated.
    */
   async fetchData(handle: SBObjectHandle): Promise<SBObjectHandle> {
+    if (!handle)
+      throw new SBError('[fetchData] No handle provided (cannot accept null or undefined)')
     const h = validate_SBObjectHandle(handle) // throws if there's an issue
     if (DBG) console.log("fetchData(), handle:", h)
 
@@ -4902,13 +4902,14 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
  */
 class Snackabra extends EventEmitter {
 
+  public static version = "3.20240408.0"
+
   // these are known shards that we've seen and know the handle for; this is
   // global. hashed on decrypted (but not extracted) contents.
   public static knownShards: Map<string, SBObjectHandle> = new Map();
 
   #channelServer: string
   #storage: StorageApi
-  #version = version
   #channelServerInfo: any // caches whatever last server info we got
 
   // globally paces operations, and assures unique timestamps
@@ -4942,7 +4943,7 @@ class Snackabra extends EventEmitter {
     | boolean
     ) {
       super()
-      console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`)
+      console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} ====`)
     _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter')
     if (channelServer) Snackabra.defaultChannelServer = channelServer
 
@@ -5235,7 +5236,7 @@ class Snackabra extends EventEmitter {
   get crypto(): SBCrypto { return sbCrypto; }
 
   /** Returns version of jslib */
-  get version(): string { return this.#version; }
+  get version(): string { return Snackabra.version; }
 
 } /* class Snackabra */
 
@@ -5249,7 +5250,6 @@ export {
   base64ToArrayBuffer,
   arrayBufferToBase62,
   base62ToArrayBuffer,
-  version,
   setDebugLevel,
 };
 
@@ -5264,7 +5264,6 @@ export var SB = {
   arrayBufferToBase62: arrayBufferToBase62,
   base62ToArrayBuffer: base62ToArrayBuffer,
   sbCrypto: sbCrypto,
-  version: version,
   setDebugLevel: setDebugLevel,
 };
 

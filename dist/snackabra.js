@@ -5,7 +5,6 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 var _a, _b;
-const version = '2.0.0-alpha.5 (build 121)';
 export const NEW_CHANNEL_MINIMUM_BUDGET = 8 * 1024 * 1024;
 export const SBStorageTokenPrefix = 'LM2r';
 export function _check_SBStorageToken(data) {
@@ -3026,6 +3025,8 @@ export class StorageApi {
         }
     }
     async fetchData(handle) {
+        if (!handle)
+            throw new SBError('[fetchData] No handle provided (cannot accept null or undefined)');
         const h = validate_SBObjectHandle(handle);
         if (DBG)
             console.log("fetchData(), handle:", h);
@@ -3109,10 +3110,10 @@ class EventEmitter {
     }
 }
 class Snackabra extends EventEmitter {
+    static version = "3.20240408.0";
     static knownShards = new Map();
     #channelServer;
     #storage;
-    #version = version;
     #channelServerInfo;
     static lastTimeStamp = 0;
     static activeFetches = new Map();
@@ -3124,7 +3125,7 @@ class Snackabra extends EventEmitter {
     static defaultChannelServer = 'http://localhost:3845';
     constructor(channelServer, options) {
         super();
-        console.warn(`==== CREATING Snackabra object generation: ${this.#version} ====`);
+        console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} ====`);
         _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter');
         if (channelServer)
             Snackabra.defaultChannelServer = channelServer;
@@ -3302,7 +3303,7 @@ class Snackabra extends EventEmitter {
     get storage() { return this.#storage; }
     async getStorageServer() { return this.#storage.getStorageServer(); }
     get crypto() { return sbCrypto; }
-    get version() { return this.#version; }
+    get version() { return Snackabra.version; }
 }
 __decorate([
     Memoize
@@ -3310,7 +3311,7 @@ __decorate([
 __decorate([
     Memoize
 ], Snackabra.prototype, "getStorageServer", null);
-export { SB384, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
+export { SB384, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, setDebugLevel, };
 export var SB = {
     Snackabra: Snackabra,
     Channel: Channel,
@@ -3321,7 +3322,6 @@ export var SB = {
     arrayBufferToBase62: arrayBufferToBase62,
     base62ToArrayBuffer: base62ToArrayBuffer,
     sbCrypto: sbCrypto,
-    version: version,
     setDebugLevel: setDebugLevel,
 };
 if (!globalThis.SB)

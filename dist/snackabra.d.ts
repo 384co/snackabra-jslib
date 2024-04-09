@@ -1,4 +1,3 @@
-declare const version = "2.0.0-alpha.5 (build 121)";
 export declare const NEW_CHANNEL_MINIMUM_BUDGET: number;
 export declare const SBStorageTokenPrefix = "LM2r";
 export interface SBStorageToken {
@@ -419,6 +418,7 @@ declare class EventEmitter {
 type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 declare class Snackabra extends EventEmitter {
     #private;
+    static version: string;
     static knownShards: Map<string, SBObjectHandle>;
     static lastTimeStamp: number;
     static activeFetches: Map<symbol, AbortController>;
@@ -448,7 +448,7 @@ declare class Snackabra extends EventEmitter {
     get crypto(): SBCrypto;
     get version(): string;
 }
-export { SB384, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, version, setDebugLevel, };
+export { SB384, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, setDebugLevel, };
 export declare var SB: {
     Snackabra: typeof Snackabra;
     Channel: typeof Channel;
@@ -459,7 +459,6 @@ export declare var SB: {
     arrayBufferToBase62: typeof arrayBufferToBase62;
     base62ToArrayBuffer: typeof base62ToArrayBuffer;
     sbCrypto: SBCrypto;
-    version: string;
     setDebugLevel: typeof setDebugLevel;
 };
 //# sourceMappingURL=snackabra.d.ts.map
