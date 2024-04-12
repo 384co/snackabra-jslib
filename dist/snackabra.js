@@ -181,7 +181,7 @@ if (typeof DBG === 'undefined')
     globalThis.DBG = false;
 if (typeof DBG2 === 'undefined')
     globalThis.DBG2 = false;
-var DBG0 = true;
+var DBG0 = DBG2;
 if (DBG0)
     console.log("++++ Setting DBG0 to TRUE ++++");
 function setDebugLevel(_dbg1, _dbg2) {

@@ -418,7 +418,7 @@ declare var DBG2: boolean;
 if (typeof DBG === 'undefined') (globalThis as any).DBG = false
 if (typeof DBG2 === 'undefined') (globalThis as any).DBG2 = false
 
-var DBG0 = true // internal, set it to 'true' or 'DBG2'
+var DBG0 = DBG2 // internal, set it to 'true' or 'DBG2'
 if (DBG0) console.log("++++ Setting DBG0 to TRUE ++++");
 
 // ... testing moving this to build process
