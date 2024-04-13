@@ -114,6 +114,7 @@ export interface SBObjectHandle extends ShardInfo {
     storageServer?: string;
     payload?: any;
     type?: string;
+    hash?: string;
 }
 export declare function _check_SBObjectHandle(h: SBObjectHandle): boolean;
 export declare function validate_SBObjectHandle(h: SBObjectHandle): SBObjectHandle;

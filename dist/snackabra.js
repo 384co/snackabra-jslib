@@ -2937,6 +2937,7 @@ export class StorageApi {
             const buf = assemblePayload(contents);
             if (!buf)
                 throw new SBError("[storeData] failed to assemble payload");
+            const hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', buf)).slice(0, 12);
             const paddedBuf = _b.padBuf(buf);
             const fullHash = await sbCrypto.generateIdKey(paddedBuf);
             const storageServer = await this.getStorageServer();
@@ -2984,6 +2985,7 @@ export class StorageApi {
                 key: arrayBufferToBase62(fullHash.keyMaterial),
                 iv: keyInfo.iv,
                 salt: keyInfo.salt,
+                hash: hash,
                 verification: result.verification,
                 storageServer: storageServer,
             };
@@ -3013,7 +3015,9 @@ export class StorageApi {
             const buf = this.#unpadData(decryptedData);
             if (DBG2)
                 console.log("shard.data (decrypted and unpadded):", buf);
-            const hash = arrayBufferToBase62(await window.crypto.subtle.digest('SHA-256', buf)).slice(0, 12);
+            const hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', buf)).slice(0, 12);
+            if (h.hash && h.hash !== hash)
+                console.error("[fetchData] Hash mismatch in object, internal error (L4730) but ignored");
             h.payload = extractPayload(buf).payload;
             h.data = new WeakRef(shard.data);
             return ({ hash: hash, handle: h });

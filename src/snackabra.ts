@@ -542,6 +542,13 @@ export interface ShardInfo {
  *
  * - iv and salt are optional, but provide some safeguards. Object server
  *   will provide these for an object.
+ * 
+ * - hash can be slightly confusing: it hashes the packaged (but not encrypted,
+ *   nor padded) contents. It needs to hash the packaged contents since 'payload'
+ *   can be any object, and the hashing needs to operate against an array buffer.
+ *   If the object per se is an arraybuffer (eg a chunk of a large file), then
+ *   it will nevertheless be hashed in the 'payload' format. This is the hash
+ *   that the global 'Snackabra.knownShards' uses as index.
  *
  */
 export interface SBObjectHandle extends ShardInfo {
@@ -554,7 +561,9 @@ export interface SBObjectHandle extends ShardInfo {
 
   // for some backwards compatibility, and means something different in jslib
   // than in storage server. slowly being deprecated.
-  type?: string, 
+  type?: string,
+
+  hash?: string, // hash of the object (hashed in payload format)
 
   // UPDATE: jslib has no 'file' concept, refactoring this out
   // // various additional properties are optional. note that core SB lib does not
@@ -4617,10 +4626,11 @@ export class StorageApi {
   async storeData(
     contents: any,
     budgetSource: SBChannelHandle | Channel | SBStorageToken
-  ) {
+  ): Promise<SBObjectHandle> {
     try {
       const buf = assemblePayload(contents)!
       if (!buf) throw new SBError("[storeData] failed to assemble payload")
+      const hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', buf)).slice(0, 12);
 
       // const bufSize = (buf as ArrayBuffer).byteLength // before padding
       const paddedBuf = StorageApi.padBuf(buf)
@@ -4679,6 +4689,7 @@ export class StorageApi {
         iv: keyInfo.iv,
         salt: keyInfo.salt,
         // actualSize: bufSize,
+        hash: hash,
         verification: result.verification,
         storageServer: storageServer,
       }
@@ -4691,9 +4702,10 @@ export class StorageApi {
     }
   }
 
-  // a wrapper: any failure conditions (exceptions) returns 'null', facilitates
-  // trying different servers. gets shard contents from server, and decrypts it.
+  // gets shard contents from server, and decrypts it.
   // populates handle. returns hash (of decrypted contents) and updated handle.
+  // a wrapper: any failure conditions (exceptions) returns 'null', facilitates
+  // trying different servers. 
   async #_fetchData(useServer: string, url: string, h: SBObjectHandle): Promise<{ hash: string, handle: SBObjectHandle } | undefined> {
     try {
       let shard = validate_Shard(await SBApiFetch(useServer + url, { method: 'GET' }) as Shard)
@@ -4716,7 +4728,10 @@ export class StorageApi {
       const buf = this.#unpadData(decryptedData)
       if (DBG2) console.log("shard.data (decrypted and unpadded):", buf)
       // hashes are on the inner binary data (eg decrypted but not extracted)
-      const hash = arrayBufferToBase62(await window.crypto.subtle.digest('SHA-256', buf)).slice(0, 12);
+      const hash = arrayBufferToBase62(await crypto.subtle.digest('SHA-256', buf)).slice(0, 12);
+      if (h.hash && h.hash !== hash)
+        // if they differ, we ignore, and use the one we just calculated
+        console.error("[fetchData] Hash mismatch in object, internal error (L4730) but ignored")
       h.payload = extractPayload(buf).payload
       h.data = new WeakRef(shard.data) // once we've gotten the payload, we keep ref but we're chill about it
       return ({ hash: hash, handle: h })
