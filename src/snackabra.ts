@@ -3478,6 +3478,8 @@ class Channel extends SBChannelKeys {
       if (DBG) console.log("getMessageKeys\n", keys)
       if(!keys || keys.size === 0)
         console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?")
+      if (keys.size > 600)
+        console.warn(SEP, "[Channel.getMessageKeys] Warning: more than 600 messages requested (will soon need 'deep history' support)", SEP)
       resolve({ keys, historyShard })
     });
   }
@@ -3486,6 +3488,7 @@ class Channel extends SBChannelKeys {
   getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>> {
     if (DBG) console.log("[getRawMessageMap] called with messageKeys:", messageKeys)
     if (messageKeys.size === 0) throw new SBError("[getRawMessageMap] no message keys provided")
+    if (messageKeys.size > 100) throw new SBError("[getRawMessageMap] too many messages requested at once (max 100)")
     return new Promise(async (resolve, _reject) => {
       await this.channelReady
       _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)")
