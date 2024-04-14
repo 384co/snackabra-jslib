@@ -2160,6 +2160,8 @@ class Channel extends SBChannelKeys {
         });
     }
     getMessageMap(messageKeys) {
+        if (messageKeys.size > 100)
+            throw new SBError("[getMessageMap] too many message keys provided (max 100)");
         if (DBG)
             console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys);
         if (messageKeys.size === 0)
@@ -2865,14 +2867,25 @@ function validate_Shard(s) {
 }
 export class StorageApi {
     #storageServer;
+    #offline = false;
     constructor(stringOrPromise) {
-        this.#storageServer = Promise.resolve(stringOrPromise).then((s) => {
+        this.#storageServer = Promise.resolve(stringOrPromise)
+            .then((s) => {
             const storageServer = s;
             _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)');
             return storageServer;
+        })
+            .catch((e) => {
+            console.error("[StorageApi] failed to initialize:", e);
+            this.#offline = true;
+            return "<OFFLINE>";
         });
     }
-    async getStorageServer() { return this.#storageServer; }
+    async getStorageServer() {
+        if (this.#offline)
+            throw new SBError("[StorageApi] offline");
+        return this.#storageServer;
+    }
     static padBuf(buf) {
         const dataSize = buf.byteLength;
         let _target;
@@ -3089,9 +3102,6 @@ export class StorageApi {
     }
 }
 _b = StorageApi;
-__decorate([
-    Memoize
-], StorageApi.prototype, "getStorageServer", null);
 class EventEmitter {
     static events = {};
     static on(eventName, listener) {

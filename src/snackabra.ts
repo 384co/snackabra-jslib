@@ -751,6 +751,7 @@ export class MessageBus {
 }
 //#endregion - MessageBus
 
+
 /******************************************************************************************************/
 //#region - Message Queue
 export class MessageQueue<T> {
@@ -3499,6 +3500,7 @@ class Channel extends SBChannelKeys {
    * Main function for getting a chunk of messages from the server.
    */
   getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>> {
+    if (messageKeys.size > 100) throw new SBError("[getMessageMap] too many message keys provided (max 100)")
     if (DBG) console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys)
     if (messageKeys.size === 0) throw new SBError("[getMessageMap] no message keys provided")
     return new Promise(async (resolve, _reject) => {
@@ -4525,17 +4527,27 @@ function validate_Shard(s: Shard): Shard {
  */
 export class StorageApi {
   #storageServer: Promise<string>;
+  #offline: boolean = false;
   // we use a promise so that asynchronicity can be handled interally in StorageApi,
   // eg so users don't have to do things like ''(await SB.storage).fetchObject(...)''
   constructor(stringOrPromise: Promise<string> | string) {
-    this.#storageServer = Promise.resolve(stringOrPromise).then((s) => {
-      const storageServer = s
-      _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)')
-      return storageServer
-    })
+    this.#storageServer = Promise.resolve(stringOrPromise)
+      .then((s) => {
+        const storageServer = s
+        _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)')
+        return storageServer
+      })
+      .catch((e) => {
+        console.error("[StorageApi] failed to initialize:", e);
+        this.#offline = true;
+        return "<OFFLINE>"
+      });
   }
 
-  @Memoize async getStorageServer(): Promise<string> { return this.#storageServer }
+  async getStorageServer(): Promise<string> {
+    if (this.#offline) throw new SBError("[StorageApi] offline")
+    return this.#storageServer
+  }
 
   /**
    * Pads object up to closest permitted size boundaries;
@@ -4978,48 +4990,47 @@ class Snackabra extends EventEmitter {
 
     this.#channelServer = channelServer // conceptually, you can have multiple channel servers
     // (eventually) fetch storage server name from channel server; StorageApi knows how to handle this
+
     this.#storage = new StorageApi(new Promise((resolve, reject) => {
 
-        //   sbFetch(this.#channelServer + '/api/v2/info')
-        //     .then((response: Response) => {
-        //       if (!response.ok) { reject('response from channel server was not OK') }
+      //   sbFetch(this.#channelServer + '/api/v2/info')
+      //     .then((response: Response) => {
+      //       if (!response.ok) { reject('response from channel server was not OK') }
 
-        //       return response.json()
-        //     })
-        //     .then((data) => {
-        //       if (data.error) reject(`fetching storage server name failed: ${data.error}`)
-        //       else {
-        //         this.#channelServerInfo = data
-        //         if (DBG) console.log("Channel server info:", this.#channelServerInfo)
-        //       }
-        //       _sb_assert(data.storageServer, 'Channel server did not provide storage server name, cannot initialize')
-        //       resolve(data.storageServer)
-        //     })
-        //     .catch((error: Error) => {
-        //       if (!Snackabra.isShutdown) {
-        //         console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
-        //         reject(error)
-        //       }
-        //     });
+      //       return response.json()
+      //     })
+      //     .then((data) => {
+      //       if (data.error) reject(`fetching storage server name failed: ${data.error}`)
+      //       else {
+      //         this.#channelServerInfo = data
+      //         if (DBG) console.log("Channel server info:", this.#channelServerInfo)
+      //       }
+      //       _sb_assert(data.storageServer, 'Channel server did not provide storage server name, cannot initialize')
+      //       resolve(data.storageServer)
+      //     })
+      //     .catch((error: Error) => {
+      //       if (!Snackabra.isShutdown) {
+      //         console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
+      //         reject(error)
+      //       }
+      //     });
 
-        // let's refactor the above to use 'SBApiFetch' instead
-        if (DBG) console.log(`++++ Snackabra constructor: fetching storage server name from '${this.#channelServer + '/api/v2/info'}' ++++`)
-        SBApiFetch(this.#channelServer + '/api/v2/info')
-          .then((retValue) => {
-            if (DBG) console.log("Channel server info:", retValue)
-            _sb_assert(retValue.storageServer, 'Channel server did not provide storage server name, cannot initialize')
-            this.#channelServerInfo = retValue
-            if (DBG) console.log("Channel server info:", this.#channelServerInfo)
-            resolve(retValue.storageServer)
-          })
-          .catch((error: Error) => {
-            if (!Snackabra.isShutdown) {
-              console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
-              reject(error)
-            }
-          });
-
-
+      // let's refactor the above to use 'SBApiFetch' instead
+      if (DBG) console.log(`++++ Snackabra constructor: fetching storage server name from '${this.#channelServer + '/api/v2/info'}' ++++`)
+      SBApiFetch(this.#channelServer + '/api/v2/info')
+        .then((retValue) => {
+          if (DBG) console.log("Channel server info:", retValue)
+          _sb_assert(retValue.storageServer, 'Channel server did not provide storage server name, cannot initialize')
+          this.#channelServerInfo = retValue
+          if (DBG) console.log("Channel server info:", this.#channelServerInfo)
+          resolve(retValue.storageServer)
+        })
+        .catch((error: Error) => {
+          if (!Snackabra.isShutdown) {
+            console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
+            reject(error)
+          }
+        });
     }));
   
   }
