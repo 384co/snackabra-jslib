@@ -3106,28 +3106,40 @@ export class StorageApi {
     }
 }
 _b = StorageApi;
-class EventEmitter {
-    static events = {};
+export class SBEventTarget {
+    static listeners = {};
+    static addEventListener(type, callback, _options) {
+        SBEventTarget.listeners[type] = SBEventTarget.listeners[type] || [];
+        SBEventTarget.listeners[type].push(callback);
+    }
+    static removeEventListener(type, callback, _options) {
+        if (!SBEventTarget.listeners[type])
+            return;
+        const stack = SBEventTarget.listeners[type];
+        const index = stack.indexOf(callback);
+        if (index > -1) {
+            stack.splice(index, 1);
+        }
+    }
+    static dispatchEvent(event) {
+        const listeners = SBEventTarget.listeners[event.type];
+        if (!listeners)
+            return true;
+        listeners.forEach(listener => listener(event));
+        return !event.defaultPrevented;
+    }
     static on(eventName, listener) {
-        if (!this.events[eventName])
-            this.events[eventName] = [];
-        this.events[eventName].push(listener);
+        this.addEventListener(eventName, listener);
     }
     static off(eventName, listener) {
-        if (!this.events[eventName])
-            return;
-        const index = this.events[eventName].indexOf(listener);
-        if (index > -1)
-            this.events[eventName].splice(index, 1);
+        this.removeEventListener(eventName, listener);
     }
     static emit(eventName, ...args) {
-        const listeners = this.events[eventName];
-        if (!listeners || listeners.length === 0)
-            return;
-        listeners.forEach(listener => listener(...args));
+        const event = new CustomEvent(eventName, { detail: args.length === 1 ? args[0] : args });
+        SBEventTarget.dispatchEvent(event);
     }
 }
-class Snackabra extends EventEmitter {
+class Snackabra extends SBEventTarget {
     static version = "3.20240408.0";
     static knownShards = new Map();
     #channelServer;
@@ -3141,6 +3153,7 @@ class Snackabra extends EventEmitter {
     static #latestPing = Date.now();
     static onlineStatus = 'unknown';
     static defaultChannelServer = 'http://localhost:3845';
+    eventTarget = new SBEventTarget();
     constructor(channelServer, options) {
         super();
         console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} ====`);

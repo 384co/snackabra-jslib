@@ -1017,9 +1017,9 @@ export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): 
       // const json = await response.json()
       const text = await response.text()
       let msg = '[SBApiFetch] Server responded with error\n'
-      if (response.status) msg     += `  Status code: ('${response.status}')\n`
+      if (response.status) msg += `  Status code: ('${response.status}')\n`
       if (response.statusText) msg += `  Status text: ('${response.statusText}')\n`
-      if (text) msg +=          `  Error msg:   ('${text}')\n`
+      if (text) msg += `  Error msg:   ('${text}')\n`
       if (DBG) console.log(msg)
       throw new SBError(msg)
     }
@@ -1028,7 +1028,7 @@ export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): 
     var retValue: any
     if (!contentType)
       throw new SBError("[SBApiFetch] No content header in server response");
-    
+
     if (contentType.indexOf("application/json") !== -1) {
       const json = await response.json()
       if (DBG2) console.log(`[SBApiFetch] json ('${json}'):\n`, json)
@@ -1043,7 +1043,7 @@ export async function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): 
     } else {
       throw new SBError(`[SBApiFetch] Server responded with unknown content-type header ('${contentType}')`);
     }
-    
+
     if (/* !response.ok || */ !retValue || retValue.error || retValue.success === false) {
       let apiErrorMsg = '[SBApiFetch] No server response, or cannot parse, or error in response'
       if (response.status) apiErrorMsg += ' [' + response.status + ']'
@@ -1279,44 +1279,44 @@ const base62Regex = new RegExp(`[${base62mi}.concat(' ')]`); // lenient, allows 
 
 // encodes a 19-bit number into a 4-character string
 export function b32encode(num: number): string {
-    const charMap = base62mi;
-    if (num < 0 || num > 0x7ffff)
-        throw new Error('Input number is out of range. Expected a 19-bit integer.');
-    let bitsArr15 = [
-        (num >> 14) & 0x1f,
-        (num >> 9) & 0x1f,
-        (num >> 4) & 0x1f,
-        (num) & 0x0f
-    ];
-    bitsArr15[3] |= (bitsArr15[0] ^ bitsArr15[1] ^ bitsArr15[2]) & 0x10;
-    return bitsArr15.map(val => charMap[val]).join('');
+  const charMap = base62mi;
+  if (num < 0 || num > 0x7ffff)
+    throw new Error('Input number is out of range. Expected a 19-bit integer.');
+  let bitsArr15 = [
+    (num >> 14) & 0x1f,
+    (num >> 9) & 0x1f,
+    (num >> 4) & 0x1f,
+    (num) & 0x0f
+  ];
+  bitsArr15[3] |= (bitsArr15[0] ^ bitsArr15[1] ^ bitsArr15[2]) & 0x10;
+  return bitsArr15.map(val => charMap[val]).join('');
 }
 
 export function b32process(str: string): string {
-    const substitutions: { [key: string]: string } = {
-        "o": "0", "O": "0", "i": "1", "I": "1",
-        "l": "1", "z": "2", "Z": "2", "s": "5",
-        "S": "5", "b": "6", "G": "6", "a": "9",
-        "g": "9", "q": "9", "m": "M", "t": "T",
-        "X": "x", "J": "j", "e": "E", "Y": "y",
-        "W": "w", "C": "c", "P": "p", "n": "N",
-        "h": "N", "U": "u", "v": "u", "V": "u",
-        "F": "f", "K": "k"
-    }
-    let processedStr = '';
-    for (let char of str)
-        processedStr += substitutions[char] || char;
-    return processedStr;
+  const substitutions: { [key: string]: string } = {
+    "o": "0", "O": "0", "i": "1", "I": "1",
+    "l": "1", "z": "2", "Z": "2", "s": "5",
+    "S": "5", "b": "6", "G": "6", "a": "9",
+    "g": "9", "q": "9", "m": "M", "t": "T",
+    "X": "x", "J": "j", "e": "E", "Y": "y",
+    "W": "w", "C": "c", "P": "p", "n": "N",
+    "h": "N", "U": "u", "v": "u", "V": "u",
+    "F": "f", "K": "k"
+  }
+  let processedStr = '';
+  for (let char of str)
+    processedStr += substitutions[char] || char;
+  return processedStr;
 }
 
 export function b32decode(encoded: string): number | null {
-    if (!base62Regex.test(encoded))
-        throw new Error(`Input string contains invalid characters (${encoded}) - use 'process()'.`);
-    let bin = Array.from(encoded)
-        .map(c => base62mi.indexOf(c))
-    if (bin.reduce((a, b) => (a ^ b)) & 0x10)
-        return null;
-    return (((bin[0] * 32 + bin[1]) * 32 + bin[2]) * 16 + (bin[3] & 0x0f));
+  if (!base62Regex.test(encoded))
+    throw new Error(`Input string contains invalid characters (${encoded}) - use 'process()'.`);
+  let bin = Array.from(encoded)
+    .map(c => base62mi.indexOf(c))
+  if (bin.reduce((a, b) => (a ^ b)) & 0x10)
+    return null;
+  return (((bin[0] * 32 + bin[1]) * 32 + bin[2]) * 16 + (bin[3] & 0x0f));
 }
 
 //#endregion Base32mi
@@ -1492,7 +1492,7 @@ function _assemblePayload(data: any): ArrayBuffer | null {
     // console.log(`[assemblePayload] JSON.stringify:\n`, JSON.stringify(metadata))
     const metadataBuffer = new TextEncoder().encode(JSON.stringify(metadata));
     const metadataSize = new Uint32Array([metadataBuffer.byteLength]);
-    
+
     // let payload = _appendBuffer(new Uint8Array(metadataSize.buffer), new Uint8Array(metadataBuffer));
     // for (let i = 0; i < BufferList.length; i++) {
     //   payload = _appendBuffer(new Uint8Array(payload), BufferList[i]);
@@ -1529,8 +1529,8 @@ function deserializeValue(buffer: ArrayBuffer, type: string): any {
         // otherwise treat it as 'o'
         return _extractPayload(buffer);
       }
-      // return jsonParseWrapper(new TextDecoder().decode(buffer), "L1322");
-      case 'n': // Number
+    // return jsonParseWrapper(new TextDecoder().decode(buffer), "L1322");
+    case 'n': // Number
       return new DataView(buffer).getFloat64(0);
     case 'i': // Integer (32 bit signed)
       return new DataView(buffer).getInt32(0);
@@ -2441,8 +2441,8 @@ class SB384 {
 
         // we also create a base32 version of the hash, for use in channel ids (Pages)
         const hashBigInt = BigInt('0x' + Array.from(new Uint8Array(rawHash)).map(b => b.toString(16).padStart(2, '0')).join('')) >> 28n;
-        this.#hashB32 =  Array.from({ length: 12 }, (_, i) => b32encode(Number((hashBigInt >> BigInt(19 * (11 - i))) & 0x7ffffn))).join('');
-        
+        this.#hashB32 = Array.from({ length: 12 }, (_, i) => b32encode(Number((hashBigInt >> BigInt(19 * (11 - i))) & 0x7ffffn))).join('');
+
         if (DBG2) console.log("SB384() constructor; hash:\n", this.#hash)
 
         this.#ySign = ySign(this.#y!);
@@ -2622,13 +2622,13 @@ export class Protocol_AES_GCM_256 implements SBProtocol {
     this.#masterKey = this.initializeMasterKey(passphrase);
   }
 
-  async ready () {
+  async ready() {
     // only really needed for unit tests, that don't like to have dangling promises
     await this.#masterKey
   }
 
   setChannel(_channel: Channel): void {
-      // this protocol doesn't do anything with it, but we need to have endpoint
+    // this protocol doesn't do anything with it, but we need to have endpoint
   }
 
   async initializeMasterKey(passphrase: string): Promise<CryptoKey> {
@@ -3122,9 +3122,9 @@ class Channel extends SBChannelKeys {
       super(handleOrKey);
     this.protocol = protocol ? protocol : Channel.defaultProtocol
     this
-    .messageQueueManager() // fire it up
-    .then(() => { if (DBG0) console.log("Channel() constructor - messageQueueManager() is DONE") })
-    .catch(e => { throw e })
+      .messageQueueManager() // fire it up
+      .then(() => { if (DBG0) console.log("Channel() constructor - messageQueueManager() is DONE") })
+      .catch(e => { throw e })
     this.channelReady =
       this.sbChannelKeysReady
         .then(() => {
@@ -3201,7 +3201,7 @@ class Channel extends SBChannelKeys {
         return undefined
       }
       if (!msgRaw._id)
-        msgRaw._id = Channel.composeMessageKey (this.channelId!, msgRaw.sts!, msgRaw.i2)
+        msgRaw._id = Channel.composeMessageKey(this.channelId!, msgRaw.sts!, msgRaw.i2)
       if (DBG && msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
       const msg: Message = {
         body: extractPayload(bodyBuffer).payload,
@@ -3232,7 +3232,7 @@ class Channel extends SBChannelKeys {
         ret.set(k, msg)
       } else {
         if (DBG0) console.warn("[extractMessageMap] - message not valid, skipping:", k, v)
-      
+
       }
     }
     return ret
@@ -3291,7 +3291,7 @@ class Channel extends SBChannelKeys {
   async finalizeMessage(msg: ChannelMessage): Promise<ChannelMessage> {
     if (!msg.ts) msg.ts = await Snackabra.dateNow()
     _sb_assert(!(msg.stringMessage === true), "[Channel.finalizeMessage()] stringMessage is true, finalizing should not be called (internal error)")
-    
+
     // msg = await sbCrypto.wrap(
     //   msg.unencryptedContents,
     //   this.userId,
@@ -3401,7 +3401,7 @@ class Channel extends SBChannelKeys {
   async messageQueueManager() {
     if (DBG) console.log(SEP, "[messageQueueManager] Channel message queue is starting up", SEP)
     await this.ready
-    if (DBG) console.log(SEP, "[messageQueueManager] ... continuing to start up", SEP)  
+    if (DBG) console.log(SEP, "[messageQueueManager] ... continuing to start up", SEP)
     let keepRunning = true
     while (keepRunning) {
       await this.sendQueue.dequeue()
@@ -3441,14 +3441,14 @@ class Channel extends SBChannelKeys {
             throw new SBError("[messageQueueManager] Channel message queue is shutting down with error: " + e.message)
           }
         })
-        // .catch((message: EnqueuedMessage) => {
-        //   if (DBG2 || DBG) console.log(SEP, "[messageQueueManager] Got exception from DEQUEUE operation:\n", JSON.stringify(message), SEP)
-        //   // queue will reject (with the message) if it's closing down
-        //   if (DBG2 || DBG) console.log("[messageQueueManager] Channel message queue is closing down")
-        //   if (DBG2 || DBG) console.log(message)
-        //   // check if 'shutDown' is in
-        //   message.resolve('shutDown')
-        // })
+      // .catch((message: EnqueuedMessage) => {
+      //   if (DBG2 || DBG) console.log(SEP, "[messageQueueManager] Got exception from DEQUEUE operation:\n", JSON.stringify(message), SEP)
+      //   // queue will reject (with the message) if it's closing down
+      //   if (DBG2 || DBG) console.log("[messageQueueManager] Channel message queue is closing down")
+      //   if (DBG2 || DBG) console.log(message)
+      //   // check if 'shutDown' is in
+      //   message.resolve('shutDown')
+      // })
     }
   }
 
@@ -3476,7 +3476,7 @@ class Channel extends SBChannelKeys {
         // { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined })
         { prefix: prefix })) as { keys: Set<string>, historyShard: SBObjectHandle }
       if (DBG) console.log("getMessageKeys\n", keys)
-      if(!keys || keys.size === 0)
+      if (!keys || keys.size === 0)
         console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?")
       if (keys.size > 600)
         console.warn(SEP, "[Channel.getMessageKeys] Warning: more than 600 messages requested (will soon need 'deep history' support)", SEP)
@@ -3498,7 +3498,7 @@ class Channel extends SBChannelKeys {
       resolve(messagePayloads)
     });
   }
-  
+
   /**
    * Main function for getting a chunk of messages from the server.
    */
@@ -3513,7 +3513,7 @@ class Channel extends SBChannelKeys {
       const messages = new Map<string, ChannelMessage>()
       for (const [k, v] of messagePayloads) {
         try {
-           messages.set(k, validate_ChannelMessage(extractPayload(v).payload))
+          messages.set(k, validate_ChannelMessage(extractPayload(v).payload))
         } catch (e) {
           if (DBG) console.warn(SEP, "[getMessageMap] Failed extract and/or to validate message:", SEP, v, SEP, e, SEP)
         }
@@ -3584,7 +3584,7 @@ class Channel extends SBChannelKeys {
     const prefix = this.hashB32 // we know the full prefix
     if (DBG) console.log(`==== ChannelApi.getPage: calling fetch with: ${prefix}`)
     const page = await sbFetch(this.channelServer + '/api/v2/page/' + prefix)
-    .catch((e) => { throw new SBError(`[Channel.getPage] fetch failed: ${e}`) })
+      .catch((e) => { throw new SBError(`[Channel.getPage] fetch failed: ${e}`) })
     const contentType = page.headers.get('content-type')
     if (contentType !== 'sb384payloadV3')
       throw new SBError("[Channel.getPage] Can only handle 'sb384payloadV3' content type, use 'fetch()'")
@@ -3759,7 +3759,7 @@ class Channel extends SBChannelKeys {
     }
     return [min, max];
   }
-  
+
   /**
    * Given a set of (full) keys, reviews all the timestamp prefixes, and returns
    * the shortest prefix that would range all the keys in the set.
@@ -3775,7 +3775,7 @@ class Channel extends SBChannelKeys {
     return s1.substring(0, i);
   }
 
-  static timestampLongestPrefix = (s1: string, s2:string): string => {
+  static timestampLongestPrefix = (s1: string, s2: string): string => {
     if (s1 && s2 && typeof s1 === 'string' && typeof s2 === 'string' && s1.length === 26 && s2.length === 26) {
       let i = 0;
       while (i < s1.length && i < s2.length && s1[i] === s2[i]) i++;
@@ -3811,7 +3811,7 @@ class Channel extends SBChannelKeys {
    * never occur. Up to you if you want to run with that result or assert on it.
    * Strict about the format (defined as `[a-zA-Z0-9]{43}_[_a-zA-Z0-9]{4}_[0-3]{26}`).
    */
-  static deComposeMessageKey(key: string): { channelId: string, i2: string, timestamp: string} {
+  static deComposeMessageKey(key: string): { channelId: string, i2: string, timestamp: string } {
     const regex = /^([a-zA-Z0-9]{43})_([_a-zA-Z0-9]{4})_([0-3]{26})$/;
     const match = key.match(regex);
     if (match && match.length >= 4)
@@ -3890,10 +3890,10 @@ class ChannelSocket extends Channel {
   // #online = true; // updated by 'ping'
 
   constructor(
-      handleOrKey: SBChannelHandle | SBUserPrivateKey,
-      onMessage: (m: Message | string) => void,
-      protocol?: SBProtocol
-      ) {
+    handleOrKey: SBChannelHandle | SBUserPrivateKey,
+    onMessage: (m: Message | string) => void,
+    protocol?: SBProtocol
+  ) {
     _sb_assert(onMessage, '[ChannelSocket] constructor: no onMessage handler provided')
 
     if (typeof handleOrKey === 'string') {
@@ -3908,7 +3908,7 @@ class ChannelSocket extends Channel {
     // if for some reason we still don't have this, go with default
     if (!this.channelServer) this.channelServer = Snackabra.defaultChannelServer // might throw
 
-    ; (this as any)[ChannelSocket.ReadyFlag] = false;
+      ; (this as any)[ChannelSocket.ReadyFlag] = false;
     this.#socketServer = this.channelServer.replace(/^http/, 'ws')
     this.onMessage = onMessage
     this.channelSocketReady = this.#channelSocketReadyFactory()
@@ -4427,17 +4427,17 @@ class ChannelSocket extends Channel {
 
     Snackabra.removeChannelSocket(this)
 
-    // if (this.#ws && this.#ws.websocket) {
-    //   // Snackabra.activeChannelSockets.delete(this.#ws.websocket)
-    //   Snackabra.removeChannelSocket(this)
-    //   this.#ws.websocket.close()
-    //   this.#ws.closed = true
-    // } else {
-    //   console.log("++++ ChannelSocket.close() called ... but no socket to close?")
-    // }
+      // if (this.#ws && this.#ws.websocket) {
+      //   // Snackabra.activeChannelSockets.delete(this.#ws.websocket)
+      //   Snackabra.removeChannelSocket(this)
+      //   this.#ws.websocket.close()
+      //   this.#ws.closed = true
+      // } else {
+      //   console.log("++++ ChannelSocket.close() called ... but no socket to close?")
+      // }
 
-    // set ready to permanently reject
-    ; (this as any)[ChannelSocket.ReadyFlag] = false;
+      // set ready to permanently reject
+      ; (this as any)[ChannelSocket.ReadyFlag] = false;
 
     // we would like to throw if anybody anywhere tries to await on our 'ready',
     // but this turns out to be a major headache to debug because of JS
@@ -4661,7 +4661,7 @@ export class StorageApi {
 
       const key = await StorageApi.getObjectKey(fullHash.keyMaterial, keyInfo.salt)
       const encryptedData = await sbCrypto.encrypt(paddedBuf, key, { iv: keyInfo.iv })
-      
+
       let storageToken: SBStorageToken
       if (budgetSource instanceof Channel) {
         storageToken = await budgetSource.getStorageToken(encryptedData.byteLength)
@@ -4884,23 +4884,50 @@ export class StorageApi {
 //   channelServer: ''
 // }
 
-class EventEmitter {
-  private static events: { [key: string]: Function[] } = {};
-  static on(eventName: string, listener: Function) {
-    if (!this.events[eventName]) this.events[eventName] = [];
-    this.events[eventName].push(listener);
+/**
+ * Implements event handling interface, compatible with EventTarget but also
+ * supports 'on', 'off', and 'emit'. Note: entirely 'static', so any class
+ * that extends this will implement a global event handler for that class.
+ */
+export class SBEventTarget {
+  private static listeners: { [type: string]: ((event: Event | any) => void)[] } = {};
+
+  static addEventListener(type: string, callback: (event: Event) => void, _options?: boolean | AddEventListenerOptions): void {
+    SBEventTarget.listeners[type] = SBEventTarget.listeners[type] || [];
+    SBEventTarget.listeners[type].push(callback);
   }
-  static off(eventName: string, listener: Function) {
-    if (!this.events[eventName]) return;
-    const index = this.events[eventName].indexOf(listener);
-    if (index > -1) this.events[eventName].splice(index, 1);
+
+  static removeEventListener(type: string, callback: (event: Event) => void, _options?: boolean | EventListenerOptions): void {
+    if (!SBEventTarget.listeners[type]) return;
+    const stack = SBEventTarget.listeners[type];
+    const index = stack.indexOf(callback);
+    if (index > -1) {
+      stack.splice(index, 1);
+    }
   }
+
+  static dispatchEvent(event: Event): boolean {
+    const listeners = SBEventTarget.listeners[event.type];
+    if (!listeners) return true;
+    listeners.forEach(listener => listener(event));
+    return !event.defaultPrevented;
+  }
+
+  static on(eventName: string, listener: (args: any) => void) {
+    this.addEventListener(eventName, listener as any);
+  }
+
+  static off(eventName: string, listener: (args: any) => void) {
+    this.removeEventListener(eventName, listener as any);
+  }
+
   static emit(eventName: string, ...args: any[]) {
-    const listeners = this.events[eventName];
-    if (!listeners || listeners.length === 0) return;
-    listeners.forEach(listener => listener(...args));
+    const event = new CustomEvent(eventName, { detail: args.length === 1 ? args[0] : args });
+    SBEventTarget.dispatchEvent(event);
   }
 }
+
+
 
 
 type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
@@ -4930,8 +4957,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * for accessing channel and storage servers. For example, to provide
   * a specific service binding for a web worker.
  */
-class Snackabra extends EventEmitter {
-
+class Snackabra extends SBEventTarget {
   public static version = "3.20240408.0"
 
   // these are known shards that we've seen and know the handle for; this is
@@ -4944,7 +4970,7 @@ class Snackabra extends EventEmitter {
 
   // globally paces operations, and assures unique timestamps
   public static lastTimeStamp = 0 // todo: x256 (string) format
-  
+
   // shared global set of fetches, sockets, etc, for closeAll()
   public static activeFetches = new Map<symbol, AbortController>()
 
@@ -4960,20 +4986,22 @@ class Snackabra extends EventEmitter {
   public static onlineStatus: ServerOnlineStatus = 'unknown'
 
   // overwritten by whatever most recent new Snackabra(), but defaults to localhost
-  static defaultChannelServer =  'http://localhost:3845'
+  static defaultChannelServer = 'http://localhost:3845'
+
+  eventTarget = new SBEventTarget()
 
   constructor(
     channelServer: string,
     options?:
-    {
-      DEBUG?: boolean,
-      DEBUG2?: boolean,
-      sbFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
-    }
-    | boolean
-    ) {
-      super()
-      console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} ====`)
+      {
+        DEBUG?: boolean,
+        DEBUG2?: boolean,
+        sbFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+      }
+      | boolean
+  ) {
+    super() // ToDo: for some freaking reason can't do 'extends SBEventTarget'
+    console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} ====`)
     _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter')
     if (channelServer) Snackabra.defaultChannelServer = channelServer
 
@@ -5035,7 +5063,7 @@ class Snackabra extends EventEmitter {
           }
         });
     }));
-  
+
   }
 
   // any operations that require a precise timestamp (such as messages) can use
@@ -5057,7 +5085,7 @@ class Snackabra extends EventEmitter {
     // Snackabra.lastTimeStamp = timestamp;
     // return timestamp;
   }
-  
+
   /**
    * Call when somethings been heard from any channel server; this is used to
    * track whether we are online or not.
@@ -5130,8 +5158,8 @@ class Snackabra extends EventEmitter {
    * related to).
    */
   async getPage(prefix: string) {
-      if (DBG) console.log(`==== Snackabra.getPage: calling fetch with: ${prefix}`)
-      return extractPayload(await SBApiFetch(this.#channelServer + '/api/v2/page/' + prefix))
+    if (DBG) console.log(`==== Snackabra.getPage: calling fetch with: ${prefix}`)
+    return extractPayload(await SBApiFetch(this.#channelServer + '/api/v2/page/' + prefix))
   }
 
   // // deprecated ... used anywhere?

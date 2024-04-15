@@ -410,14 +410,17 @@ export declare class StorageApi {
     static getData(handle: SBObjectHandle | undefined): ArrayBuffer | undefined;
     fetchPayload(h: SBObjectHandle): Promise<any>;
 }
-declare class EventEmitter {
-    private static events;
-    static on(eventName: string, listener: Function): void;
-    static off(eventName: string, listener: Function): void;
+export declare class SBEventTarget {
+    private static listeners;
+    static addEventListener(type: string, callback: (event: Event) => void, _options?: boolean | AddEventListenerOptions): void;
+    static removeEventListener(type: string, callback: (event: Event) => void, _options?: boolean | EventListenerOptions): void;
+    static dispatchEvent(event: Event): boolean;
+    static on(eventName: string, listener: (args: any) => void): void;
+    static off(eventName: string, listener: (args: any) => void): void;
     static emit(eventName: string, ...args: any[]): void;
 }
 type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
-declare class Snackabra extends EventEmitter {
+declare class Snackabra extends SBEventTarget {
     #private;
     static version: string;
     static knownShards: Map<string, SBObjectHandle>;
@@ -427,6 +430,7 @@ declare class Snackabra extends EventEmitter {
     static lastTimestampPrefix: string;
     static onlineStatus: ServerOnlineStatus;
     static defaultChannelServer: string;
+    eventTarget: SBEventTarget;
     constructor(channelServer: string, options?: {
         DEBUG?: boolean;
         DEBUG2?: boolean;
