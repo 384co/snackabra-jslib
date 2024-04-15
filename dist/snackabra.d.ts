@@ -61,6 +61,7 @@ export interface ChannelMessage {
     salt?: ArrayBuffer;
     s?: ArrayBuffer;
     ts?: number;
+    cs?: string;
     channelId?: SBChannelId;
     i2?: string;
     sts?: number;

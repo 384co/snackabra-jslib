@@ -303,6 +303,7 @@ export interface ChannelMessage {
   salt?: ArrayBuffer, // salt, always present whether needed by protocol or not (16 bytes)
   s?: ArrayBuffer, // signature
   ts?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
+  cs?: string, // channel server, if present, clarifies where message was processed
 
   // the remainder are either optional (with default values), internally used,
   // server provided, or can be reconstructed
@@ -336,6 +337,7 @@ export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
     && (body.ts && Number.isInteger(body.ts))
     && (body.iv && body.iv instanceof Uint8Array && body.iv.length === 12)
     && (body.s && body.s instanceof ArrayBuffer)
+    && (body.cs === undefined || typeof body.cs === 'string')
 
     && (!body.sts || Number.isInteger(body.sts)) // if present came from server
     && (!body.salt || body.salt instanceof ArrayBuffer && body.salt.byteLength === 16) // required by the time we send it
@@ -380,6 +382,7 @@ export function stripChannelMessage(msg: ChannelMessage, serverMode: boolean = f
   if (msg.ttl !== undefined && msg.ttl !== 0xF) ret.ttl = msg.ttl; // optional, and we strip if set to default value
   if (msg.t !== undefined) ret.t = msg.t; // 'to', optional but if present is kept
   if (msg.i2 !== undefined && msg.i2 !== '____') ret.i2 = msg.i2; // optional, also we strip out default value
+  if (msg.cs !== undefined) ret.cs = msg.cs; // optional
   return ret
 }
 
@@ -3203,6 +3206,7 @@ class Channel extends SBChannelKeys {
       if (!msgRaw._id)
         msgRaw._id = Channel.composeMessageKey(this.channelId!, msgRaw.sts!, msgRaw.i2)
       if (DBG && msgRaw.ttl !== undefined && msgRaw.ttl !== 15) console.warn(`[extractMessage] TTL->EOL missing (TTL set to ${msgRaw.ttl}) [L2762]`)
+      // ToDo: verify 'cs' (sender channel server domain) is correct, if present
       const msg: Message = {
         body: extractPayload(bodyBuffer).payload,
         channelId: this.channelId!,

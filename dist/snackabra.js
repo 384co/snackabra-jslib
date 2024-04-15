@@ -121,6 +121,7 @@ export function validate_ChannelMessage(body) {
         && (body.ts && Number.isInteger(body.ts))
         && (body.iv && body.iv instanceof Uint8Array && body.iv.length === 12)
         && (body.s && body.s instanceof ArrayBuffer)
+        && (body.cs === undefined || typeof body.cs === 'string')
         && (!body.sts || Number.isInteger(body.sts))
         && (!body.salt || body.salt instanceof ArrayBuffer && body.salt.byteLength === 16)
         && (!body._id || (typeof body._id === 'string' && body._id.length === 86))
@@ -175,6 +176,8 @@ export function stripChannelMessage(msg, serverMode = false) {
         ret.t = msg.t;
     if (msg.i2 !== undefined && msg.i2 !== '____')
         ret.i2 = msg.i2;
+    if (msg.cs !== undefined)
+        ret.cs = msg.cs;
     return ret;
 }
 if (typeof DBG === 'undefined')
