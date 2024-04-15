@@ -442,7 +442,10 @@ declare class Snackabra extends SBEventTarget {
     static haveNotHeardFromServer(): void;
     static addChannelSocket(socket: ChannelSocket): void;
     static removeChannelSocket(socket: ChannelSocket): void;
-    getPage(prefix: string): Promise<any>;
+    getPage(prefix: string): Promise<{
+        type: string;
+        payload: any;
+    }>;
     create(budgetChannel: Channel): Promise<SBChannelHandle>;
     create(storageToken: SBStorageToken): Promise<SBChannelHandle>;
     connect(handleOrKey: SBChannelHandle | SBUserPrivateKey): Channel;

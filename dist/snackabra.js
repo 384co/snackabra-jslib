@@ -3140,7 +3140,7 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240415.0";
+    static version = "3.20240415.1";
     static knownShards = new Map();
     #channelServer;
     #storage;
@@ -3257,7 +3257,32 @@ class Snackabra extends SBEventTarget {
     async getPage(prefix) {
         if (DBG)
             console.log(`==== Snackabra.getPage: calling fetch with: ${prefix}`);
-        return extractPayload(await SBApiFetch(this.#channelServer + '/api/v2/page/' + prefix));
+        const pageResponse = await SBFetch(this.#channelServer + '/api/v2/page/' + prefix);
+        if (pageResponse.ok) {
+            const pageType = pageResponse.headers.get('content-type');
+            if (!pageType)
+                throw new SBError(`[getPage] Failed to fetch page '${prefix}'`);
+            let payLoad;
+            if (pageType.includes('application/json')) {
+                payLoad = await pageResponse.json();
+            }
+            else if (pageType.includes('text/') || pageType.includes('xml') || pageType.includes('html')) {
+                payLoad = await pageResponse.text();
+            }
+            else if (pageType.includes('multipart/form-data')) {
+                throw new SBError(`[getPage] Multipart form data not supported`);
+            }
+            else if (pageType.match(/(image|audio|video)\//)) {
+                payLoad = await pageResponse.blob();
+            }
+            else {
+                payLoad = await pageResponse.arrayBuffer();
+            }
+            return { type: pageType, payload: payLoad };
+        }
+        else {
+            throw new SBError(`[getPage] Failed to fetch page '${prefix}'`);
+        }
     }
     create(budgetChannelOrToken) {
         _sb_assert(budgetChannelOrToken !== null, '[create channel] Invalid parameter (null)');

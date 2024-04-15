@@ -4958,7 +4958,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends SBEventTarget {
-  public static version = "3.20240415.0"
+  public static version = "3.20240415.1"
 
   // these are known shards that we've seen and know the handle for; this is
   // global. hashed on decrypted (but not extracted) contents.
@@ -5155,11 +5155,32 @@ class Snackabra extends SBEventTarget {
   /**
    * "Anonymous" version of fetching a page, since unless it's locked you do not
    * need to be authenticated to fetch a page (or even know what channel it's
-   * related to).
+   * related to). This will return mime type and payload in 'convenient' format
+   * (eg string, blob, ArrayBuffer, or for JSON is 'any').
    */
-  async getPage(prefix: string) {
+  async getPage(prefix: string): Promise<{ type: string, payload: any }> {
     if (DBG) console.log(`==== Snackabra.getPage: calling fetch with: ${prefix}`)
-    return extractPayload(await SBApiFetch(this.#channelServer + '/api/v2/page/' + prefix))
+    // return extractPayload(await SBApiFetch(this.#channelServer + '/api/v2/page/' + prefix))
+    const pageResponse = await SBFetch(this.#channelServer + '/api/v2/page/' + prefix)
+    if (pageResponse.ok) {
+      const pageType = pageResponse.headers.get('content-type')
+      if (!pageType) throw new SBError(`[getPage] Failed to fetch page '${prefix}'`)
+      let payLoad: any
+      if (pageType.includes('application/json')) {
+        payLoad = await pageResponse.json();
+      } else if (pageType.includes('text/') || pageType.includes('xml') || pageType.includes('html')) {
+        payLoad = await pageResponse.text();
+      } else if (pageType.includes('multipart/form-data')) {
+        throw new SBError(`[getPage] Multipart form data not supported`);
+      } else if (pageType.match(/(image|audio|video)\//)) {
+        payLoad = await pageResponse.blob();
+      } else {
+        payLoad = await pageResponse.arrayBuffer();
+      }
+      return { type: pageType, payload: payLoad }
+    } else {
+      throw new SBError(`[getPage] Failed to fetch page '${prefix}'`)
+    }
   }
 
   // // deprecated ... used anywhere?
