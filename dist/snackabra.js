@@ -3140,7 +3140,7 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240408.0";
+    static version = "3.20240415.0";
     static knownShards = new Map();
     #channelServer;
     #storage;
