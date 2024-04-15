@@ -3357,5 +3357,5 @@ export var SB = {
 };
 if (!globalThis.SB)
     globalThis.SB = SB;
-console.warn(`==== SNACKABRA jslib (re)loaded, version '${globalThis.SB.version}' ====`);
+console.warn(`==== SNACKABRA jslib (re)loaded, version '${Snackabra.version}' ====`);
 //# sourceMappingURL=snackabra.js.map

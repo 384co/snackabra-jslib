@@ -5327,6 +5327,6 @@ export var SB = {
 if (!(globalThis as any).SB)
   (globalThis as any).SB = SB;
 // we warn for benefit of Deno and visibility
-console.warn(`==== SNACKABRA jslib (re)loaded, version '${(globalThis as any).SB.version}' ====`);
+console.warn(`==== SNACKABRA jslib (re)loaded, version '${Snackabra.version}' ====`);
 
 //#endregion
