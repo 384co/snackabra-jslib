@@ -3129,10 +3129,10 @@ export class SBEventTarget {
         return !event.defaultPrevented;
     }
     static on(eventName, listener) {
-        this.addEventListener(eventName, listener);
+        SBEventTarget.addEventListener(eventName, listener);
     }
     static off(eventName, listener) {
-        this.removeEventListener(eventName, listener);
+        SBEventTarget.removeEventListener(eventName, listener);
     }
     static emit(eventName, ...args) {
         const event = new CustomEvent(eventName, { detail: args.length === 1 ? args[0] : args });

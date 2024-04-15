@@ -4914,11 +4914,11 @@ export class SBEventTarget {
   }
 
   static on(eventName: string, listener: (args: any) => void) {
-    this.addEventListener(eventName, listener as any);
+    SBEventTarget.addEventListener(eventName, listener as any);
   }
 
   static off(eventName: string, listener: (args: any) => void) {
-    this.removeEventListener(eventName, listener as any);
+    SBEventTarget.removeEventListener(eventName, listener as any);
   }
 
   static emit(eventName: string, ...args: any[]) {
