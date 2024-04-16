@@ -2875,6 +2875,7 @@ function validate_Shard(s) {
 export class StorageApi {
     #storageServer;
     #offline = false;
+    static #uploadBacklog = 0;
     constructor(stringOrPromise) {
         this.#storageServer = Promise.resolve(stringOrPromise)
             .then((s) => {
@@ -2952,7 +2953,14 @@ export class StorageApi {
         ]));
         return arrayBufferToBase62(id);
     }
+    static async paceUploads() {
+        while (_b.#uploadBacklog > 8) {
+            console.log("+++++ [paceUploads] waiting for server, backlog is:", _b.#uploadBacklog);
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+    }
     async storeData(contents, budgetSource) {
+        _b.#uploadBacklog++;
         try {
             const buf = assemblePayload(contents);
             if (!buf)
@@ -3015,9 +3023,16 @@ export class StorageApi {
         }
         catch (error) {
             console.error("[storeData] failed:", error);
-            if (error instanceof SBError)
-                throw error;
+            if (error instanceof SBError) {
+                if (error.message.includes('Not enough storage budget'))
+                    throw new SBError('Not enough storage budget');
+                else
+                    throw error;
+            }
             throw new SBError(`[storeData] failed to store data: ${error}`);
+        }
+        finally {
+            _b.#uploadBacklog--;
         }
     }
     async #_fetchData(useServer, url, h) {
@@ -3143,7 +3158,7 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240415.1";
+    static version = "3.20240416.0";
     static knownShards = new Map();
     #channelServer;
     #storage;
