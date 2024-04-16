@@ -4535,6 +4535,9 @@ function validate_Shard(s: Shard): Shard {
 export class StorageApi {
   #storageServer: Promise<string>;
   #offline: boolean = false;
+
+  static #uploadBacklog = 0
+
   // we use a promise so that asynchronicity can be handled interally in StorageApi,
   // eg so users don't have to do things like ''(await SB.storage).fetchObject(...)''
   constructor(stringOrPromise: Promise<string> | string) {
@@ -4638,6 +4641,18 @@ export class StorageApi {
     return arrayBufferToBase62(id)
   }
 
+
+  /**
+   * Paces uploads to avoid overloading the storage server. Takes into account
+   * global number of operations.
+   */
+  static async paceUploads() {
+    while (StorageApi.#uploadBacklog > 8) { // ToDo: evaluate this better and/or redesign storage server
+      console.log("+++++ [paceUploads] waiting for server, backlog is:", StorageApi.#uploadBacklog)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+
   /**
    * Store 'contents' as a shard, returns an object handle. Note that 'contents' can be
    * anything, and is always packaged as a payload before storing.
@@ -4646,6 +4661,7 @@ export class StorageApi {
     contents: any,
     budgetSource: SBChannelHandle | Channel | SBStorageToken
   ): Promise<SBObjectHandle> {
+    StorageApi.#uploadBacklog++
     try {
       const buf = assemblePayload(contents)!
       if (!buf) throw new SBError("[storeData] failed to assemble payload")
@@ -4716,8 +4732,16 @@ export class StorageApi {
       return (r)
     } catch (error) {
       console.error("[storeData] failed:", error)
-      if (error instanceof SBError) throw error
+      if (error instanceof SBError) {
+        // check if 'Not enough storage budget' is in the message
+        if (error.message.includes('Not enough storage budget'))
+          throw new SBError('Not enough storage budget')
+        else
+          throw error
+      }
       throw new SBError(`[storeData] failed to store data: ${error}`)
+    } finally {
+      StorageApi.#uploadBacklog--
     }
   }
 
@@ -4962,7 +4986,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends SBEventTarget {
-  public static version = "3.20240415.2"
+  public static version = "3.20240416.1"
 
   // these are known shards that we've seen and know the handle for; this is
   // global. hashed on decrypted (but not extracted) contents.
@@ -4972,7 +4996,7 @@ class Snackabra extends SBEventTarget {
   #storage: StorageApi
   #channelServerInfo: any // caches whatever last server info we got
 
-  // globally paces operations, and assures unique timestamps
+  // globally paces (messaging) operations, and assures unique timestamps
   public static lastTimeStamp = 0 // todo: x256 (string) format
 
   // shared global set of fetches, sockets, etc, for closeAll()

@@ -406,6 +406,7 @@ export declare class StorageApi {
     static padBuf(buf: ArrayBuffer): ArrayBuffer;
     static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey>;
     static getObjectId(iv: Uint8Array, salt: ArrayBuffer, encryptedData: ArrayBuffer): Promise<string>;
+    static paceUploads(): Promise<void>;
     storeData(contents: any, budgetSource: SBChannelHandle | Channel | SBStorageToken): Promise<SBObjectHandle>;
     fetchData(handle: SBObjectHandle): Promise<SBObjectHandle>;
     static getData(handle: SBObjectHandle | undefined): ArrayBuffer | undefined;
