@@ -2576,6 +2576,19 @@ class SB384 {
     return (KeyPrefix.SBPrivateKey + KeySubPrefix.Dehydrated + base64ToBase62(this.#d!)) as SBUserPrivateKey
   }
 
+  /**
+   * Convenience wrapper, returns a promise to new, valid SB384 private key.
+   * It's essentially short for:
+   * 
+   * ```javascript
+   * const newKey = (await (new SB384()).ready).userPrivateKey
+   * ```
+   * 
+   */
+  static async newPrivateKey(): Promise<SBUserPrivateKey> {
+    return (await (new SB384()).ready).userPrivateKey
+  }
+
 
 } /* class SB384 */
 //#endregion

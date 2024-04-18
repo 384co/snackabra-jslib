@@ -246,6 +246,7 @@ declare class SB384 {
     get userPublicKey(): SBUserPublicKey;
     get userPrivateKey(): SBUserPrivateKey;
     get userPrivateKeyDehydrated(): SBUserPrivateKey;
+    static newPrivateKey(): Promise<SBUserPrivateKey>;
 }
 export interface SBProtocol {
     setChannel(channel: Channel): void;

@@ -1532,6 +1532,9 @@ class SB384 {
         _sb_assert(this.#private && this.#d, "userPrivateKey() - not a private key, and/or 'd' is missing, there is no userPrivateKey");
         return (KeyPrefix.SBPrivateKey + KeySubPrefix.Dehydrated + base64ToBase62(this.#d));
     }
+    static async newPrivateKey() {
+        return (await (new SB384()).ready).userPrivateKey;
+    }
 }
 __decorate([
     Memoize,
