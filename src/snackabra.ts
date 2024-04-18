@@ -1593,6 +1593,7 @@ function _extractPayload(payload: ArrayBuffer): any {
     }
     const startIndex = 4 + metadataSize;
 
+
     const data: any = {};
     for (let i = 1; i <= Object.keys(metadata).length; i++) {
       const index = i.toString();
