@@ -287,9 +287,9 @@ export declare class SBChannelKeys extends SB384 {
     constructor(handleOrKey?: SBChannelHandle | SBUserPrivateKey);
     get ready(): Promise<SBChannelKeys>;
     get SBChannelKeysReadyFlag(): any;
+    get owner(): boolean | "";
+    get channelId(): string;
     get channelData(): SBChannelData;
-    get owner(): boolean | "" | undefined;
-    get channelId(): string | undefined;
     get handle(): SBChannelHandle;
     buildApiBody(path: string, apiPayload?: any): Promise<ChannelApiBody>;
     callApi(path: string): Promise<any>;
@@ -393,16 +393,17 @@ declare class ChannelSocket extends Channel {
     lastTimestampPrefix: string;
     constructor(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message | string) => void, protocol?: SBProtocol);
     get ready(): Promise<ChannelSocket>;
+    get errorPromise(): Promise<ChannelSocket>;
     get ChannelSocketReadyFlag(): boolean;
     get status(): "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
     set enableTrace(b: boolean);
     send(contents: any, options?: MessageOptions): Promise<string>;
-    reset(): void;
     close(): Promise<void>;
+    reset(): void;
 }
 export declare class StorageApi {
     #private;
-    constructor(stringOrPromise: Promise<string> | string);
+    constructor(server?: string);
     getStorageServer(): Promise<string>;
     static padBuf(buf: ArrayBuffer): ArrayBuffer;
     static getObjectKey(fileHashBuffer: BufferSource, salt: ArrayBuffer): Promise<CryptoKey>;
@@ -421,6 +422,12 @@ export declare class SBEventTarget {
     static on(eventName: string, listener: (args: any) => void): void;
     static off(eventName: string, listener: (args: any) => void): void;
     static emit(eventName: string, ...args: any[]): void;
+}
+export interface SBServerInfo {
+    version: string;
+    channelServer: string;
+    storageServer: string;
+    jslibVersion?: string;
 }
 type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 declare class Snackabra extends SBEventTarget {
@@ -454,6 +461,7 @@ declare class Snackabra extends SBEventTarget {
     connect(handleOrKey: SBChannelHandle | SBUserPrivateKey): Channel;
     connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message | string) => void): ChannelSocket;
     static closeAll(): Promise<void>;
+    static getServerInfo(server?: string): Promise<SBServerInfo | undefined>;
     get storage(): StorageApi;
     getStorageServer(): Promise<string>;
     get crypto(): SBCrypto;

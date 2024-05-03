@@ -184,7 +184,7 @@ if (typeof DBG === 'undefined')
     globalThis.DBG = false;
 if (typeof DBG2 === 'undefined')
     globalThis.DBG2 = false;
-var DBG0 = DBG2;
+var DBG0 = true;
 if (DBG0)
     console.log("++++ Setting DBG0 to TRUE ++++");
 function setDebugLevel(_dbg1, _dbg2) {
@@ -1730,12 +1730,13 @@ export class SBChannelKeys extends SB384 {
                 if (DBG)
                     console.log("SBChannelKeys() constructor.");
                 await this.sb384Ready;
-                _sb_assert(this.private, "Internal Error (L2476)");
-                if (!this.#channelId) {
-                    this.#channelId = this.ownerChannelId;
+                _sb_assert(this.private, "Internal Error [L2833]");
+                if (!this.#channelId || this.owner) {
+                    if (!this.#channelId)
+                        this.#channelId = this.ownerChannelId;
                     this.#channelData = {
-                        channelId: this.#channelId,
-                        ownerPublicKey: this.userPublicKey,
+                        channelId: this.ownerChannelId,
+                        ownerPublicKey: this.userPublicKey
                     };
                 }
                 else if (!this.#channelData) {
@@ -1743,7 +1744,22 @@ export class SBChannelKeys extends SB384 {
                         throw new SBError("SBChannelKeys() constructor: either key is owner key, or handle contains channelData, or channelServer is provided ...");
                     if (DBG)
                         console.log("++++ SBChannelKeys being initialized from server");
-                    var cpk = await this.callApi('/getChannelKeys');
+                    var cpk;
+                    try {
+                        cpk = await this.callApi('/getChannelKeys');
+                    }
+                    catch (e) {
+                        while (true) {
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            try {
+                                cpk = await this.callApi('/getChannelKeys');
+                                break;
+                            }
+                            catch (e) {
+                                console.error("SBChannelKeys() constructor: failed to get channel data, retrying ...");
+                            }
+                        }
+                    }
                     cpk = validate_SBChannelData(cpk);
                     _sb_assert(cpk.channelId === this.#channelId, "Internal Error (L2493)");
                     this.#channelData = cpk;
@@ -1758,9 +1774,14 @@ export class SBChannelKeys extends SB384 {
     }
     get ready() { return this.sbChannelKeysReady; }
     get SBChannelKeysReadyFlag() { return this[SBChannelKeys.ReadyFlag]; }
-    get channelData() { return this.#channelData; }
     get owner() { return this.private && this.ownerChannelId && this.channelId && this.ownerChannelId === this.channelId; }
-    get channelId() { return this.#channelId; }
+    get channelId() {
+        if (this.#channelId)
+            return this.#channelId;
+        else
+            throw new SBError("[SBChannelKeys] ChannelID not known / object not ready. Internal Error (L894)");
+    }
+    get channelData() { return this.#channelData; }
     get handle() {
         return {
             [SB_CHANNEL_HANDLE_SYMBOL]: true,
@@ -1821,17 +1842,15 @@ export class SBChannelKeys extends SB384 {
     }
 }
 __decorate([
+    Memoize
+], SBChannelKeys.prototype, "owner", null);
+__decorate([
+    Memoize
+], SBChannelKeys.prototype, "channelId", null);
+__decorate([
     Memoize,
     Ready
 ], SBChannelKeys.prototype, "channelData", null);
-__decorate([
-    Memoize,
-    Ready
-], SBChannelKeys.prototype, "owner", null);
-__decorate([
-    Memoize,
-    Ready
-], SBChannelKeys.prototype, "channelId", null);
 __decorate([
     Memoize,
     Ready
@@ -2132,24 +2151,32 @@ class Channel extends SBChannelKeys {
             });
         }
     }
-    async close() {
+    close() {
         if (DBG)
             console.log("[Channel.close] called (will drain queue)");
         this.isClosed = true;
-        await this.sendQueue.drain('shutDown');
+        return this.sendQueue.drain('shutDown');
     }
     getMessageKeys(prefix = '0') {
-        return new Promise(async (resolve, _reject) => {
-            await this.channelReady;
-            _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)");
-            const { keys, historyShard } = (await this.callApi('/getMessageKeys', { prefix: prefix }));
-            if (DBG)
-                console.log("getMessageKeys\n", keys);
-            if (!keys || keys.size === 0)
-                console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?");
-            if (keys.size > 600)
-                console.warn(SEP, "[Channel.getMessageKeys] Warning: more than 600 messages requested (will soon need 'deep history' support)", SEP);
-            resolve({ keys, historyShard });
+        return new Promise(async (resolve, reject) => {
+            try {
+                await this.channelReady;
+                _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)");
+                const { keys, historyShard } = (await this.callApi('/getMessageKeys', { prefix: prefix }));
+                if (DBG)
+                    console.log("getMessageKeys\n", keys);
+                if (!keys || keys.size === 0)
+                    console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?");
+                if (keys.size > 600)
+                    console.warn(SEP, "[Channel.getMessageKeys] Warning: more than 600 messages requested (will soon need 'deep history' support)", SEP);
+                resolve({ keys, historyShard });
+            }
+            catch (e) {
+                const msg = `[Channel.getMessageKeys] Error in getting message keys (offline?) ('${e}')`;
+                if (DBG0)
+                    console.warn(msg);
+                reject(msg);
+            }
         });
     }
     getRawMessageMap(messageKeys) {
@@ -2446,6 +2473,8 @@ class ChannelSocket extends Channel {
     #traceSocket = false;
     lastTimestampPrefix = '0'.repeat(26);
     #pingInterval = 0;
+    #errorPromise;
+    #rejectError;
     constructor(handleOrKey, onMessage, protocol) {
         _sb_assert(onMessage, '[ChannelSocket] constructor: no onMessage handler provided');
         if (typeof handleOrKey === 'string') {
@@ -2475,126 +2504,198 @@ class ChannelSocket extends Channel {
             }
             Snackabra.haveNotHeardFromServer();
         }, WEBSOCKET_PING_INTERVAL * 0.5);
-        this.#ws.websocket.send('ping');
+        if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
+            if (DBG0)
+                console.log(SEP, "[ChannelSocket] Sending first 'ping' (timestamp request) message.", SEP);
+            try {
+                this.#ws.websocket.send('ping');
+            }
+            catch (e) {
+                console.error("[ChannelSocket] Failed to send first (hibernation) 'ping' message, Internal Error [L3986]");
+            }
+        }
+        else {
+            console.error("[ChannelSocket] websocket not ready (?), not sending first 'ping', hibernation disabled");
+        }
+    }
+    async #tryReconnect() {
+        if (DBG0)
+            console.log(SEP, "[ChannelSocket] Trying to re-establish connection ...", SEP);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        this.channelSocketReady = this
+            .#channelSocketReadyFactory()
+            .catch((e) => {
+            console.error(SEP, "[ChannelSocket] Could not re-establish connection, should queue up\n", e, SEP);
+            return this;
+        });
+    }
+    async #handleDisconnect(reason) {
+        console.warn(`[ChannelSocket] Lost connection to server, will try to reset.\nReason (if any): '${reason}'`);
+        this[_a.ReadyFlag] = false;
+        Snackabra.removeChannelSocket(this);
+        Snackabra.on('online', this.#tryReconnect);
     }
     #channelSocketReadyFactory() {
-        return new Promise(async (resolve, reject) => {
-            if (DBG)
-                console.log("++++ STARTED ChannelSocket.readyPromise()");
-            await this.sbChannelKeysReady;
-            const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket';
-            this.#ws = {
-                url: url,
-                ready: false,
-                closed: false,
-                timeout: WEBSOCKET_MESSAGE_TIMEOUT
-            };
-            if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
-                if (this.#ws.websocket) {
-                    console.warn("[ChannelSocket] websocket is in a bad state, closing it ... will await");
-                    await closeSocket(this.#ws.websocket);
-                    Snackabra.addChannelSocket(this);
+        this.#errorPromise = new Promise((_, reject) => {
+            if (DBG2)
+                console.log("Error promise initialized");
+            this.#rejectError = reject;
+        });
+        const returnPromise = Promise.race([
+            this.#errorPromise,
+            new Promise(async (resolve, _) => {
+                if (DBG)
+                    console.log("++++ STARTED ChannelSocket.readyPromise()");
+                await this.sbChannelKeysReady;
+                const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket';
+                this.#ws = {
+                    url: url,
+                    ready: false,
+                    closed: false,
+                    timeout: WEBSOCKET_MESSAGE_TIMEOUT
+                };
+                if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
+                    if (this.#ws.websocket) {
+                        console.warn("[ChannelSocket] websocket is in a bad state, closing it ... will await");
+                        await closeSocket(this.#ws.websocket);
+                        Snackabra.addChannelSocket(this);
+                    }
+                    const apiBodyBuf = assemblePayload(await this.buildApiBody(url));
+                    _sb_assert(apiBodyBuf, "Internal Error [L3598]");
+                    try {
+                        this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf));
+                        Snackabra.addChannelSocket(this);
+                    }
+                    catch (e) {
+                        const msg = "[ChannelSocket] Could not open websocket: " + e;
+                        if (DBG0)
+                            console.error(msg);
+                        this.#rejectError(msg);
+                        return;
+                    }
                 }
-                const apiBodyBuf = assemblePayload(await this.buildApiBody(url));
-                _sb_assert(apiBodyBuf, "Internal Error [L3598]");
-                this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf));
-                Snackabra.addChannelSocket(this);
-            }
-            if (DBG)
-                console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
-            const thisWsWebsocket = this.#ws.websocket;
-            const initialListener = async (e) => {
-                if (!e.data) {
-                    if (DBG0 || DBG)
-                        console.error("[ChannelSocket] received empty message");
-                    reject("[ChannelSocket] received empty message (should be a 'ready' message)");
-                }
-                let serverReadyMessage = null;
-                if (typeof e.data === 'string') {
-                    serverReadyMessage = jsonParseWrapper(e.data, "L3909");
-                }
-                else if (e.data instanceof ArrayBuffer) {
-                    serverReadyMessage = extractPayload(e.data).payload;
-                }
-                else if (e.data instanceof Blob) {
-                    serverReadyMessage = extractPayload(await e.data.arrayBuffer()).payload;
-                }
-                else {
-                    _sb_exception("L3987", "[ChannelSocket] received something other than string or ArrayBuffer");
-                }
-                if (serverReadyMessage) {
-                    if (serverReadyMessage.ready) {
-                        if (DBG0 || DBG)
-                            console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", e.data);
-                        if (serverReadyMessage.latestTimestamp) {
-                            this.lastTimestampPrefix = serverReadyMessage.latestTimestamp;
-                            if (DBG2)
-                                console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix);
-                        }
-                        else
-                            console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'");
-                        thisWsWebsocket.removeEventListener('message', initialListener);
-                        thisWsWebsocket.addEventListener('message', this.#processMessage);
-                        this.#setupPing();
-                        this[_a.ReadyFlag] = true;
-                        resolve(this);
+                if (DBG)
+                    console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
+                const thisWsWebsocket = this.#ws.websocket;
+                const initialListener = async (e) => {
+                    if (!e.data) {
+                        const msg = "[ChannelSocket] received empty message (should be a 'ready' message)";
+                        console.error(msg);
+                        this.#rejectError(msg);
+                    }
+                    let serverReadyMessage = null;
+                    if (typeof e.data === 'string') {
+                        serverReadyMessage = jsonParseWrapper(e.data, "L3909");
+                    }
+                    else if (e.data instanceof ArrayBuffer) {
+                        serverReadyMessage = extractPayload(e.data).payload;
+                    }
+                    else if (e.data instanceof Blob) {
+                        serverReadyMessage = extractPayload(await e.data.arrayBuffer()).payload;
                     }
                     else {
-                        reject("[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data));
+                        _sb_exception("L3987", "[ChannelSocket] received something other than string or ArrayBuffer");
                     }
-                }
-                else {
-                    const msg = "[ChannelSocket] received empty message, or could not parse it (should be a 'ready' message)";
-                    if (DBG0 || DBG)
+                    if (serverReadyMessage) {
+                        if (serverReadyMessage.ready) {
+                            if (DBG0 || DBG)
+                                console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", serverReadyMessage);
+                            if (serverReadyMessage.latestTimestamp) {
+                                this.lastTimestampPrefix = serverReadyMessage.latestTimestamp;
+                                if (DBG2)
+                                    console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix);
+                            }
+                            else
+                                console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'");
+                            thisWsWebsocket.removeEventListener('message', initialListener);
+                            thisWsWebsocket.addEventListener('message', this.#processMessage);
+                            this.#setupPing();
+                            this[_a.ReadyFlag] = true;
+                            resolve(this);
+                        }
+                        else {
+                            const msg = "[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data);
+                            if (this[_a.ReadyFlag] === true)
+                                console.warn(msg);
+                            else
+                                this.#rejectError(msg);
+                        }
+                    }
+                    else {
+                        const msg = "[ChannelSocket] received empty message, or could not parse it (should be a 'ready' message)";
+                        if (this[_a.ReadyFlag] === true)
+                            console.warn(msg);
+                        else
+                            this.#rejectError(msg);
+                    }
+                };
+                this.#ws.websocket.addEventListener('message', initialListener);
+                let resolveTimeout = setTimeout(() => {
+                    if (!this[_a.ReadyFlag]) {
+                        const msg = "[ChannelSocket] Socket not resolving after waiting, fatal.";
+                        console.warn(msg);
+                        this.#rejectError(msg);
+                    }
+                    else {
+                        if (DBG2)
+                            console.log("[ChannelSocket] resolved correctly", this);
+                    }
+                }, WEBSOCKET_SETUP_TIMEOUT);
+                this.#ws.websocket.addEventListener('open', async () => {
+                    this.#ws.closed = false;
+                    if (resolveTimeout) {
+                        clearTimeout(resolveTimeout);
+                        resolveTimeout = undefined;
+                    }
+                    await this.ready;
+                    if (DBG)
+                        console.log("++++++++ readyPromise() sending init");
+                    this.#ws.websocket.send('ready');
+                    if (DBG)
+                        console.log("++++++++ readyPromise() ... no immediate errors for init");
+                });
+                this.#ws.websocket.addEventListener('close', (e) => {
+                    this.#ws.closed = true;
+                    if (e.wasClean) {
+                        if (e.reason.includes("does not have an owner")) {
+                            const msg = `[ChannelSocket] No such channel on this server (${this.channelServer})`;
+                            if (this[_a.ReadyFlag] === true)
+                                throw new SBError(msg + ' plus we are ready? (L4130)');
+                            this.#rejectError(msg);
+                        }
+                        else
+                            console.log(`[ChannelSocket] Closed (cleanly).\nReason (if any): '${e.reason}'.`);
+                    }
+                    else {
+                        console.warn(`[ChannelSocket] Closed (but not cleanly) [L4137]\nReason (if any): '${e.reason}'. Server: '${this.channelServer}'`);
+                    }
+                    if (this[_a.ReadyFlag] === true) {
+                        this.#handleDisconnect("Channel was ready, but reporting being closed [L4140]");
+                    }
+                    else {
+                        const msg = "[ChannelSocket] Closed before ready (?) [L4142]";
                         console.error(msg);
-                    reject(msg);
-                }
-            };
-            this.#ws.websocket.addEventListener('message', initialListener);
-            let resolveTimeout = setTimeout(() => {
-                if (!this[_a.ReadyFlag]) {
-                    const msg = "[ChannelSocket] Socket not resolving after waiting, fatal.";
-                    console.warn(msg);
-                    reject(msg);
-                }
-                else {
-                    if (DBG2)
-                        console.log("[ChannelSocket] resolved correctly", this);
-                }
-            }, WEBSOCKET_SETUP_TIMEOUT);
-            this.#ws.websocket.addEventListener('open', async () => {
-                this.#ws.closed = false;
-                if (resolveTimeout) {
-                    clearTimeout(resolveTimeout);
-                    resolveTimeout = undefined;
-                }
-                await this.ready;
-                if (DBG)
-                    console.log("++++++++ readyPromise() sending init");
-                this.#ws.websocket.send('ready');
-                if (DBG)
-                    console.log("++++++++ readyPromise() ... no immediate errors for init");
-            });
-            this.#ws.websocket.addEventListener('close', (e) => {
-                this.#ws.closed = true;
-                if (!e.wasClean) {
-                    console.log(`[ChannelSocket] closed but NOT cleanly: ${e.reason} from ${this.channelServer}`);
-                }
-                else {
-                    if (e.reason.includes("does not have an owner"))
-                        reject(`No such channel on this server (${this.channelServer})`);
-                    else
-                        console.log('[ChannelSocket] Closed (cleanly), with reason: ', e.reason);
-                }
-                reject('wbSocket() closed before it was opened (?)');
-            });
-            this.#ws.websocket.addEventListener('error', (e) => {
-                this.#ws.closed = true;
-                if (DBG)
-                    console.log('[ChannelSocket] Error: ', e);
-                reject('[ChannelSocket] Websocket error event ' + e);
-            });
-        });
+                        this.#rejectError(msg);
+                    }
+                });
+                this.#ws.websocket.addEventListener('error', (e) => {
+                    this.#ws.closed = true;
+                    if (this[_a.ReadyFlag] === true) {
+                        const msg = "[ChannelSocket] Socket closed [L4152]\nEvent message (if any): '" + e.message + "'";
+                        console.error(msg);
+                        this.#rejectError(msg);
+                    }
+                    else {
+                        const msg = `[ChannelSocket] Failed to connect, or errored out immediately [L4153].\nError (if any): '${e}'`;
+                        console.error(msg);
+                        this.#rejectError(msg);
+                    }
+                });
+            })
+        ]);
+        if (DBG2)
+            console.log("Socket ready factory done, error promise:", this.#rejectError);
+        return returnPromise;
     }
     #processMessage = async (e) => {
         _sb_assert(!this.errorState, "[ChannelSocket] in error state (Internal Error L4018)");
@@ -2614,11 +2715,19 @@ class ChannelSocket extends Channel {
                 this.#ws.websocket.send(this.lastTimestampPrefix);
             }
             setTimeout(() => {
-                if (this.#ws.closed)
-                    return;
-                if (DBG2)
-                    console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.");
-                this.#ws.websocket.send('ping');
+                if (this.#ws && !this.#ws.closed && this.#ws.websocket?.readyState === 1) {
+                    if (DBG2)
+                        console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.");
+                    try {
+                        this.#ws.websocket.send('ping');
+                    }
+                    catch (_e) {
+                        if (DBG0)
+                            console.warn("[ChannelSocket] Failed to send 'ping' message, ignoring");
+                    }
+                }
+                else if (DBG0)
+                    console.log("[ChannelSocket] Shutting down ping message timeout");
             }, WEBSOCKET_PING_INTERVAL);
             return;
         }
@@ -2661,10 +2770,10 @@ class ChannelSocket extends Channel {
         _sb_assert(message.channelId === this.channelId, "[ChannelSocket] received message for wrong channel?");
         if (this.#traceSocket)
             console.log("[ChannelSocket] Received socket message:", message);
-        if (DBG0)
-            console.log("[ChannelSocket] Updated 'latestTimestamp' to:", msg);
         _sb_assert(message.sts, "[ChannelSocket] Message missing server timestamp Internal Error (L4145)");
         this.lastTimestampPrefix = _a.timestampToBase4String(message.sts);
+        if (DBG0)
+            console.log("[ChannelSocket] Updated 'latestTimestamp' to:", this.lastTimestampPrefix);
         _sb_assert(message.c && message.c instanceof ArrayBuffer, "[ChannelSocket] Internal Error (L3675)");
         const hash = await crypto.subtle.digest('SHA-256', message.c);
         const ack_id = arrayBufferToBase64url(hash);
@@ -2704,6 +2813,11 @@ class ChannelSocket extends Channel {
         _sb_assert(!this.errorState, "[ChannelSocket] in error state (Internal Error L4104)");
         _sb_assert(!this.isClosed, "[ChannelSocket] We are closed, blocking on'ready' will reject");
         return this.channelSocketReady;
+    }
+    get errorPromise() {
+        if (!this.#errorPromise)
+            throw new SBError("[ChannelSocket] errorPromise called before ready");
+        return this.#errorPromise;
     }
     get ChannelSocketReadyFlag() { return this[_a.ReadyFlag]; }
     get status() {
@@ -2801,8 +2915,7 @@ class ChannelSocket extends Channel {
         if (DBG2)
             console.log(SEP, "[ChannelSocket] sending, contents:\n", JSON.stringify(contents), SEP);
         if (this.#ws.closed) {
-            if (this.#traceSocket)
-                console.info("send() triggered reset of #readyPromise() (normal)");
+            console.info("send() triggered reset of #readyPromise() (normal)");
             this.channelSocketReady = this.#channelSocketReadyFactory();
             this[_a.ReadyFlag] = false;
         }
@@ -2831,35 +2944,39 @@ class ChannelSocket extends Channel {
             }
         });
     }
-    reset() {
-        if (DBG0)
-            console.trace("++++ ChannelSocket.reset() called ... for ChannelID:", this.channelId);
-        if (this.#ws && this.#ws.websocket) {
-            if (this.#ws.websocket.readyState === 1) {
-                this.#ws.websocket.close();
-            }
-            this.#ws.closed = true;
-            Snackabra.removeChannelSocket(this);
-            this.channelSocketReady = this.#channelSocketReadyFactory();
-        }
-    }
     async close() {
         if (DBG0 || DBG)
             console.log("++++ ChannelSocket.close() called ... closing down stuff ...");
         this.isClosed = true;
         clearInterval(this.#pingInterval);
-        if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
-            if (DBG0)
-                console.log("++++ ChannelSocket.close() ... sending close message ...");
-            this.#ws.websocket.send('close');
+        if (this.#ws && this.#ws.websocket) {
+            if (this.#ws.websocket.readyState === 1) {
+                if (DBG0)
+                    console.log(SEP, "[ChannelSocket] Closing websocket, with readystate:", this.#ws.websocket.readyState, SEP);
+                this.#ws.websocket.close();
+                await new Promise((resolve) => setTimeout(resolve, 200));
+            }
+            this.#ws.closed = true;
         }
-        else {
-            if (DBG0)
-                console.log("++++ ChannelSocket.close() ... no open socket to send close message ...", this.#ws?.websocket);
-        }
-        await super.close();
+        const queueDrain = super.close();
         Snackabra.removeChannelSocket(this);
         this[_a.ReadyFlag] = false;
+        return queueDrain;
+    }
+    reset() {
+        if (DBG0)
+            console.trace("++++ ChannelSocket.reset() called ... for ChannelID:", this.channelId);
+        if (this.#ws && this.#ws.websocket) {
+            if (this.#ws.websocket.readyState === 1) {
+                if (DBG0)
+                    console.log("[ChannelSocket] Closing websocket, with readystate:", this.#ws.websocket.readyState);
+                this.#ws.websocket.close();
+            }
+            this.#ws.closed = true;
+            this[_a.ReadyFlag] = false;
+            Snackabra.removeChannelSocket(this);
+            this.channelSocketReady = this.#channelSocketReadyFactory();
+        }
     }
 }
 _a = ChannelSocket;
@@ -2876,26 +2993,61 @@ function validate_Shard(s) {
         throw new SBError(`invalid Shard`);
 }
 export class StorageApi {
-    #storageServer;
-    #offline = false;
+    #server;
+    #storageServer = '';
     static #uploadBacklog = 0;
-    constructor(stringOrPromise) {
-        this.#storageServer = Promise.resolve(stringOrPromise)
-            .then((s) => {
-            const storageServer = s;
-            _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)');
-            return storageServer;
-        })
-            .catch((e) => {
-            console.error("[StorageApi] failed to initialize:", e);
-            this.#offline = true;
-            return "<OFFLINE>";
-        });
+    constructor(server) {
+        if (server) {
+            this.#server = server;
+            this.#_getStorageServer().then((s) => {
+                if (!s) {
+                    if (DBG0)
+                        console.error("[StorageApi] Could not (immediately) resolve storage server");
+                    const reCheckInterval = setInterval(async () => {
+                        if (Snackabra.isShutdown) {
+                            clearInterval(reCheckInterval);
+                            if (DBG0)
+                                console.error("[StorageApi] Shutting down, will not retry getting storage server");
+                        }
+                        else {
+                            const s2 = await this.#_getStorageServer();
+                            if (s2) {
+                                clearInterval(reCheckInterval);
+                                if (DBG0)
+                                    console.log(`[StorageApi] ... eventually resolved storage server ('${s2}')`);
+                            }
+                        }
+                    }, 1000);
+                }
+            });
+        }
+    }
+    async #_getStorageServer() {
+        if (this.#storageServer) {
+            return this.#storageServer;
+        }
+        else if (!this.#server) {
+            if (DBG0)
+                console.warn('[StorageApi] No server information known (neither channel or storage)');
+        }
+        else {
+            const retValue = await Snackabra.getServerInfo(this.#server);
+            if (!retValue)
+                return '';
+            if (retValue && !retValue.storageServer)
+                throw new SBError('[StorageApi] Server available did not provide storage server name, cannot initialize. Should not happen [L4651]');
+            if (DBG0)
+                console.log("[StorageApi] Fyi, server returned info info:", retValue);
+            this.#storageServer = retValue.storageServer;
+        }
+        return this.#storageServer;
     }
     async getStorageServer() {
-        if (this.#offline)
-            throw new SBError("[StorageApi] offline");
-        return this.#storageServer;
+        const s = await this.#_getStorageServer();
+        if (s)
+            return s;
+        else
+            throw new SBError("[StorageApi] Identity of storage server is not (yet) known.");
     }
     static padBuf(buf) {
         const dataSize = buf.byteLength;
@@ -3161,11 +3313,10 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240416.1";
+    static version = "3.20240502.2";
     static knownShards = new Map();
     #channelServer;
     #storage;
-    #channelServerInfo;
     static lastTimeStamp = 0;
     static activeFetches = new Map();
     static #activeChannelSockets = new Set();
@@ -3188,26 +3339,7 @@ class Snackabra extends SBEventTarget {
             sbFetch = options.sbFetch;
         }
         this.#channelServer = channelServer;
-        this.#storage = new StorageApi(new Promise((resolve, reject) => {
-            if (DBG)
-                console.log(`++++ Snackabra constructor: fetching storage server name from '${this.#channelServer + '/api/v2/info'}' ++++`);
-            SBApiFetch(this.#channelServer + '/api/v2/info')
-                .then((retValue) => {
-                if (DBG)
-                    console.log("Channel server info:", retValue);
-                _sb_assert(retValue.storageServer, 'Channel server did not provide storage server name, cannot initialize');
-                this.#channelServerInfo = retValue;
-                if (DBG)
-                    console.log("Channel server info:", this.#channelServerInfo);
-                resolve(retValue.storageServer);
-            })
-                .catch((error) => {
-                if (!Snackabra.isShutdown) {
-                    console.error("[Snackabra] fetching storage server name failed (fatal):\n", error);
-                    reject(error);
-                }
-            });
-        }));
+        this.#storage = new StorageApi(channelServer);
     }
     static async dateNow() {
         let timestamp = Date.now();
@@ -3219,19 +3351,23 @@ class Snackabra extends SBEventTarget {
     }
     static heardFromServer() {
         Snackabra.#latestPing = Date.now();
+        if (DBG2)
+            console.log("[Snackabra] heardFromServer() at", Snackabra.#latestPing);
         switch (Snackabra.onlineStatus) {
             case 'offline':
-                if (DBG)
-                    console.info("[Snackabra] We are BACK online");
+                if (DBG0)
+                    console.info(`[Snackabra] [${Snackabra.#latestPing}] we are now BACK online`);
                 this.emit('online');
                 this.emit('reconnected');
                 Snackabra.onlineStatus = 'online';
                 break;
             case 'online':
+                if (DBG2)
+                    console.info("[Snackabra] heardFromServer() we are still online");
                 break;
             case 'unknown':
-                if (DBG)
-                    console.info("[Snackabra] We are now ONLINE");
+                if (DBG0)
+                    console.info(`[Snackabra] [${Snackabra.#latestPing}] we are now ONLINE`);
                 this.emit('online');
                 Snackabra.onlineStatus = 'online';
                 break;
@@ -3246,19 +3382,20 @@ class Snackabra extends SBEventTarget {
         }
     }
     static haveNotHeardFromServer() {
-        if (Date.now() - Snackabra.#latestPing > WEBSOCKET_PING_INTERVAL * 1.1) {
-            if (DBG0)
+        const timeNow = Date.now();
+        if (timeNow - Snackabra.#latestPing > WEBSOCKET_PING_INTERVAL * 1.5) {
+            if (DBG2)
                 console.warn("[Snackabra] 'ping' message seems to have timed out");
             if (Snackabra.onlineStatus === 'online') {
                 if (Snackabra.#activeChannelSockets.size > 0) {
-                    if (DBG)
-                        console.warn("[Snackabra] OFFLINE");
+                    if (DBG || DBG0)
+                        console.log(`[Snackabra] [${timeNow}] OFFLINE`);
                     Snackabra.onlineStatus = 'offline';
                     this.emit('offline');
                 }
                 else {
-                    if (DBG)
-                        console.warn("[Snackabra] No active channel sockets, online status is now UNKNOWN");
+                    if (DBG || DBG0)
+                        console.warn("[Snackabra] [${timeNow}] No active channel sockets, online status is now UNKNOWN");
                     Snackabra.onlineStatus = 'unknown';
                     Snackabra.onlineStatus = 'offline';
                     this.emit('unknownNetworkStatus');
@@ -3268,9 +3405,13 @@ class Snackabra extends SBEventTarget {
         this.checkUnknownNetworkStatus();
     }
     static addChannelSocket(socket) {
+        if (DBG0)
+            console.log("[Snackabra] adding channel socket:", socket);
         Snackabra.#activeChannelSockets.add(socket);
     }
     static removeChannelSocket(socket) {
+        if (DBG0)
+            console.log("[Snackabra] removing channel socket:", socket);
         if (Snackabra.#activeChannelSockets.has(socket))
             Snackabra.#activeChannelSockets.delete(socket);
         this.checkUnknownNetworkStatus();
@@ -3373,12 +3514,28 @@ class Snackabra extends SBEventTarget {
         Snackabra.isShutdown = true;
         Snackabra.activeFetches.forEach(controller => controller.abort('Snackabra.closeAll() called'));
         Snackabra.activeFetches.clear();
+        console.log("[Snackabra] [closeAll] closing all active channel sockets:", Snackabra.#activeChannelSockets);
         await Promise.all(Array.from(Snackabra.#activeChannelSockets).map(close));
-        console.log("... waiting for everything to close ...");
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log("[Snackabra] [closeAll] ... waiting for everything to close ...");
+        await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    static async getServerInfo(server = Snackabra.defaultChannelServer) {
+        try {
+            const r = await SBApiFetch(server + '/api/v2/info');
+            if (DBG0)
+                console.log(`[getServerInfo] Fetching server info from '${server}' ++++`);
+            return r;
+        }
+        catch (e) {
+            if (DBG0)
+                console.warn(`[getServerInfo] Could not access server '${server}'`);
+            return undefined;
+        }
     }
     get storage() { return this.#storage; }
-    async getStorageServer() { return this.#storage.getStorageServer(); }
+    async getStorageServer() {
+        return this.storage.getStorageServer();
+    }
     get crypto() { return sbCrypto; }
     get version() { return Snackabra.version; }
 }

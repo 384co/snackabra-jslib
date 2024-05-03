@@ -421,7 +421,7 @@ declare var DBG2: boolean;
 if (typeof DBG === 'undefined') (globalThis as any).DBG = false
 if (typeof DBG2 === 'undefined') (globalThis as any).DBG2 = false
 
-var DBG0 = DBG2 // internal, set it to 'true' or 'DBG2'
+var DBG0 = true // internal, set it to 'true' or 'DBG2'
 if (DBG0) console.log("++++ Setting DBG0 to TRUE ++++");
 
 // ... testing moving this to build process
@@ -2803,6 +2803,7 @@ export class SBChannelKeys extends SB384 {
     if (handleOrKey === null) throw new SBError(`SBChannelKeys constructor: you cannot pass 'null'`)
     if (handleOrKey) {
       if (typeof handleOrKey === 'string') {
+        // we're provided an owner private key
         const ownerPrivateKey = handleOrKey as SBUserPrivateKey
         super(ownerPrivateKey, true)
       } else if (_check_SBChannelHandle(handleOrKey)) {
@@ -2829,20 +2830,38 @@ export class SBChannelKeys extends SB384 {
       try {
         if (DBG) console.log("SBChannelKeys() constructor.")
         // wait for parent keys (super)
-        await this.sb384Ready; _sb_assert(this.private, "Internal Error (L2476)")
-        if (!this.#channelId) {
-          // if channelId wasn't provided upon construction, then we're owner
-          this.#channelId = this.ownerChannelId
+        await this.sb384Ready; _sb_assert(this.private, "Internal Error [L2833]")
+        // either channelId wasn't provided (in which case we must be owner)
+        // or it was (and we're also the owner)
+        if (!this.#channelId || this.owner) {
+          if (!this.#channelId) this.#channelId = this.ownerChannelId
           this.#channelData = {
-            channelId: this.#channelId,
-            ownerPublicKey: this.userPublicKey,
+            channelId: this.ownerChannelId,
+            ownerPublicKey: this.userPublicKey
           }
         } else if (!this.#channelData) {
           // we're not owner, and we haven't gotten the ownerPublicKey, so we need to ask the server
           if (!this.channelServer)
             throw new SBError("SBChannelKeys() constructor: either key is owner key, or handle contains channelData, or channelServer is provided ...")
           if (DBG) console.log("++++ SBChannelKeys being initialized from server")
-          var cpk: SBChannelData = await this.callApi('/getChannelKeys')
+          var cpk: SBChannelData
+          try {
+            cpk = await this.callApi('/getChannelKeys')
+          } catch (e) {
+            // any errors, and we wait 1 second and then try again, until it works
+            while (true) {
+              await new Promise(resolve => setTimeout(resolve, 1000))
+              try {
+                cpk = await this.callApi('/getChannelKeys')
+                break
+              } catch (e) {
+                // ToDo: these retries should be behind a Snackabra 'back online' event;
+                // and in any case a Channel can be 'partly' ready without channel keys.
+                // right now proper offline resilience only works for owner keys.
+                console.error("SBChannelKeys() constructor: failed to get channel data, retrying ...")
+              }
+            }
+          }
           cpk = validate_SBChannelData(cpk) // throws if there's an issue
           // we have the authoritative keys from the server, sanity check
           _sb_assert(cpk.channelId === this.#channelId, "Internal Error (L2493)")
@@ -2858,13 +2877,16 @@ export class SBChannelKeys extends SB384 {
   }
 
   get ready() { return this.sbChannelKeysReady }
-  // get readyFlag() { return this.SBChannelKeysReadyFlag }
   get SBChannelKeysReadyFlag() { return (this as any)[SBChannelKeys.ReadyFlag] }
+
+  @Memoize get owner() { return this.private && this.ownerChannelId && this.channelId && this.ownerChannelId === this.channelId }
+  @Memoize get channelId() {
+    if (this.#channelId) return this.#channelId
+    else throw new SBError("[SBChannelKeys] ChannelID not known / object not ready. Internal Error (L894)")
+  }
 
   @Memoize @Ready get channelData() { return this.#channelData! }
 
-  @Memoize @Ready get owner() { return this.private && this.ownerChannelId && this.channelId && this.ownerChannelId === this.channelId }
-  @Memoize @Ready get channelId() { return this.#channelId }
 
   @Memoize @Ready get handle(): SBChannelHandle {
     return {
@@ -3471,10 +3493,10 @@ class Channel extends SBChannelKeys {
   }
 
   // 'Channel' on a close will close and drain
-  async close() {
+  close() {
     if (DBG) console.log("[Channel.close] called (will drain queue)")
     this.isClosed = true
-    await this.sendQueue.drain('shutDown')
+    return this.sendQueue.drain('shutDown')
   }
 
   /**
@@ -3486,19 +3508,25 @@ class Channel extends SBChannelKeys {
    */
   getMessageKeys(prefix: string = '0'): Promise<{ keys: Set<string>, historyShard: SBObjectHandle }> {
     // getMessageKeys(currentMessagesLength: number = 100, paginate: boolean = false): Promise<Set<string>> {
-    return new Promise(async (resolve, _reject) => {
-      await this.channelReady
-      _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)")
-      const { keys, historyShard } = (await this.callApi(
-        '/getMessageKeys',
-        // { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined })
-        { prefix: prefix })) as { keys: Set<string>, historyShard: SBObjectHandle }
-      if (DBG) console.log("getMessageKeys\n", keys)
-      if (!keys || keys.size === 0)
-        console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?")
-      if (keys.size > 600)
-        console.warn(SEP, "[Channel.getMessageKeys] Warning: more than 600 messages requested (will soon need 'deep history' support)", SEP)
-      resolve({ keys, historyShard })
+    return new Promise(async (resolve, reject) => {
+      try {
+        await this.channelReady
+        _sb_assert(this.channelId, "Channel.getMessageKeys: no channel ID (?)")
+        const { keys, historyShard } = (await this.callApi(
+          '/getMessageKeys',
+          // { currentMessagesLength: currentMessagesLength, cursor: paginate ? this.#cursor : undefined })
+          { prefix: prefix })) as { keys: Set<string>, historyShard: SBObjectHandle }
+        if (DBG) console.log("getMessageKeys\n", keys)
+        if (!keys || keys.size === 0)
+          console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?")
+        if (keys.size > 600)
+          console.warn(SEP, "[Channel.getMessageKeys] Warning: more than 600 messages requested (will soon need 'deep history' support)", SEP)
+        resolve({ keys, historyShard })
+      } catch (e) {
+        const msg = `[Channel.getMessageKeys] Error in getting message keys (offline?) ('${e}')`
+        if (DBG0) console.warn(msg)
+        reject(msg)
+      }
     });
   }
 
@@ -3907,6 +3935,9 @@ class ChannelSocket extends Channel {
   // #latestPing = Date.now(); // updated by 'ping'
   // #online = true; // updated by 'ping'
 
+  #errorPromise?: Promise<ChannelSocket>;
+  #rejectError?: (reason?: any) => void;
+
   constructor(
     handleOrKey: SBChannelHandle | SBUserPrivateKey,
     onMessage: (m: Message | string) => void,
@@ -3947,7 +3978,16 @@ class ChannelSocket extends Channel {
     }, WEBSOCKET_PING_INTERVAL * 0.5);
 
     // and we fire off the first one
-    this.#ws!.websocket!.send('ping')
+    if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
+      if (DBG0) console.log(SEP, "[ChannelSocket] Sending first 'ping' (timestamp request) message.", SEP)
+      try {
+        this.#ws.websocket.send('ping')
+      } catch (e) {
+        console.error("[ChannelSocket] Failed to send first (hibernation) 'ping' message, Internal Error [L3986]")
+      }
+    } else {
+      console.error("[ChannelSocket] websocket not ready (?), not sending first 'ping', hibernation disabled")
+    }
 
     // const pingTimer = setInterval(() => {
     //   if (this.isClosed) return // close down quietly
@@ -3972,158 +4012,211 @@ class ChannelSocket extends Channel {
     // }, interval);
   }
 
+  async #tryReconnect() {
+    if (DBG0) console.log(SEP, "[ChannelSocket] Trying to re-establish connection ...", SEP)
+    // first we wait a little bit, then a quick retry
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    this.channelSocketReady = this
+      .#channelSocketReadyFactory()
+      .catch((e) => {
+        console.error(SEP, "[ChannelSocket] Could not re-establish connection, should queue up\n", e, SEP);
+        return this
+      });
+
+  }
+
+  // if we lose the channel, we decide what to do here; only called if we at some point were
+  // 'ready' (connected) and then later disconnected for any reason (other than explicit 'close()')
+  async #handleDisconnect(reason: string) {
+    console.warn(`[ChannelSocket] Lost connection to server, will try to reset.\nReason (if any): '${reason}'`);
+    (this as any)[ChannelSocket.ReadyFlag] = false;
+    Snackabra.removeChannelSocket(this)
+    Snackabra.on('online', this.#tryReconnect)
+  }
+
   #channelSocketReadyFactory() {
-    return new Promise<ChannelSocket>(async (resolve, reject) => {
-      if (DBG) console.log("++++ STARTED ChannelSocket.readyPromise()")
-      await this.sbChannelKeysReady // because we need the getter for channelId
-      const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket'
-      this.#ws = {
-        url: url,
-        // websocket: new WebSocket(url),
-        ready: false,
-        closed: false,
-        timeout: WEBSOCKET_MESSAGE_TIMEOUT
-      }
-      if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
-        // either it's new, or it's closed, or it's in the process of closing
-        if (this.#ws.websocket) {
-          console.warn("[ChannelSocket] websocket is in a bad state, closing it ... will await")
-          await closeSocket(this.#ws.websocket)
-          // Snackabra.activeChannelSockets.delete(this); // avoid possible race condition
-          Snackabra.addChannelSocket(this)
+    this.#errorPromise = new Promise<ChannelSocket>((_, reject) => {
+      if (DBG2) console.log("Error promise initialized")
+      this.#rejectError = reject;
+    });
+    const returnPromise = Promise.race([
+      this.#errorPromise,
+      new Promise<ChannelSocket>(async (resolve, _) => {
+        if (DBG) console.log("++++ STARTED ChannelSocket.readyPromise()")
+        await this.sbChannelKeysReady // because we need the getter for channelId
+        const url = this.#socketServer + '/api/v2/channel/' + this.channelId + '/websocket'
+        this.#ws = {
+          url: url,
+          ready: false,
+          closed: false,
+          timeout: WEBSOCKET_MESSAGE_TIMEOUT
         }
-        // a WebSocket connection is always a 'GET', and there's no way to provide a body
-        const apiBodyBuf = assemblePayload(await this.buildApiBody(url))
-        _sb_assert(apiBodyBuf, "Internal Error [L3598]")
-        // here's the only spot in the code where we actually open the websocket:
-        this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf!))
-        // if (DBG) console.log(SEP, SEP, "++++ ChannelSocket() - created new websocket", this.#ws.websocket , SEP, SEP)
-
-        // let Snackabra know about this socket
-        // Snackabra.activeChannelSockets.add(this.#ws.websocket)
-        Snackabra.addChannelSocket(this)
-        // console.log("Added a socket. Current active sockets:")
-        // for (const socket of Snackabra.activeChannelSockets.values())
-        //   console.log("readyState:", socket.readyState, "URL:", socket.url.slice(0, 100) + '...');
-      }
-
-      if (DBG) console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
-
-      const thisWsWebsocket = this.#ws.websocket
-      const initialListener = async (e: MessageEvent<any>) => {
-        if (!e.data) {
-          if (DBG0 || DBG) console.error("[ChannelSocket] received empty message")
-          reject("[ChannelSocket] received empty message (should be a 'ready' message)")
-        }
-        let serverReadyMessage: { ready: boolean, messageCount: number, latestTimestamp: string } | null = null
-
-        if (typeof e.data === 'string') {
-          serverReadyMessage = jsonParseWrapper(e.data, "L3909")
-          // const json = jsonParseWrapper(e.data, "L3909")
-          // if (json && json.hasOwnProperty('ready')) {
-          //   if (DBG0 || DBG) console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", e.data)
-          //   if (json.hasOwnProperty('latestTimestamp')) {
-          //     this.lastTimestampPrefix = json.latestTimestamp
-          //     if (DBG2) console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix)
-          //   } else console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'")
-          //   thisWsWebsocket.removeEventListener('message', initialListener);
-          //   thisWsWebsocket.addEventListener('message', this.#processMessage);
-          //   this.#setupPing();
-          //   (this as any)[ChannelSocket.ReadyFlag] = true;
-          //   resolve(this);
-          // } else {
-          //   reject("[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data));
-          // }
-        } else if (e.data instanceof ArrayBuffer) {
-          serverReadyMessage = extractPayload(e.data).payload
-        } else if (e.data instanceof Blob) {
-          serverReadyMessage = extractPayload(await e.data.arrayBuffer()).payload
-        } else {
-          _sb_exception("L3987", "[ChannelSocket] received something other than string or ArrayBuffer")
-        }
-        if (serverReadyMessage) {
-          if (serverReadyMessage.ready) {
-            if (DBG0 || DBG) console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", e.data)
-            if (serverReadyMessage.latestTimestamp) {
-              this.lastTimestampPrefix = serverReadyMessage.latestTimestamp
-              if (DBG2) console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix)
-            } else console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'")
-            thisWsWebsocket.removeEventListener('message', initialListener);
-            thisWsWebsocket.addEventListener('message', this.#processMessage);
-            this.#setupPing();
-            (this as any)[ChannelSocket.ReadyFlag] = true;
-            resolve(this);
-          } else {
-            reject("[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data));
+        if (!this.#ws.websocket || this.#ws.websocket.readyState === 3 || this.#ws.websocket.readyState === 2) {
+          // either it's new, or it's closed, or it's in the process of closing
+          if (this.#ws.websocket) {
+            console.warn("[ChannelSocket] websocket is in a bad state, closing it ... will await")
+            await closeSocket(this.#ws.websocket)
+            Snackabra.addChannelSocket(this)
           }
-        } else {
-          const msg = "[ChannelSocket] received empty message, or could not parse it (should be a 'ready' message)"
-          if (DBG0 || DBG) console.error(msg)
-          reject(msg)
+          // a WebSocket connection is always a 'GET', and there's no way to provide a body
+          const apiBodyBuf = assemblePayload(await this.buildApiBody(url))
+          _sb_assert(apiBodyBuf, "Internal Error [L3598]")
+          try {
+            // here's the only spot in the code where we actually open a websocket:
+            this.#ws.websocket = new WebSocket(url + "?apiBody=" + arrayBufferToBase62(apiBodyBuf!))
+            Snackabra.addChannelSocket(this)
+          } catch (e) {
+            const msg = "[ChannelSocket] Could not open websocket: " + e
+            if (DBG0) console.error(msg)
+            this.#rejectError!(msg)
+            return // don't do anything else
+          }
         }
-      };
 
-      this.#ws.websocket.addEventListener('message', initialListener);
+        if (DBG) console.log(SEP, "++++ readyPromise() - setting up websocket message listener", SEP);
 
-      // if (DBG) console.log(SEP,"++++ readyPromise() - setting up websocket message listener", SEP)
-      // this.#ws.websocket.addEventListener('message',
-      //   (e: MessageEvent<any>) => {
-      //     if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3618")?.hasOwnProperty('ready')) {
-      //       // switch to main message processor
-      //       this.#ws!.websocket!.addEventListener('message', this.#processMessage)
-      //       // we're ready
-      //       if (DBG) console.log(SEP, "Received ready", SEP)
-      //       ; (this as any)[ChannelSocket.ReadyFlag] = true;
-      //       resolve(this)
-      //     } else {
-      //       if (DBG) console.log(SEP, "Received non-ready:\n", e.data, "\n", SEP)
-      //       reject("[ChannelSocket] received something other than 'ready' as first message")
-      //     }
-      //   }
-      // )
+        const thisWsWebsocket = this.#ws.websocket
+        const initialListener = async (e: MessageEvent<any>) => {
+          if (!e.data) {
+            const msg = "[ChannelSocket] received empty message (should be a 'ready' message)";
+            console.error(msg);
+            this.#rejectError!(msg)
+          }
+          let serverReadyMessage: { ready: boolean, messageCount: number, latestTimestamp: string } | null = null
 
-      // let us set a timeout to catch and make sure this thing resoles within 10 seconds
-      let resolveTimeout: number | undefined = setTimeout(() => {
-        if (!(this as any)[ChannelSocket.ReadyFlag]) {
-          const msg = "[ChannelSocket] Socket not resolving after waiting, fatal."
-          console.warn(msg); reject(msg);
-        } else {
-          if (DBG2) console.log("[ChannelSocket] resolved correctly", this)
-        }
-      }, WEBSOCKET_SETUP_TIMEOUT);
+          if (typeof e.data === 'string') {
+            serverReadyMessage = jsonParseWrapper(e.data, "L3909")
+            // const json = jsonParseWrapper(e.data, "L3909")
+            // if (json && json.hasOwnProperty('ready')) {
+            //   if (DBG0 || DBG) console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", e.data)
+            //   if (json.hasOwnProperty('latestTimestamp')) {
+            //     this.lastTimestampPrefix = json.latestTimestamp
+            //     if (DBG2) console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix)
+            //   } else console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'")
+            //   thisWsWebsocket.removeEventListener('message', initialListener);
+            //   thisWsWebsocket.addEventListener('message', this.#processMessage);
+            //   this.#setupPing();
+            //   (this as any)[ChannelSocket.ReadyFlag] = true;
+            //   resolve(this);
+            // } else {
+            //   reject("[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data));
+            // }
+          } else if (e.data instanceof ArrayBuffer) {
+            serverReadyMessage = extractPayload(e.data).payload
+          } else if (e.data instanceof Blob) {
+            serverReadyMessage = extractPayload(await e.data.arrayBuffer()).payload
+          } else {
+            _sb_exception("L3987", "[ChannelSocket] received something other than string or ArrayBuffer")
+          }
+          if (serverReadyMessage) {
+            if (serverReadyMessage.ready) {
+              if (DBG0 || DBG) console.log("++++ readyPromise() - received ready message, switching to main message processor:\n", serverReadyMessage)
+              if (serverReadyMessage.latestTimestamp) {
+                this.lastTimestampPrefix = serverReadyMessage.latestTimestamp
+                if (DBG2) console.log("++++ readyPromise() - received latestTimestamp:", this.lastTimestampPrefix)
+              } else console.warn("[ChannelSocket] received 'ready' message without 'latestTimestamp'")
+              thisWsWebsocket.removeEventListener('message', initialListener);
+              thisWsWebsocket.addEventListener('message', this.#processMessage);
+              this.#setupPing();
+              (this as any)[ChannelSocket.ReadyFlag] = true;
+              resolve(this);
+            } else {
+              const msg = "[ChannelSocket] received something other than 'ready' as first message:\n" + JSON.stringify(e.data);
+              if ((this as any)[ChannelSocket.ReadyFlag] === true) console.warn(msg);
+              else this.#rejectError!(msg);
+            }
+          } else {
+            const msg = "[ChannelSocket] received empty message, or could not parse it (should be a 'ready' message)"
+            if ((this as any)[ChannelSocket.ReadyFlag] === true) console.warn(msg);
+            else this.#rejectError!(msg);
+          }
+        };
 
-      this.#ws.websocket.addEventListener('open', async () => {
-        this.#ws!.closed = false
-        if (resolveTimeout) { clearTimeout(resolveTimeout); resolveTimeout = undefined; }
-        // need to make sure parent is ready (and has keys)
-        await this.ready
-        if (DBG) console.log("++++++++ readyPromise() sending init")
-        // auth is done on setup, it's not needed for the 'ready' signal
-        // this.#ws!.websocket!.send(assemblePayload({ ready: true })!)
-        this.#ws!.websocket!.send('ready')
-        if (DBG) console.log("++++++++ readyPromise() ... no immediate errors for init")
-      });
+        this.#ws.websocket.addEventListener('message', initialListener);
 
-      this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
-        this.#ws!.closed = true
-        if (!e.wasClean) {
-          console.log(`[ChannelSocket] closed but NOT cleanly: ${e.reason} from ${this.channelServer}`)
-        } else {
-          if (e.reason.includes("does not have an owner"))
-            // reject(`No such channel on this server (${this.#sbServer.channel_server})`)
-            reject(`No such channel on this server (${this.channelServer})`)
-          else console.log('[ChannelSocket] Closed (cleanly), with reason: ', e.reason)
-        }
-        reject('wbSocket() closed before it was opened (?)')
-      });
+        // if (DBG) console.log(SEP,"++++ readyPromise() - setting up websocket message listener", SEP)
+        // this.#ws.websocket.addEventListener('message',
+        //   (e: MessageEvent<any>) => {
+        //     if (e.data && typeof e.data === 'string' && jsonParseWrapper(e.data, "L3618")?.hasOwnProperty('ready')) {
+        //       // switch to main message processor
+        //       this.#ws!.websocket!.addEventListener('message', this.#processMessage)
+        //       // we're ready
+        //       if (DBG) console.log(SEP, "Received ready", SEP)
+        //       ; (this as any)[ChannelSocket.ReadyFlag] = true;
+        //       resolve(this)
+        //     } else {
+        //       if (DBG) console.log(SEP, "Received non-ready:\n", e.data, "\n", SEP)
+        //       reject("[ChannelSocket] received something other than 'ready' as first message")
+        //     }
+        //   }
+        // )
 
-      this.#ws.websocket.addEventListener('error', (e) => {
-        this.#ws!.closed = true
-        if (DBG) console.log('[ChannelSocket] Error: ', e)
-        reject('[ChannelSocket] Websocket error event ' + e)
-      });
+        // let us set a timeout to catch and make sure this thing resoles within 10 seconds
+        let resolveTimeout: number | undefined = setTimeout(() => {
+          if (!(this as any)[ChannelSocket.ReadyFlag]) {
+            const msg = "[ChannelSocket] Socket not resolving after waiting, fatal."
+            console.warn(msg);
+            this.#rejectError!(msg)
+          } else {
+            if (DBG2) console.log("[ChannelSocket] resolved correctly", this)
+          }
+        }, WEBSOCKET_SETUP_TIMEOUT);
 
-    })
+        this.#ws.websocket.addEventListener('open', async () => {
+          this.#ws!.closed = false
+          if (resolveTimeout) { clearTimeout(resolveTimeout); resolveTimeout = undefined; }
+          // need to make sure parent is ready (and has keys)
+          await this.ready
+          if (DBG) console.log("++++++++ readyPromise() sending init")
+          // auth is done on setup, it's not needed for the 'ready' signal
+          // this.#ws!.websocket!.send(assemblePayload({ ready: true })!)
+          this.#ws!.websocket!.send('ready')
+          if (DBG) console.log("++++++++ readyPromise() ... no immediate errors for init")
+        });
+
+        this.#ws.websocket.addEventListener('close', (e: CloseEvent) => {
+          this.#ws!.closed = true
+          if (e.wasClean) {
+            if (e.reason.includes("does not have an owner")) {
+              const msg = `[ChannelSocket] No such channel on this server (${this.channelServer})`
+              if ((this as any)[ChannelSocket.ReadyFlag] === true)
+                throw new SBError(msg + ' plus we are ready? (L4130)')
+              this.#rejectError!(msg)
+            }
+            else console.log(`[ChannelSocket] Closed (cleanly).\nReason (if any): '${e.reason}'.`)
+          } else {
+            console.warn(`[ChannelSocket] Closed (but not cleanly) [L4137]\nReason (if any): '${e.reason}'. Server: '${this.channelServer}'`)
+          }
+          if ((this as any)[ChannelSocket.ReadyFlag] === true) {
+            this.#handleDisconnect("Channel was ready, but reporting being closed [L4140]")
+          } else {
+            const msg = "[ChannelSocket] Closed before ready (?) [L4142]"
+            console.error(msg)
+            this.#rejectError!(msg)
+          }
+        });
+
+        this.#ws.websocket.addEventListener('error', (e) => {
+          this.#ws!.closed = true
+          if ((this as any)[ChannelSocket.ReadyFlag] === true) {
+            // this.#handleDisconnect("Error on trying to open socket [L4152]")
+            const msg = "[ChannelSocket] Socket closed [L4152]\nEvent message (if any): '" + (e as any).message + "'";
+            console.error(msg)
+            this.#rejectError!(msg)
+          } else {
+            const msg = `[ChannelSocket] Failed to connect, or errored out immediately [L4153].\nError (if any): '${e}'`
+            console.error(msg)
+            this.#rejectError!(msg)
+          }
+        });
+      })
+    ]);
+    if (DBG2) console.log("Socket ready factory done, error promise:", this.#rejectError)
+    return returnPromise
+    // this.#errorPromise.catch((e) => {
+    //   console.log(SEP, "[ChannelSocket] Error in setup:", e, SEP)
+    //   this.#handleDisconnect("Error in setup [L4162]: " + e)
+    // })
   }
 
   #processMessage = async (e: MessageEvent<any>) => {
@@ -4147,9 +4240,14 @@ class ChannelSocket extends Channel {
       }
       // we only have one 'ping' outstanding at a time
       setTimeout(() => {
-        if (this.#ws!.closed) return;
-        if (DBG2) console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.")
-        this.#ws!.websocket!.send('ping')
+        if (this.#ws && !this.#ws.closed && this.#ws.websocket?.readyState === 1) {
+          if (DBG2) console.log("[ChannelSocket] Sending 'ping' (timestamp request) message.")
+          try {
+            this.#ws!.websocket!.send('ping')
+          } catch (_e) {
+            if (DBG0) console.warn("[ChannelSocket] Failed to send 'ping' message, ignoring");
+          }
+        } else if (DBG0) console.log("[ChannelSocket] Shutting down ping message timeout")
       }, WEBSOCKET_PING_INTERVAL)
       // these messages are absorbed
       return;
@@ -4193,9 +4291,9 @@ class ChannelSocket extends Channel {
 
     if (this.#traceSocket) console.log("[ChannelSocket] Received socket message:", message)
 
-    if (DBG0) console.log("[ChannelSocket] Updated 'latestTimestamp' to:", msg)
     _sb_assert(message.sts, "[ChannelSocket] Message missing server timestamp Internal Error (L4145)")
     this.lastTimestampPrefix = ChannelSocket.timestampToBase4String(message!.sts!)
+    if (DBG0) console.log("[ChannelSocket] Updated 'latestTimestamp' to:", this.lastTimestampPrefix)
 
     // if (!message._id)
     //   message._id = composeMessageKey(message.channelId!, message.sts!, message.i2)
@@ -4238,6 +4336,11 @@ class ChannelSocket extends Channel {
     _sb_assert(!this.errorState, "[ChannelSocket] in error state (Internal Error L4104)")
     _sb_assert(!this.isClosed, "[ChannelSocket] We are closed, blocking on'ready' will reject")
     return this.channelSocketReady
+  }
+
+  get errorPromise() {
+    if (!this.#errorPromise) throw new SBError("[ChannelSocket] errorPromise called before ready")
+    return this.#errorPromise
   }
 
   // get readyFlag(): boolean { return this.#ChannelSocketReadyFlag }
@@ -4338,7 +4441,7 @@ class ChannelSocket extends Channel {
     _sb_assert(this.#ws && this.#ws.websocket, "[ChannelSocket.send()] called before ready")
     if (DBG2) console.log(SEP, "[ChannelSocket] sending, contents:\n", JSON.stringify(contents), SEP)
     if (this.#ws!.closed) {
-      if (this.#traceSocket) console.info("send() triggered reset of #readyPromise() (normal)")
+      console.info("send() triggered reset of #readyPromise() (normal)")
       this.channelSocketReady = this.#channelSocketReadyFactory()
         // this.#ChannelSocketReadyFlag = true
         ; (this as any)[ChannelSocket.ReadyFlag] = false;
@@ -4409,6 +4512,42 @@ class ChannelSocket extends Channel {
   }
 
   /**
+   * This is either called when you're done, or is called internally
+   * during various restart/reconnect scenarios.
+   */
+  async close() {
+    if (DBG0 || DBG) console.log("++++ ChannelSocket.close() called ... closing down stuff ...")
+    this.isClosed = true;
+    clearInterval(this.#pingInterval);
+    if (this.#ws && this.#ws.websocket) {
+      // this.#ws.websocket.send('close') // will try to rely on protocol instead
+      if (this.#ws.websocket.readyState === 1) {
+        if (DBG0) console.log(SEP, "[ChannelSocket] Closing websocket, with readystate:", this.#ws.websocket.readyState, SEP)
+        this.#ws.websocket.close()
+        // debugging Deno? ... wait a moment here
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      }
+      this.#ws.closed = true
+    }
+    // close and drain the sendQueue; any messages in flight will be rejected
+    // todo: strictly speaking, if we're in a retry situation, we can still handle them
+    const queueDrain = super.close()
+
+    // tell SB that we are no longer connected
+    Snackabra.removeChannelSocket(this)
+
+    // set ready to permanently reject
+    ; (this as any)[ChannelSocket.ReadyFlag] = false;
+
+    // we would like to throw if anybody anywhere tries to await on our 'ready':
+    // this.channelSocketReady = Promise.reject("[ChannelSocket] This channel socket has been closed (by client request)")
+    // but this doesn't work well because of JS limitations in tracking stacks. instead we in effect have a different
+    // state: 'isClosed' can be true, while the ChannelSocket is still 'ready'.
+
+    return queueDrain; // in case caller wants to await
+  }
+
+  /**
    * Reconnects (resets) a ChannelSocket. This will not block (it's
    * synchronous), and 'ready' will resolve when the socket is ready again.
    */
@@ -4416,9 +4555,11 @@ class ChannelSocket extends Channel {
     if (DBG0) console.trace("++++ ChannelSocket.reset() called ... for ChannelID:", this.channelId)
     if (this.#ws && this.#ws.websocket) {
       if (this.#ws.websocket.readyState === 1) {
+        if (DBG0) console.log("[ChannelSocket] Closing websocket, with readystate:", this.#ws.websocket.readyState)
         this.#ws.websocket.close()
       }
-      this.#ws.closed = true
+      this.#ws.closed = true;
+      (this as any)[ChannelSocket.ReadyFlag] = false;
       // we also delete the old entry on the active sockets list
       Snackabra.removeChannelSocket(this)
       // and reset our readiness
@@ -4426,43 +4567,6 @@ class ChannelSocket extends Channel {
     }
   }
 
-  async close() {
-    if (DBG0 || DBG) console.log("++++ ChannelSocket.close() called ... closing down stuff ...")
-    this.isClosed = true;
-    clearInterval(this.#pingInterval);
-    if (this.#ws && this.#ws.websocket && this.#ws.websocket.readyState === 1) {
-      if (DBG0) console.log("++++ ChannelSocket.close() ... sending close message ...")
-      // this.#ws.websocket.send(assemblePayload({ close: true })!)
-      this.#ws.websocket.send('close')
-    } else {
-      if (DBG0) console.log("++++ ChannelSocket.close() ... no open socket to send close message ...", this.#ws?.websocket)
-    }
-    // first close and drain the sendQueue; there may be socket messages that
-    // are in flight, but this will push 'reject' to all of them
-    await super.close()
-    // at this point there shouldn't be outstanding transactions that are queue
-    // up to be sent on the websocket; proceed to clean up the websocket
-
-    Snackabra.removeChannelSocket(this)
-
-      // if (this.#ws && this.#ws.websocket) {
-      //   // Snackabra.activeChannelSockets.delete(this.#ws.websocket)
-      //   Snackabra.removeChannelSocket(this)
-      //   this.#ws.websocket.close()
-      //   this.#ws.closed = true
-      // } else {
-      //   console.log("++++ ChannelSocket.close() called ... but no socket to close?")
-      // }
-
-      // set ready to permanently reject
-      ; (this as any)[ChannelSocket.ReadyFlag] = false;
-
-    // we would like to throw if anybody anywhere tries to await on our 'ready',
-    // but this turns out to be a major headache to debug because of JS
-    // limitations in tracking stacks. instead we in effect have a different
-    // state, namely 'isClosed' can be true being true while still 'ready'.
-    // this.channelSocketReady = Promise.reject("[ChannelSocket] This channel socket has been closed (by client request)")
-  }
 
   // /** @type {JsonWebKey} */ @Memoize @Ready get exportable_owner_pubKey() { return this.keys.ownerKey }
 
@@ -4543,34 +4647,66 @@ function validate_Shard(s: Shard): Shard {
  */
 
 
+
 /**
- * StorageAPI
+ * StorageAPI. Used to interact with storage server(s). It will have a concept
+ * of a 'default' server, but that is not needed for all operations. It will
+ * default to using server choices in any handles.
  */
 export class StorageApi {
-  #storageServer: Promise<string>;
-  #offline: boolean = false;
-
+  #server?: string; // either a channel or storage server
+  #storageServer: string = ''; // empty means unknown (for example we're offline)
   static #uploadBacklog = 0
-
-  // we use a promise so that asynchronicity can be handled interally in StorageApi,
-  // eg so users don't have to do things like ''(await SB.storage).fetchObject(...)''
-  constructor(stringOrPromise: Promise<string> | string) {
-    this.#storageServer = Promise.resolve(stringOrPromise)
-      .then((s) => {
-        const storageServer = s
-        _sb_assert(typeof storageServer === 'string', 'StorageApi() constructor requires a string (for storageServer)')
-        return storageServer
+  constructor(server?: string) {
+    if (server) {
+      this.#server = server
+      this.#_getStorageServer().then((s) => {
+        if (!s) {
+          if (DBG0) console.error("[StorageApi] Could not (immediately) resolve storage server")
+          // ToDo: we are proactive in checking again during dev&test, this might be unnecessary
+          //       since ''getStorageServer()'' will retry later anyway, as needed
+          const reCheckInterval = setInterval(async () => {
+            if (Snackabra.isShutdown) {
+              clearInterval(reCheckInterval)
+              if (DBG0) console.error("[StorageApi] Shutting down, will not retry getting storage server")
+            } else {
+              const s2 = await this.#_getStorageServer()
+              if (s2) {
+                clearInterval(reCheckInterval)
+                if (DBG0) console.log(`[StorageApi] ... eventually resolved storage server ('${s2}')`)
+              } // else: no-op, we keep trying
+            }
+          }, 1000)
+        } // else: no need to try again
       })
-      .catch((e) => {
-        console.error("[StorageApi] failed to initialize:", e);
-        this.#offline = true;
-        return "<OFFLINE>"
-      });
+    }
   }
 
-  async getStorageServer(): Promise<string> {
-    if (this.#offline) throw new SBError("[StorageApi] offline")
-    return this.#storageServer
+  // we use a promise so that asynchronicity can be handled interally in StorageApi,
+  // eg so users don't have to do things like ''(await SB.storage).fetchObject(...)''.
+  // this fetch is low-level and returns empty string if not online. if it receives
+  // inconsistent or incorrect information, it will throw
+  async #_getStorageServer(): Promise<string> {
+    if (this.#storageServer) {
+      return this.#storageServer
+    } else if (!this.#server) {
+      if (DBG0) console.warn('[StorageApi] No server information known (neither channel or storage)')
+    } else {
+      const retValue = await Snackabra.getServerInfo(this.#server)
+      if (!retValue) return '' // we're probably offline
+      if (retValue && !retValue.storageServer)
+        throw new SBError('[StorageApi] Server available did not provide storage server name, cannot initialize. Should not happen [L4651]')
+      if (DBG0) console.log("[StorageApi] Fyi, server returned info info:", retValue)
+      this.#storageServer = retValue.storageServer
+
+    }
+    return this.#storageServer // if undetermined, we return empty string
+  }
+
+  async getStorageServer() {
+    const s = await this.#_getStorageServer()
+    if (s) return s;
+    else throw new SBError("[StorageApi] Identity of storage server is not (yet) known.");
   }
 
   /**
@@ -4654,7 +4790,6 @@ export class StorageApi {
       ]))
     return arrayBufferToBase62(id)
   }
-
 
   /**
    * Paces uploads to avoid overloading the storage server. Takes into account
@@ -4870,7 +5005,6 @@ export class StorageApi {
     throw new SBError(`[fetchData] failed to fetch from any server`)
   }
 
-
   /**
    * Convenience wrapper for object handles: returns the 'data' if it's present,
    * returns undefined if it's not, and throws an error if the handle is
@@ -4969,8 +5103,15 @@ export class SBEventTarget {
   }
 }
 
-
-
+/**
+ * Channel and Storage servers return the same structure.
+ */
+export interface SBServerInfo {
+  version: string,
+  channelServer: string,
+  storageServer: string,
+  jslibVersion?: string,
+}
 
 type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 
@@ -4979,6 +5120,10 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * will only be talking to one channel server, but it is possible
   * to have multiple instances of Snackabra, each talking to a
   * different channel server.
+  * 
+  * Channel servers are generally associated with a single storage
+  * storage, one where the channel server is trusted to make storage
+  * allocation decisions.
   * 
   * Takes a single parameter, the URL to the channel server.
   * 
@@ -5000,7 +5145,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends SBEventTarget {
-  public static version = "3.20240416.1"
+  public static version = "3.20240502.2"
 
   // these are known shards that we've seen and know the handle for; this is
   // global. hashed on decrypted (but not extracted) contents.
@@ -5008,7 +5153,6 @@ class Snackabra extends SBEventTarget {
 
   #channelServer: string
   #storage: StorageApi
-  #channelServerInfo: any // caches whatever last server info we got
 
   // globally paces (messaging) operations, and assures unique timestamps
   public static lastTimeStamp = 0 // todo: x256 (string) format
@@ -5062,50 +5206,7 @@ class Snackabra extends SBEventTarget {
     }
 
     this.#channelServer = channelServer // conceptually, you can have multiple channel servers
-    // (eventually) fetch storage server name from channel server; StorageApi knows how to handle this
-
-    this.#storage = new StorageApi(new Promise((resolve, reject) => {
-
-      //   sbFetch(this.#channelServer + '/api/v2/info')
-      //     .then((response: Response) => {
-      //       if (!response.ok) { reject('response from channel server was not OK') }
-
-      //       return response.json()
-      //     })
-      //     .then((data) => {
-      //       if (data.error) reject(`fetching storage server name failed: ${data.error}`)
-      //       else {
-      //         this.#channelServerInfo = data
-      //         if (DBG) console.log("Channel server info:", this.#channelServerInfo)
-      //       }
-      //       _sb_assert(data.storageServer, 'Channel server did not provide storage server name, cannot initialize')
-      //       resolve(data.storageServer)
-      //     })
-      //     .catch((error: Error) => {
-      //       if (!Snackabra.isShutdown) {
-      //         console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
-      //         reject(error)
-      //       }
-      //     });
-
-      // let's refactor the above to use 'SBApiFetch' instead
-      if (DBG) console.log(`++++ Snackabra constructor: fetching storage server name from '${this.#channelServer + '/api/v2/info'}' ++++`)
-      SBApiFetch(this.#channelServer + '/api/v2/info')
-        .then((retValue) => {
-          if (DBG) console.log("Channel server info:", retValue)
-          _sb_assert(retValue.storageServer, 'Channel server did not provide storage server name, cannot initialize')
-          this.#channelServerInfo = retValue
-          if (DBG) console.log("Channel server info:", this.#channelServerInfo)
-          resolve(retValue.storageServer)
-        })
-        .catch((error: Error) => {
-          if (!Snackabra.isShutdown) {
-            console.error("[Snackabra] fetching storage server name failed (fatal):\n", error)
-            reject(error)
-          }
-        });
-    }));
-
+    this.#storage = new StorageApi(channelServer)
   }
 
   // any operations that require a precise timestamp (such as messages) can use
@@ -5134,18 +5235,20 @@ class Snackabra extends SBEventTarget {
    */
   static heardFromServer() {
     Snackabra.#latestPing = Date.now()
+    if (DBG2) console.log("[Snackabra] heardFromServer() at", Snackabra.#latestPing)
     switch (Snackabra.onlineStatus) {
       case 'offline':
-        if (DBG) console.info("[Snackabra] We are BACK online")
+        if (DBG0) console.info(`[Snackabra] [${Snackabra.#latestPing}] we are now BACK online`)
         this.emit('online')
         this.emit('reconnected')
         Snackabra.onlineStatus = 'online'
         break
       case 'online':
         // still online, unless socket count is zero
+        if (DBG2) console.info("[Snackabra] heardFromServer() we are still online")
         break
       case 'unknown':
-        if (DBG) console.info("[Snackabra] We are now ONLINE")
+        if (DBG0) console.info(`[Snackabra] [${Snackabra.#latestPing}] we are now ONLINE`)
         this.emit('online')
         Snackabra.onlineStatus = 'online'
         break
@@ -5166,15 +5269,17 @@ class Snackabra extends SBEventTarget {
    * think we should have.
    */
   static haveNotHeardFromServer() {
-    if (Date.now() - Snackabra.#latestPing > WEBSOCKET_PING_INTERVAL * 1.1) {
-      if (DBG0) console.warn("[Snackabra] 'ping' message seems to have timed out")
+    const timeNow = Date.now()
+    if (timeNow - Snackabra.#latestPing > WEBSOCKET_PING_INTERVAL * 1.5) {
+      if (DBG2) console.warn("[Snackabra] 'ping' message seems to have timed out")
       if (Snackabra.onlineStatus === 'online') {
         if (Snackabra.#activeChannelSockets.size > 0) {
-          if (DBG) console.warn("[Snackabra] OFFLINE")
+          if (DBG || DBG0) console.log(`[Snackabra] [${timeNow}] OFFLINE`)
           Snackabra.onlineStatus = 'offline'
+          // this is the only spot in the code where we emit 'offline'
           this.emit('offline')
         } else {
-          if (DBG) console.warn("[Snackabra] No active channel sockets, online status is now UNKNOWN")
+          if (DBG || DBG0) console.warn("[Snackabra] [${timeNow}] No active channel sockets, online status is now UNKNOWN")
           Snackabra.onlineStatus = 'unknown'
           Snackabra.onlineStatus = 'offline'
           this.emit('unknownNetworkStatus')
@@ -5185,10 +5290,12 @@ class Snackabra extends SBEventTarget {
   }
 
   static addChannelSocket(socket: ChannelSocket) {
+    if (DBG0) console.log("[Snackabra] adding channel socket:", socket)
     Snackabra.#activeChannelSockets.add(socket)
   }
 
   static removeChannelSocket(socket: ChannelSocket) {
+    if (DBG0) console.log("[Snackabra] removing channel socket:", socket)
     if (Snackabra.#activeChannelSockets.has(socket))
       Snackabra.#activeChannelSockets.delete(socket)
     this.checkUnknownNetworkStatus()
@@ -5340,17 +5447,37 @@ class Snackabra extends SBEventTarget {
     Snackabra.isShutdown = true;
     Snackabra.activeFetches.forEach(controller => controller.abort('Snackabra.closeAll() called'));
     Snackabra.activeFetches.clear();
+
+    console.log("[Snackabra] [closeAll] closing all active channel sockets:", Snackabra.#activeChannelSockets)
     await Promise.all(Array.from(Snackabra.#activeChannelSockets).map(close));
+
     // we block a fraction of a second here to give everything time to propagate
-    console.log("... waiting for everything to close ...")
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log("[Snackabra] [closeAll] ... waiting for everything to close ...")
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  /**
+   * Gets server information on provided server. Note, this will return 'undefined'
+   * if the server is not reachable (it will not throw).
+   */
+  static async getServerInfo(server: string = Snackabra.defaultChannelServer): Promise<SBServerInfo | undefined> {
+    try {
+      const r = await SBApiFetch(server + '/api/v2/info');
+      if (DBG0) console.log(`[getServerInfo] Fetching server info from '${server}' ++++`)
+      return r
+    } catch (e) {
+      if (DBG0) console.warn(`[getServerInfo] Could not access server '${server}'`)
+      return undefined
+    }
   }
 
   /** Returns the storage API */
-  @Memoize get storage(): StorageApi { return this.#storage; }
+  @Memoize get storage() { return this.#storage; }
 
   /** Returns matching storage server */
-  @Memoize async getStorageServer(): Promise<string> { return this.#storage.getStorageServer() }
+  @Memoize async getStorageServer(): Promise<string> {
+    return this.storage.getStorageServer()
+  }
 
   /** Returns the crypto API */
   get crypto(): SBCrypto { return sbCrypto; }
