@@ -184,7 +184,7 @@ if (typeof DBG === 'undefined')
     globalThis.DBG = false;
 if (typeof DBG2 === 'undefined')
     globalThis.DBG2 = false;
-var DBG0 = true;
+var DBG0 = false;
 if (DBG0)
     console.log("++++ Setting DBG0 to TRUE ++++");
 function setDebugLevel(_dbg1, _dbg2) {
@@ -2231,17 +2231,14 @@ class Channel extends SBChannelKeys {
         var { page, prefix, type } = options;
         _sb_assert(page, "Channel.setPage: no page (contents) provided");
         prefix = prefix || 12;
+        if (prefix < 6)
+            throw new SBError("Channel.setPage: prefix must be at least 6 characters");
         type = type || 'sb384payloadV3';
-        if (type) {
-            return this.callApi('/setPage', {
-                page: page,
-                type: type,
-                prefix: prefix,
-            });
-        }
-        else {
-            return this.callApi('/setPage', page);
-        }
+        return this.callApi('/setPage', {
+            page: page,
+            type: type,
+            prefix: prefix,
+        });
     }
     async getPage() {
         const prefix = this.hashB32;
@@ -3313,7 +3310,7 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240502.2";
+    static version = "3.20240502.4";
     static knownShards = new Map();
     #channelServer;
     #storage;
@@ -3324,14 +3321,14 @@ class Snackabra extends SBEventTarget {
     static lastTimestampPrefix = '0'.repeat(26);
     static #latestPing = Date.now();
     static onlineStatus = 'unknown';
-    static defaultChannelServer = 'http://localhost:3845';
+    static defaultChannelServer = 'https://c3.384.dev';
     eventTarget = new SBEventTarget();
     constructor(channelServer, options) {
         super();
-        console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} ====`);
         _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter');
         if (channelServer)
             Snackabra.defaultChannelServer = channelServer;
+        console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} (${Snackabra.defaultChannelServer}) ====`);
         if (typeof options === 'boolean')
             options = { DEBUG: options };
         if (options && options.sbFetch) {

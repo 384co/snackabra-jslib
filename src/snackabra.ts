@@ -421,7 +421,7 @@ declare var DBG2: boolean;
 if (typeof DBG === 'undefined') (globalThis as any).DBG = false
 if (typeof DBG2 === 'undefined') (globalThis as any).DBG2 = false
 
-var DBG0 = true // internal, set it to 'true' or 'DBG2'
+var DBG0 = false // internal, set it to 'true' or 'DBG2'
 if (DBG0) console.log("++++ Setting DBG0 to TRUE ++++");
 
 // ... testing moving this to build process
@@ -3602,16 +3602,13 @@ class Channel extends SBChannelKeys {
     var { page, prefix, type } = options
     _sb_assert(page, "Channel.setPage: no page (contents) provided")
     prefix = prefix || 12
+    if (prefix < 6) throw new SBError("Channel.setPage: prefix must be at least 6 characters")
     type = type || 'sb384payloadV3'
-    if (type) {
-      return this.callApi('/setPage', {
-        page: page,
-        type: type,
-        prefix: prefix,
-      })
-    } else {
-      return this.callApi('/setPage', page)
-    }
+    return this.callApi('/setPage', {
+      page: page,
+      type: type,
+      prefix: prefix,
+    })
   }
 
   /**
@@ -5145,7 +5142,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends SBEventTarget {
-  public static version = "3.20240502.2"
+  public static version = "3.20240502.4"
 
   // these are known shards that we've seen and know the handle for; this is
   // global. hashed on decrypted (but not extracted) contents.
@@ -5171,8 +5168,9 @@ class Snackabra extends SBEventTarget {
   // public static online = true; // updated by 'ping'
   public static onlineStatus: ServerOnlineStatus = 'unknown'
 
-  // overwritten by whatever most recent new Snackabra(), but defaults to localhost
-  static defaultChannelServer = 'http://localhost:3845'
+  // overwritten by whatever most recent new Snackabra()
+  // static defaultChannelServer = 'http://localhost:3845'
+  static defaultChannelServer = 'https://c3.384.dev' // ToDo: revisit
 
   eventTarget = new SBEventTarget()
 
@@ -5187,9 +5185,9 @@ class Snackabra extends SBEventTarget {
       | boolean
   ) {
     super() // ToDo: for some freaking reason can't do 'extends SBEventTarget'
-    console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} ====`)
     _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter')
     if (channelServer) Snackabra.defaultChannelServer = channelServer
+    console.warn(`==== CREATING Snackabra object generation: ${Snackabra.version} (${Snackabra.defaultChannelServer}) ====`)
 
     if (typeof options === 'boolean') options = { DEBUG: options }
 
@@ -5516,7 +5514,7 @@ export var SB = {
 
 if (!(globalThis as any).SB)
   (globalThis as any).SB = SB;
-// we warn for benefit of Deno and visibility
+
 console.warn(`==== SNACKABRA jslib (re)loaded, version '${Snackabra.version}' ====`);
 
 //#endregion
