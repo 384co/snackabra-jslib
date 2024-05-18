@@ -4968,6 +4968,9 @@ export class StorageApi {
     const h = validate_SBObjectHandle(handle) // throws if there's an issue
     if (DBG) console.log("fetchData(), handle:", h)
 
+    // if (h.id === 'vGkNKHuFfz6ceElBmwDZhs4UHuN8nJV4YzVVIsSCOae')
+    //   debugger;
+
     // ... not correct
     // // we might be 'caching' as a weakref
     // if (h.data && h.data instanceof WeakRef && h.data.deref()) return (h); // the ref is still good
@@ -5142,7 +5145,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends SBEventTarget {
-  public static version = "3.20240502.4"
+  public static version = "3.20240517.0"
 
   // these are known shards that we've seen and know the handle for; this is
   // global. hashed on decrypted (but not extracted) contents.
