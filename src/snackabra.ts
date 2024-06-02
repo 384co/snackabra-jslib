@@ -632,73 +632,722 @@ type jwkStruct = {
   d?: string
 }
 
-/**
- * 'MessageHistory' is where Messages go to retire. It's an infinitely-scaleable
- * (in a practical sense) structure that can be used to store messages in a
- * flexible way. Chunks of messages are stored as shards, in the form of a
- * payload wrapped Map (key->message), where each message in turn is a
- * payload-wrapped ChannelMessage.
- *
- * This can be thought of as a flexible 'key-value store archive format' (where
- * the keys are globally unique and monotonically increasing).
- *
- * The channel server keeps the 'latest' messages (by some definition) in a
- * straight KV format; overflow (or archiving) is done by processing these into
- * this structure.
- *
- * Note that depending on at what stage this object is in, it can either be
- * mutable or immutable. While immutable, the timestamps track updates. Once
- * (and eventually) encapsulated into a shard and it becomes immutable, then
- * 'lastModified' documents that point of time.
- *
- * Note that this structure is not particularly opinionated about how it should
- * organize itself. Since any components that are shardified are immutable, any
- * future processing requirements can re-map as needed. Our initial design
- * priority is to be flexible, and simple, in particular to keep bug rate low.
- */
-export interface MessageHistory {
-  type: 'entry' | 'directory'
-  version: '20240228001',
-  channelId: SBChannelId,
-  ownerPublicKey: SBUserPublicKey,
-  created: number, // timestamp of creation
-  channelServer?: string,
-  from: string, // 'inclusive'
-  to: string, // 'inclusive'
-  count: number, // (total) count of messages, zero means empty
-}
-
-/**
- * A single messagehistory shard: a Map<string, ArrayBuffer> where each buffer
- * is a payload-wrapped ChannelMessage, in turn payload-wrapped and shardified.
- * If the shard is missing, count must be zero (and vice versa).
- * 
- * An entry is always shardified.
- */
-export interface MessageHistoryEntry extends MessageHistory {
-  type: 'entry',
-  messages: Map<string, ArrayBuffer>
-}
-
-/**
- * Directory of message history structures. entries can be 'direct' objects, or
- * to handle (arbitrary) scaling then at any point they can be 'sharded' (eg
- * payload-wrapped); the string key is always the 'from' ('first') of whatever
- * is referenced by Map (directly or indirectly).
- * 
- * 'depth' of '0' means all the entries are 'direct', eg they are all shards
- * of sets of messages; depth '1' means 
- */
-export interface MessageHistoryDirectory extends MessageHistory {
-  type: 'directory',
-  depth: number,
-  lastModified: number, // timestamp of last modification
-  shards?: Map<string, SBObjectHandle>
-  subdirectories?: Map<string, MessageHistoryDirectory>,
-}
-
-
 //#endregion - Interfaces - Types
+
+/******************************************************************************************************/
+//#region - Deep History
+
+
+const _SEP_ = '='.repeat(76)
+const _SEP = '\n' + _SEP_
+const SEP_ = _SEP_ + '\n'
+
+// this section is self-contained, being migrated to jslib
+
+export interface Freezable<T1, T2> {
+  type: 'leaf' | 'node';
+  valuesArray?: T1[];
+  frozenChunkIdArray?: T2[];
+}
+
+export class HistoryTreeNode<ValueType, FrozenIdType, IndexType> {
+  children: HistoryTreeNode<ValueType, FrozenIdType, IndexType>[] = [];
+  value: ValueType | undefined = undefined;
+  from: IndexType | undefined = undefined;
+  to: IndexType | undefined = undefined;
+  isFull: boolean = false;
+
+  frozenHeight: number | undefined = undefined; // if set, corresponds to a frozen chunk
+  frozenChunkId: FrozenIdType | undefined = undefined; // if we're frozen at this point, this is the chunk number
+
+  constructor(
+      private root: HistoryTree<ValueType, FrozenIdType, IndexType>,
+      public isLeaf: boolean = false
+  ) { }
+
+  // Attempts to insert a value into the HistoryTree. Returns false if the node is full.
+  async insert(value: ValueType, from: IndexType, to: IndexType = from): Promise<boolean> {
+      if (DBG2) console.log(SEP_, `Inserting value ${value} at this point (leaf, full, children count):\n`, this.isLeaf, this.isFull, this.value, this.children.length)
+      if (this.isFull || this.value !== undefined) throw new Error("Should not be inserting here")
+      if (this.isLeaf) {
+          const newLeaf = new HistoryTreeNode<ValueType, FrozenIdType, IndexType>(this.root);
+          newLeaf.value = value;
+          newLeaf.from = from;
+          newLeaf.to = to;
+          if (!this.from || from < this.from) this.from = from;
+          if (!this.to || to > this.to) this.to = to;
+          newLeaf.isFull = true;
+          this.children.push(newLeaf);
+          if (this.children.length === this.root.branchFactor) {
+              // it's 'full', we freeze it
+              this.isFull = true;
+              this.frozenHeight = this.nodeHeight(); // will be '1'
+              this.frozenChunkId = await this.root.freeze({ type: 'leaf', valuesArray: this.children.map(child => child.value!)})
+              this.children = []; // we don't need the children anymore
+          }
+          return true;
+      }
+
+      if (this.children.length === 0 || this.children[this.children.length - 1].isFull) {
+          if (this.children.length === this.root.branchFactor) throw new Error("Internal Error (L100)")
+          const newNode = new HistoryTreeNode<ValueType, FrozenIdType, IndexType>(this.root, true); // always start with leaf node
+          await newNode.insert(value, from, to); // this will be true
+          this.children.push(newNode);
+          if (!this.from || from < this.from) this.from = from;
+          if (!this.to || to > this.to) this.to = to;
+          return true;
+      }
+
+      // pick last child (we know it's not full) and insert, and check if that fills it
+      await this.children[this.children.length - 1].insert(value, from, to);
+      this.from = from < this.from! ? from : this.from!;
+      this.to = to > this.to! ? to : this.to!;
+
+      // if this filled up the last child, and we have branch factor children, we are full
+      if (this.children[this.children.length - 1].isFull && this.children.length === this.root.branchFactor) {
+          let i = 0;
+          while (this.children[i].nodeHeight() === this.children[i+1].nodeHeight()) {
+              if (++i === this.children.length - 1) {
+                  // if all children are the same height, we are full, and we freeze the node
+                  this.isFull = true;
+                  this.frozenHeight = this.nodeHeight();
+                  this.frozenChunkId = await this.root.freeze({ type: 'node', frozenChunkIdArray: this.children.map(child => child.frozenChunkId!) })
+                  this.children = []; // we don't need the children anymore
+                  // 'from' and 'to' are already set
+                  return true;
+              }
+          }
+          // we know that child 'i+1' onwards are shorter than child 'i', merge those into a new node
+          const newChild = new HistoryTreeNode<ValueType, FrozenIdType, IndexType>(this.root);
+          newChild.children = this.children.splice(i+1);
+          // we leverage that the leaves are always sorted 'left to right'
+          newChild.from = newChild.children[0].from;
+          newChild.to = newChild.children[newChild.children.length - 1].to;
+          this.children.push(newChild);
+          return true
+      }
+      return true; // regardless, we did handle the value
+  }
+
+  nodeHeight(): number {
+      if (this.frozenHeight !== undefined) return this.frozenHeight;
+      if (this.value !== undefined) return 0;
+      // otherwise we return the max height of any of our children
+      return 1 + Math.max(...this.children.map(child => child.nodeHeight()));
+  }
+
+  async traverse(callback: (node: HistoryTreeNode<ValueType, FrozenIdType, IndexType>) => Promise<void>, reverse = false): Promise<void> {
+      if (!reverse) await callback(this);
+      var children = this.children;
+      if (this.frozenChunkId !== undefined) {
+          const frozen = await this.root.deFrost(this.frozenChunkId);
+          if (frozen.type === 'leaf') {
+              children = frozen.valuesArray!.map(value => {
+                  const node = new HistoryTreeNode<ValueType, FrozenIdType, IndexType>(this.root, true);
+                  node.value = value;
+                  return node;
+              });
+          } else if (frozen.type === 'node') {
+              children = frozen.frozenChunkIdArray!.map(chunkId => {
+                  const node = new HistoryTreeNode<ValueType, FrozenIdType, IndexType>(this.root);
+                  node.frozenChunkId = chunkId;
+                  return node;
+              });
+          } else {
+              console.error("Frozen type error, contents of frozen:\n", frozen)
+              throw new Error("Unknown frozen type")
+          }
+      }
+
+      if (!reverse) for (const child of children) await child.traverse(callback, reverse);
+      else for (let i = children.length - 1; i >= 0; i--) await children[i].traverse(callback, reverse);
+      
+      if (reverse) await callback(this);
+  }
+
+  async _callbackValue(node: HistoryTreeNode<ValueType, FrozenIdType, IndexType>, _nodeCallback?: (value: ValueType) => Promise<void>): Promise<void> {
+      if (node.value !== undefined)
+          if (_nodeCallback !== undefined)
+              await _nodeCallback(node.value);
+          else
+              if (DBG0) console.log(node.value);
+  }
+
+  async traverseValues(callback?: (value: ValueType) => Promise<void>, reverse = false): Promise<void> {
+      return this.traverse(async node => await this._callbackValue(node, callback), reverse);
+  }
+
+  export(): any {
+      let retVal: any = { from: this.from, to: this.to }
+      if (this.frozenChunkId !== undefined) {
+          // return { frozenHeight: this.frozenHeight, frozenChunkId: this.frozenChunkId }
+          retVal = { ...retVal, frozenChunkId: this.frozenChunkId, frozenHeight: this.frozenHeight}
+      } else if (this.value) {
+          // return { value: this.value }
+          retVal = { ...retVal, value: this.value }
+      } else {
+          // return { frozenHeight: this.frozenHeight, value: this.value, isFull: this.isFull, children: this.children.map(child => child.export())}
+          if (this.frozenHeight !== undefined) throw new Error("Should not have a frozen height here")
+          // return { isFull: this.isFull, children: this.children.map(child => child.export())}
+          retVal = { ...retVal, isFull: this.isFull, children: this.children.map(child => child.export())}
+      }
+      return retVal;
+  }
+
+  static import<ValueType, FrozenType, IndexType>(root: HistoryTree<ValueType, FrozenType, IndexType>, data: any): HistoryTreeNode<ValueType, FrozenType, IndexType> {
+      const node = new HistoryTreeNode<ValueType, FrozenType, IndexType>(root);
+      node.from = data.from;
+      node.to = data.to;
+      if (data.frozenChunkId !== undefined) {
+          node.frozenChunkId = data.frozenChunkId;
+          node.frozenHeight = data.frozenHeight;
+          node.isFull = true // <== forgot this
+      } else if (data.value !== undefined) {
+          node.isLeaf = true; // <== forgot this
+          node.isFull = true; // <== forgot this
+          node.value = data.value;
+      } else {
+          node.isFull = data.isFull;
+          node.children = data.children.map((child: any) => HistoryTreeNode.import(root, child));
+      }
+      return node;
+  }
+
+}
+
+export abstract class HistoryTree<ValueType, FrozenType, IndexType> {
+  root: HistoryTreeNode<ValueType, FrozenType, IndexType> = new HistoryTreeNode<ValueType, FrozenType, IndexType>(this)
+  abstract freeze(data: Freezable<ValueType, FrozenType>): Promise<FrozenType>
+  abstract deFrost(data: FrozenType): Promise<Freezable<ValueType, FrozenType>>
+  constructor(public branchFactor: number, data?: any) {
+      if (data)
+          this.root = HistoryTreeNode.import(this, data);
+  }
+  async insertValue(value: ValueType, from: IndexType, to: IndexType): Promise<boolean> {
+      if (this.root.isFull) {
+          // when the HistoryTree grows is the decision point to shardify the structure
+          const newRoot = new HistoryTreeNode<ValueType, FrozenType, IndexType>(this);
+          newRoot.from = this.root.from;
+          newRoot.to = this.root.to;
+          newRoot.children.push(this.root);
+          this.root = newRoot;
+      }
+      return this.root.insert(value, from, to);
+  }
+  async traverse(callback: (node: HistoryTreeNode<ValueType, FrozenType, IndexType>) => Promise<void>, reverse = false): Promise<void> {
+      return this.root.traverse(callback, reverse);
+  }
+  async traverseValues(callback?: (value: ValueType) => Promise<void>, reverse = false): Promise<void> {
+      return this.root.traverseValues(callback, reverse);
+  }
+  export(): any {
+      if (this.root)
+          return this.root.export();
+      else return {};
+  }
+
+}
+
+/**
+* 'MessageHistory' is where Messages go to retire. It's a scaleable structure
+* that can be used to store messages in a flexible way. Chunks of messages are
+* stored as shards, in the form of a payload wrapped Map (key->message), where
+* each message in turn is a payload-wrapped ChannelMessage.
+*
+* This can be thought of as a flexible 'key-value store archive format' (where
+* the keys are globally unique and monotonically increasing).
+*
+* The channel server keeps the 'latest' messages (by some definition) in a
+* straight KV format; overflow (or archiving) is done by processing messages
+* into this structure.
+*
+* The class for the whole thing is 'DeepHistory', below. It is a variant of a
+* Merkle tree (strictly speaking, it's only a Merkle tree when fully 'frozen').
+*
+*/
+export interface MessageHistory {
+  version: '20240601.0',
+  channelId: SBChannelId, // server from which this backup was originally taken
+  ownerPublicKey: SBUserPublicKey, // archives pub key that created original channel
+  created: number, // timestamp of creation (of this backup shard)
+  from: string, // first message ID in this set (inclusive)
+  to: string, // last message ID in this set (inclusive)
+  count: number, // (total) count of messages, zero means empty, max is 512
+  size: number, // total size of all the messages (counted individually, not the size of the shard)
+  shard: SBObjectHandle, // the actual shard (payload wrapped Map<string, ArrayBuffer>)
+}
+
+
+/**
+* Full deep history feature. If no budget is provided, it will be in read-only
+* mode. Uses Tree with index type 'string' (eg channelId + '_' + subChannel +
+* '_' + timestampPrefix). The 'values' handled by HistoryTree are MessageHistory, and
+* this class will encapsulate shardifying the lowest level, eg 'leaf' nodes
+* with between ~128 and 512 messages.
+* 
+* Note that the channel server has a parallel class to this ('ChannelHistory')
+*/
+export class DeepHistory extends HistoryTree<MessageHistory, SBObjectHandle, string> {
+  /*
+     the production values are calibrated for overflowing on either max
+     message count or max message size, whichever happens first.  a
+     'directory' (eg 'node') entry is at most ~750 bytes per child. hence the
+     branching factor of 32, which will keep the size of a sharded 'node'
+     under 24 KiB.
+
+     the message set size is set to 512, which is approx half of 1000, which
+     is the current Cloudflare limit to single-query key queries. with a
+     current maximum of 64 KiB per message (though we are currently using 32
+     KiB), that would translate to at least 32 MiB in a single shard, which is
+     well above efficient sizes, so we also limit the size message contents to
+     4 MiB, which in practice leads to a minimum message cound of 125 (not
+     128, because of packaging overhead, and a small buffer).
+
+     in practice, most messages are (much) shorter than max.
+
+     we want large values, if for no other reason than that the mutable part
+     of DeepHistory is of a size that's a function of height.
+
+     these production values imply a single-level tree can reference up to 16K
+     messages (or up to 128 MiB of message content); two levels can reference
+     512K messages (or up to 4 GiB of message content); three levels can
+     reference 16M messages (or up to 128 GiB of message content).
+
+     the design limit for a single channel is 256K messages per second. so two
+     year's worth of flat-out messaging would be over 16 trillion messages,
+     and could fit (in principle) fit in a 7-level tree.
+
+     (our current Cloudflare-hosted channel servers are capped at 1K messages
+     per second, but we have POC channel server code that can handle >1M).
+
+  */
+  // public static MESSAGE_HISTORY_BRANCH_FACTOR = 32; // production value
+  public static MESSAGE_HISTORY_BRANCH_FACTOR = 4; // testing value
+
+  // public static MAX_MESSAGE_SET_SIZE = 512; // production value
+  public static MAX_MESSAGE_SET_SIZE = 7; // testing value
+
+  // this is specific to DH; we take a cue from SBFile max chunks which are
+  // currently 4 MiB, and current channel server message maximum is 32 KiB. 
+  public static MAX_MESSAGE_HISTORY_SHARD_SIZE = (4 * 1024 * 1024) - (2 * 32 * 1024)
+
+  // top is 'working memory', when feeding items (eg messages) into the tree
+  top: Map<string, ArrayBuffer> = new Map()
+  topSize = 0; // size in bytes of messages in 'top'
+
+  constructor(data?: any, private SB?: Snackabra, private budget?: Channel) {
+      super(DeepHistory.MESSAGE_HISTORY_BRANCH_FACTOR, data);
+  }
+
+  // wrapper for the storage API; returnes cleaned-up / compacted handle
+  private async storeData(data: any): Promise<SBObjectHandle> {
+      if (!this.budget || !this.SB) throw new Error("Budget required to freeze data (this DeepHistory is operating in read-only mode)")
+      if (DBG2) {
+          const b = assemblePayload(data)!
+          console.log("(packaged size will be) [storeData] asked to store buffer size", b.byteLength, "bytes")
+      }
+      const h = await this.SB.storage.storeData(data, this.budget)
+      const x = await stringify_SBObjectHandle(h)
+      return {
+          id: x.id,
+          key: x.key,
+          verification: x.verification
+      }    
+  }
+
+  // wrapper for the storage API; returns the final payload (extracted)
+  private async fetchData(handle: SBObjectHandle): Promise<any> {
+      // return SB.storage.fetchData(handle).then(h => extractPayload(h.payload).payload)
+      if (!this.SB) throw new Error("SB required to fetch data")
+      const b = await this.SB.storage.fetchData(handle)
+      // const p = extractPayload(b.payload)
+      // if (!p) throw new Error("Failed to extract payload")
+      // return p.payload
+      return b.payload
+  }
+
+  // provides abstract interface for the Tree class
+  async freeze(data: Freezable<MessageHistory, SBObjectHandle>): Promise<SBObjectHandle> {
+      if (DBG0) 
+          console.log("*** Freezing data, packaged size will be:", assemblePayload(data)!.byteLength)
+      return this.storeData(data)
+  }
+  // provides abstract interface for the Tree class
+  async deFrost(handle: SBObjectHandle) {
+      return this.fetchData(handle) as Promise<Freezable<MessageHistory, SBObjectHandle>>
+  }
+
+  async insert(msg: ChannelMessage): Promise<void> {
+      const id = msg._id!
+      const msgPayload = assemblePayload(msg); if (!msgPayload) throw new Error("Failed to assemble payload")
+      this.top.set(id, msgPayload)
+      this.topSize += msgPayload.byteLength
+      if (
+          // note: we need '>=' so we can ingest an older tree, and pick it back up
+             this.top.size >= DeepHistory.MAX_MESSAGE_SET_SIZE
+          || this.topSize >= DeepHistory.MAX_MESSAGE_HISTORY_SHARD_SIZE
+      ) {
+          if (DBG2) console.log(`Top now has ${this.top.size} messages, and ${this.topSize} bytes of content, overflowing ...`)
+          if (DBG2) console.log(`(packaged size will be) contains ${this.top.size} messages, and ${this.topSize} bytes of content`)
+          const [from, to] = Channel.getLexicalExtremes(this.top)
+          const newEntry: MessageHistory = {
+              version: '20240601.0',
+              channelId: '<channelId>',
+              ownerPublicKey: '<ownerPublicKey>',
+              created: Date.now(),
+              from: from!,
+              to: to!,
+              count: this.top.size,
+              // messages: new Map(this.top)
+              size: this.topSize,
+              shard: await this.storeData(this.top)
+          }
+          this.top.clear(); this.topSize = 0;
+          if (DBG2) console.log(SEP, "Local (KV etc) overflowed, inserting new entry:\n", newEntry, _SEP)
+          await this.insertValue(newEntry, from!, to!)
+      }
+  }
+  printTop(reverse: boolean) {
+      if (!(this.top instanceof Map)) throw new Error("Expected a map (in this.top)")
+      const keys = Array.from(this.top.keys())
+      keys.sort()
+      if (reverse) keys.reverse()
+      keys.forEach(key => {
+          const value = this.top.get(key)
+          if (value) {
+              const msg = extractPayload(value).payload as ChannelMessage
+              console.log(msg._id, ' - ', msg.unencryptedContents)
+          }
+      });
+  }
+  async traverseValues(callback?: (value: MessageHistory) => void, reverse = false): Promise<void> {
+      if (callback) throw new Error("Not implemented, we hard code the callback")
+      console.log(SEP, `Traversing the tree ${reverse ? 'reverse' : 'in order'} :`, _SEP)
+      if (reverse) this.printTop(true)
+      await this.traverse(async node => {
+          // const messages = node.value?.messages
+          // console.log(SEP, "NODE and node value:\n", node, SEP, node.value, SEP)
+          if (node.value) {
+              const messages = await this.fetchData(node.value.shard) as Map<string, ArrayBuffer>
+              if (!(messages instanceof Map)) throw new Error("Expected a map")
+              if (DBG2) console.log(SEP, "We are looking at:\n", node.value, SEP, messages, SEP, messages.size, SEP)
+              const keys = Array.from(messages.keys())
+              // either sort in order or sort reverse
+              keys.sort()
+              if (reverse) keys.reverse()
+              for (const key of keys) {
+                  const value = messages.get(key)
+                  if (value) {
+                      const msg = extractPayload(value).payload as ChannelMessage
+                      if (DBG2) console.log(msg._id, ' - ', msg.unencryptedContents)
+                      else console.log(msg._id, ` - '${msg.unencryptedContents.msg}' and ${msg.unencryptedContents.body.byteLength} bytes`)
+                  }
+              }
+          }
+      }, reverse);
+      if (!reverse) this.printTop(false)
+      console.log(SEP)
+  }
+  
+}
+
+//#endregion - Deep History
+
+
+
+// export interface Freezable<T1, T2> {
+//   type: 'leaf' | 'node';
+//   valuesArray?: T1[];
+//   frozenChunkIdArray?: T2[];
+// }
+
+// export class HistoryTreeNode<ValueType, FrozenIdType> {
+//   children: HistoryTreeNode<ValueType, FrozenIdType>[] = [];
+//   value: ValueType | undefined = undefined;
+//   isFull: boolean = false;
+
+//   frozenHeight: number | undefined = undefined; // if set, corresponds to a frozen chunk
+//   frozenChunkId: FrozenIdType | undefined = undefined; // if we're frozen at this point, this is the chunk number
+
+//   constructor(
+//       private root: Tree<ValueType, FrozenIdType>,
+//       public isLeaf: boolean = false
+//   ) { }
+
+//   private freezeInternal(node: HistoryTreeNode<ValueType, FrozenIdType>): FrozenIdType {
+//       const v = node.children.map(child => child.value!)
+//       const freezeId = this.root.freeze({ type: 'leaf', valuesArray:  v})
+//       if (DBG2) console.log(SEP_, `Frozen chunk with ${MESSAGE_HISTORY_BRANCH_FACTOR} 'ValueType' into chunk id ${freezeId}:\n`, v, _SEP)
+//       return freezeId;
+//   }
+
+//   private freezeNode(node: HistoryTreeNode<ValueType, FrozenIdType>): FrozenIdType {
+//       // iterate through the children, and verify that they are all frozen
+//       if (DBG0) console.log(`Freezing node with ${node.children.length} children`)
+//       this.children.forEach(child => {
+//           if (!child.isFull) throw new Error("Should not be freezing here, there are incomplete children")
+//           if (child.frozenChunkId === undefined) throw new Error("Frozen chunk missing")
+//           // if (DBG0) console.log('  ', `Frozen chunk ID: ${child.frozenChunkId}`)
+//       });
+//       const freezeId = this.root.freeze({ type: 'node', frozenChunkIdArray: node.children.map(child => child.frozenChunkId!) })
+//       if (DBG2) console.log(`  ... above went into frozen chunk id ${freezeId}`)
+//       return freezeId;
+//   }
+
+//   // Attempts to insert a value into the tree. Returns false if the node is full.
+//   insert(value: ValueType): boolean {
+//       if (DBG2) console.log(SEP_, `Inserting value ${value} at this point (leaf, full, children count):\n`, this.isLeaf, this.isFull, this.value, this.children.length)
+//       if (this.isFull || this.value !== undefined) throw new Error("Should not be inserting here")
+//       if (this.isLeaf) {
+//           const newLeaf = new HistoryTreeNode<ValueType, FrozenIdType>(this.root);
+//           newLeaf.value = value;
+//           newLeaf.isFull = true;
+//           this.children.push(newLeaf);
+//           if (this.children.length === MESSAGE_HISTORY_BRANCH_FACTOR) {
+//               // it's 'full', we freeze it
+//               this.isFull = true;
+//               this.frozenHeight = this.nodeHeight(); // will be '1'
+//               this.frozenChunkId = this.freezeInternal(this);
+//               this.children = []; // we don't need the children anymore
+//           }
+//           return true;
+//       }
+
+//       if (this.children.length === 0 || this.children[this.children.length - 1].isFull) {
+//           const newNode = new HistoryTreeNode<ValueType, FrozenIdType>(this.root, true); // always start with leaf node
+//           newNode.insert(value); // this will be true
+//           this.children.push(newNode);
+//           return true;
+//       }
+
+//       // pick last child (we know it's not full) and insert, and check if that fills it
+//       this.children[this.children.length - 1].insert(value);
+
+//       // if this filled up the last child, and we have branch factor children, we are full
+//       if (this.children[this.children.length - 1].isFull && this.children.length === MESSAGE_HISTORY_BRANCH_FACTOR) {
+//           let i = 0;
+//           while (this.children[i].nodeHeight() === this.children[i+1].nodeHeight()) {
+//               if (++i === this.children.length - 1) {
+//                   // if all children are the same height, we are full, and we freeze the node
+//                   this.isFull = true;
+//                   this.frozenHeight = this.nodeHeight();
+//                   this.frozenChunkId = this.freezeNode(this);
+//                   this.children = []; // we don't need the children anymore
+//                   return true;
+//               }
+//           }
+//           // we know that child 'i+1' onwards are shorter than child 'i', merge those into a new node
+//           const newChild = new HistoryTreeNode<ValueType, FrozenIdType>(this.root);
+//           newChild.children = this.children.splice(i+1);
+//           this.children.push(newChild);MESSAGE_HISTORY_BRANCH_FACTOR
+//           return true
+//       }
+//       return true; // regardless, we did handle the value
+//   }
+
+//   nodeHeight(): number {
+//       if (this.frozenHeight !== undefined) return this.frozenHeight;
+//       if (this.value !== undefined) return 0;
+//       // otherwise we return the max height of any of our children
+//       return 1 + Math.max(...this.children.map(child => child.nodeHeight()));
+//   }
+
+//   traverse(callback: (node: HistoryTreeNode<ValueType, FrozenIdType>) => void, reverse = false): void {
+//       if (!reverse) callback(this);
+//       var children = this.children;
+//       if (this.frozenChunkId !== undefined) {
+//           const frozen = this.root.deFrost(this.frozenChunkId);
+//           if (frozen.type === 'leaf') {
+//               children = frozen.valuesArray!.map(value => {
+//                   const node = new HistoryTreeNode<ValueType, FrozenIdType>(this.root, true);
+//                   node.value = value;
+//                   return node;
+//               });
+//           } else if (frozen.type === 'node') {
+//               children = frozen.frozenChunkIdArray!.map(chunkId => {
+//                   const node = new HistoryTreeNode<ValueType, FrozenIdType>(this.root);
+//                   node.frozenChunkId = chunkId;
+//                   return node;
+//               });
+//           } else {
+//               console.error("Frozen type error, contents of frozen:\n", frozen)
+//               throw new Error("Unknown frozen type")
+//           }
+//       }
+//       // if (DBG0) console.log(SEP_, `Considering children set of:\n`, children, _SEP)
+//       if (!reverse) {
+//           children.forEach(child => child.traverse(callback, reverse));
+//       } else {
+//           for (let i = children.length - 1; i >= 0; i--) {
+//               children[i].traverse(callback, reverse);
+//           }
+//       }
+//       if (reverse) callback(this);
+//   }
+
+//   _callbackValue(node: HistoryTreeNode<ValueType, FrozenIdType>, _nodeCallback?: (value: ValueType) => void): void {
+//       if (node.value !== undefined)
+//           if (_nodeCallback !== undefined)
+//               _nodeCallback(node.value);
+//           else
+//               if (DBG0) console.log(node.value);
+//   }
+
+//   traverseValues(callback?: (value: ValueType) => void, reverse = false): void {
+//       this.traverse(node => this._callbackValue(node, callback), reverse);
+//   }
+
+//   export(): any {
+//       if (this.frozenChunkId !== undefined) {
+//           return { frozenHeight: this.frozenHeight, frozenChunkId: this.frozenChunkId }
+//       } else if (this.value) {
+//           return { value: this.value }
+//       } else {
+//           // return { frozenHeight: this.frozenHeight, value: this.value, isFull: this.isFull, children: this.children.map(child => child.export())}
+//           if (this.frozenHeight !== undefined) throw new Error("Should not have a frozen height here")
+//           return { isFull: this.isFull, children: this.children.map(child => child.export())}
+//       }
+//   }
+
+//   static import<ValueType, FrozenType>(root: Tree<ValueType, FrozenType>, data: any): HistoryTreeNode<ValueType, FrozenType> {
+//       const node = new HistoryTreeNode<ValueType, FrozenType>(root);
+//       if (data.frozenChunkId !== undefined) {
+//           node.frozenChunkId = data.frozenChunkId;
+//           node.frozenHeight = data.frozenHeight;
+//           node.isFull = true // <== forgot this
+//       } else if (data.value !== undefined) {
+//           node.isLeaf = true; // <== forgot this
+//           node.isFull = true; // <== forgot this
+//           node.value = data.value;
+//       } else {
+//           node.isFull = data.isFull;
+//           node.children = data.children.map((child: any) => HistoryTreeNode.import(root, child));
+//       }
+//       return node;
+//   }
+
+// }
+
+// export abstract class Tree<ValueType, FrozenType> {
+//   root: HistoryTreeNode<ValueType, FrozenType> = new HistoryTreeNode<ValueType, FrozenType>(this)
+//   abstract freeze(data: Freezable<ValueType, FrozenType>): FrozenType
+//   abstract deFrost(data: FrozenType): Freezable<ValueType, FrozenType>
+//   constructor(data?: any) {
+//       if (data)
+//           this.root = HistoryTreeNode.import(this, data);
+//   }
+//   insertValue(value: ValueType): void {
+//       if (this.root.isFull) {
+//           // when the tree grows is the decision point to shardify the structure
+//           const newRoot = new HistoryTreeNode<ValueType, FrozenType>(this);
+//           newRoot.children.push(this.root);
+//           this.root = newRoot;
+//       }
+//       this.root.insert(value);
+//   }
+//   traverse(callback: (node: HistoryTreeNode<ValueType, FrozenType>) => void, reverse = false): void {
+//       this.root.traverse(callback, reverse);
+//   }
+//   traverseValues(callback?: (value: ValueType) => void, reverse = false): void {
+//       this.root.traverseValues(callback, reverse);
+//   }
+//   export(): any {
+//       if (this.root)
+//           return this.root.export();
+//       else return {};
+//   }
+
+// }
+
+// export class DeepHistory extends Tree<MessageHistoryEntry, number> {
+//   chunkArray: Array<ArrayBuffer> = []
+//   top: Map<string, ArrayBuffer> = new Map()
+//   constructor(data?: any) {
+//       super(data);
+//   }
+//   freeze(data: Freezable<MessageHistoryEntry, number>): number {
+//       const b = assemblePayload(data)
+//       if (!b) throw new Error("Failed to assemble payload")
+//       this.chunkArray.push(b!)
+//       const n = this.chunkArray.length - 1
+//       // console.log(SEP, `Frozen chunk id ${n}:\n`, data, _SEP)
+//       return n
+//   }
+//   deFrost(data: number) {
+//       const v = extractPayload(this.chunkArray[data]).payload as Freezable<MessageHistoryEntry, number>
+//       if (DBG2) console.log(SEP, `De-frosted chunk id ${data}:\n`, v)
+      
+//       return v
+//   }
+//   insert(msg: ChannelMessage): void {
+//       const id = msg._id!
+//       this.top.set(id, assemblePayload(msg)!)
+//       if (this.top.size >= MAX_MESSAGE_SET_SIZE) {
+//           if (DBG2) console.log(`Top is now size ${this.top.size}, overflowing ...`)
+//           const [from, to] = Channel.getLexicalExtremes(new Set(this.top.keys()))
+//           const newEntry: MessageHistoryEntry = {
+//               type: 'entry',
+//               version: '20240529.0',
+//               channelId: '<channelId>',
+//               ownerPublicKey: '<ownerPublicKey>',
+//               created: Date.now(),
+//               from: from!,
+//               to: to!,
+//               count: this.top.size,
+//               messages: new Map(this.top)
+
+//           }
+//           this.top.clear()
+//           if (DBG2) console.log(SEP, "Local (KV etc) overflowed, inserting new entry:\n", newEntry, _SEP)
+//           this.insertValue(newEntry)
+//           if (newEntry.messages.size !== MAX_MESSAGE_SET_SIZE) {
+//               console.log(newEntry.messages)
+//               throw new Error(`Failed to insert the new entry (left with size ${newEntry.messages.size})`)
+//           }
+//       }
+//   }
+//   printTop(reverse: boolean) {
+//       if (!(this.top instanceof Map)) throw new Error("Expected a map (in this.top)")
+//       const keys = Array.from(this.top.keys())
+//       keys.sort()
+//       if (reverse) keys.reverse()
+//       keys.forEach(key => {
+//           const value = this.top.get(key)
+//           if (value) {
+//               const msg = extractPayload(value).payload as ChannelMessage
+//               console.log(msg._id, ' - ', msg.unencryptedContents)
+//           }
+//       });
+//   }
+//   traverseValues(callback?: (value: MessageHistoryEntry) => void, reverse = false): void {
+//       if (callback) throw new Error("Not implemented, we hard code the callback")
+//       console.log(SEP, `Traversing the tree ${reverse ? 'reverse' : 'in order'} :`, _SEP)
+//       if (reverse) this.printTop(true)
+//       this.traverse(node => {
+//           const messages = node.value?.messages
+//           if (messages) {
+//               if (!(messages instanceof Map)) throw new Error("Expected a map")
+//               if (DBG2) console.log(SEP, "We are looking at:\n", node.value, SEP, messages, SEP, messages.size, SEP)
+//               const keys = Array.from(messages.keys())
+//               // either sort in order or sort reverse
+//               keys.sort()
+//               if (reverse) keys.reverse()
+//               for (const key of keys) {
+//                   const value = messages.get(key)
+//                   if (value) {
+//                       const msg = extractPayload(value).payload as ChannelMessage
+//                       console.log(msg._id, ' - ', msg.unencryptedContents)
+//                   }
+//               }
+//           }
+//       }, reverse);
+//       if (!reverse) this.printTop(false)
+//       console.log(SEP)
+//   }
+  
+// }
+
+
 
 /******************************************************************************************************/
 //#region - Message Bus
@@ -946,6 +1595,23 @@ export function getRandomValues(buffer: Uint8Array) {
     return buffer
   }
 }
+
+/**
+ * Convenience function: Generates a random alphanumeric string of a given length.
+ * The string always starts with a letter.
+ * 
+ * @param length The length of the string to generate. Default is 16.
+ * @returns A random alphanumeric string of the specified length.
+ */
+export function generateRandomString(length: number = 16): string {
+  const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const alphanumeric = letters + "0123456789";
+  return Array.from({ length }, (_, i) => 
+    i === 0 ? letters.charAt(Math.floor(Math.random() * letters.length)) : 
+             alphanumeric.charAt(Math.floor(Math.random() * alphanumeric.length))
+  ).join('');
+}
+
 
 //#endregion
 
@@ -2273,12 +2939,10 @@ function decompressP384(xBase64: string, signY: number) {
 /**
   * Basic (core) capability object in SB.
   *
+  * Can initialize from various formats. If no starting point key is given,
+  * it will "mint" a fresh key.
   *
-  * @param key a jwk with which to create identity; if not provided, it will
-  * 'mint' (generate) them randomly, in other words it will default to creating
-  * a new identity ("384").
-  *
-  * @param forcePrivate if true, will force SB384 to include private key; it
+  * If ``forcePrivate`` is true, will force SB384 to include private key; it
   * will throw an exception if the key is not private. If SB384 is used to mint,
   * then it's always private.
   *
@@ -3068,7 +3732,7 @@ export interface MessageOptions {
 // message per se, but also the 'original' resolve/reject of the 'send()'
 // operation, and a binding to the 'actual' sending function (eg restful API,
 // socket, whatever))
-interface EnqueuedMessage {
+export interface EnqueuedMessage {
   msg: ChannelMessage,
   resolve: (value: any) => any,
   reject: (reason: any) => any,
@@ -3519,8 +4183,8 @@ class Channel extends SBChannelKeys {
         if (DBG) console.log("getMessageKeys\n", keys)
         if (!keys || keys.size === 0)
           console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?")
-        if (keys.size > 600)
-          console.warn(SEP, "[Channel.getMessageKeys] Warning: more than 600 messages requested (will soon need 'deep history' support)", SEP)
+        if (keys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
+          console.warn(SEP, `[Channel.getMessageKeys] Warning: ${keys.size} keys returned, that's over the ${Snackabra.MAX_MESSAGE_SET_SIZE} limit - you will NOT be able to request this set directly.`, SEP)
         resolve({ keys, historyShard })
       } catch (e) {
         const msg = `[Channel.getMessageKeys] Error in getting message keys (offline?) ('${e}')`
@@ -3534,7 +4198,8 @@ class Channel extends SBChannelKeys {
   getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>> {
     if (DBG) console.log("[getRawMessageMap] called with messageKeys:", messageKeys)
     if (messageKeys.size === 0) throw new SBError("[getRawMessageMap] no message keys provided")
-    if (messageKeys.size > 100) throw new SBError("[getRawMessageMap] too many messages requested at once (max 100)")
+    if (messageKeys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
+      throw new SBError(`[getRawMessageMap] too many messages requested at once (max ${Snackabra.MAX_MESSAGE_SET_SIZE})`)
     return new Promise(async (resolve, _reject) => {
       await this.channelReady
       _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)")
@@ -3549,7 +4214,8 @@ class Channel extends SBChannelKeys {
    * Main function for getting a chunk of messages from the server.
    */
   getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>> {
-    if (messageKeys.size > 100) throw new SBError("[getMessageMap] too many message keys provided (max 100)")
+    if (messageKeys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
+        throw new SBError(`[getMessageMap] too many message keys provided (max ${Snackabra.MAX_MESSAGE_SET_SIZE})`)
     if (DBG) console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys)
     if (messageKeys.size === 0) throw new SBError("[getMessageMap] no message keys provided")
     return new Promise(async (resolve, _reject) => {
@@ -3568,18 +4234,16 @@ class Channel extends SBChannelKeys {
     });
   }
 
-  /**
-   * Returns map of message keys from the server corresponding to the request.
-   */
-  getHistory(): Promise<MessageHistoryDirectory> {
-    return new Promise(async (resolve, _reject) => {
-      await this.channelReady
-      _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)")
-      const response = await this.callApi('/getHistory')
-      // console.log("getHistory result:\n", response)
-      resolve(response as MessageHistoryDirectory)
-    });
-  }
+  // /**
+  //  * Returns map of message keys from the server corresponding to the request.
+  //  */
+  // async getHistory(): Promise<MessageHistoryDirectory> {
+  //   await this.channelReady
+  //   _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)")
+  //   const h = await this.callApi('/getHistory') as MessageHistoryDirectory
+  //   console.log("getHistory result:\n", h)
+  //   return h
+  // }
 
   // @Ready async send(msg: any, options?: MessageOptions): Promise<string> {
   //   _sb_assert(!(msg instanceof SBMessage), "[Channel.send] msg is already an SBMessage")
@@ -3793,10 +4457,17 @@ class Channel extends SBChannelKeys {
     return new Date(ts).toISOString()
   }
 
-  static getLexicalExtremes<T extends number | string>(set: Set<T>): [T, T] | [] {
-    if (set.size === 0) return [];
-    let min: T, max: T = min = set.values().next().value;
-    for (const value of set) {
+  /**
+   * Will take values (or keys), and return the lowest and highest values;
+   * empty data is fine and will return '[]' (falsey).
+   */
+  static getLexicalExtremes<T extends number | string>(set: Set<T> | Array<T> | Map<T, any>): [T, T] | [] {
+    if (!(set instanceof Set || set instanceof Array || set instanceof Map))
+      throw new SBError("[getLexicalExtremes] Paramater must be a Set, Array, or Map");
+    const arr = set instanceof Array ? set : Array.from(set.keys()); // this is legit, which is cute
+    if (arr.length === 0) return [];
+    let [min, max] = [arr[0], arr[0]] as [T, T];
+    for (const value of arr) {
       if (value < min) min = value;
       if (value > max) max = value;
     }
@@ -3853,6 +4524,8 @@ class Channel extends SBChannelKeys {
    * throw if there's an issue, it just sets all the parts to '', which should
    * never occur. Up to you if you want to run with that result or assert on it.
    * Strict about the format (defined as `[a-zA-Z0-9]{43}_[_a-zA-Z0-9]{4}_[0-3]{26}`).
+   * 
+   * Note that '____' is the default subchannel.
    */
   static deComposeMessageKey(key: string): { channelId: string, i2: string, timestamp: string } {
     const regex = /^([a-zA-Z0-9]{43})_([_a-zA-Z0-9]{4})_([0-3]{26})$/;
@@ -4793,8 +5466,9 @@ export class StorageApi {
    * global number of operations.
    */
   static async paceUploads() {
+    if (DBG) console.log("+++++ [paceUploads] called, backlog is:", StorageApi.#uploadBacklog)
     while (StorageApi.#uploadBacklog > 8) { // ToDo: evaluate this better and/or redesign storage server
-      console.log("+++++ [paceUploads] waiting for server, backlog is:", StorageApi.#uploadBacklog)
+      if (DBG) console.log("+++++ [paceUploads] waiting for server, backlog is:", StorageApi.#uploadBacklog)
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
   }
@@ -4858,7 +5532,7 @@ export class StorageApi {
         })
       }
 
-      console.log("5555 5555 [storeData] storeQuery:", SEP, storeQuery, SEP)
+      if (DBG2) console.log("5555 5555 [storeData] storeQuery:", SEP, storeQuery, SEP)
 
       const result = await SBApiFetch(storeQuery, init)
 
@@ -4945,11 +5619,6 @@ export class StorageApi {
    * local mirror is running. After that, it may or may not check one or several
    * possible servers.
    *
-   * @param h SBObjectHandle - the object to fetch
-   * @param returnType 'string' | 'arrayBuffer' - the type of data to return
-   * (default: 'arrayBuffer')
-   * @returns Promise<ArrayBuffer | string> - the shard data
-   *
    * Note that 'storageServer' in the returned object might have changed, it
    * will be whichever server fetchData() was able to fetch from (so could be
    * local mirror for example, so be a bit careful with overwriting the original
@@ -4968,8 +5637,9 @@ export class StorageApi {
     const h = validate_SBObjectHandle(handle) // throws if there's an issue
     if (DBG) console.log("fetchData(), handle:", h)
 
-    // if (h.id === 'vGkNKHuFfz6ceElBmwDZhs4UHuN8nJV4YzVVIsSCOae')
-    //   debugger;
+    if (Snackabra.shardBreakpoints.has(h.id)) {
+      debugger;
+    }
 
     // ... not correct
     // // we might be 'caching' as a weakref
@@ -5035,7 +5705,7 @@ export class StorageApi {
    * 'undefined' as a non-throwing response (because 'undefined' by itself is a
    * permitted shard content).
    *
-   * For the same reason, we can't have a non-throwing 'getPayload()' method,
+   * For the same reason, we can't have a non-throwing 'fetchPayload()' method,
    * that would be analogous to 'getData()'. 
    */
   async fetchPayload(h: SBObjectHandle): Promise<any> {
@@ -5145,7 +5815,11 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends SBEventTarget {
-  public static version = "3.20240517.0"
+  public static version = "3.20240601.0"
+
+  // maximum number of messages to fetch in one go. the server might have a
+  // different opinion, in which case this will be adjusted
+  public static MAX_MESSAGE_SET_SIZE = 512
 
   // these are known shards that we've seen and know the handle for; this is
   // global. hashed on decrypted (but not extracted) contents.
@@ -5176,6 +5850,8 @@ class Snackabra extends SBEventTarget {
   static defaultChannelServer = 'https://c3.384.dev' // ToDo: revisit
 
   eventTarget = new SBEventTarget()
+
+  static shardBreakpoints: Set<string> = new Set()
 
   constructor(
     channelServer: string,
@@ -5355,10 +6031,6 @@ class Snackabra extends SBEventTarget {
    * Note that this method does not connect to the channel, it just creates
    * (authorizes) it and allocates storage budget.
    *
-   * New (2.0) interface:
-   *
-   * @param budgetChannel: Channel - the source of initialization budget
-   *
    * Note that if you have a full budget channel, you can budd off it (which
    * will take all the storage). Providing a budget channel here will allows you
    * to create new channels when a 'guest' on some other channel (for example),
@@ -5464,12 +6136,22 @@ class Snackabra extends SBEventTarget {
   static async getServerInfo(server: string = Snackabra.defaultChannelServer): Promise<SBServerInfo | undefined> {
     try {
       const r = await SBApiFetch(server + '/api/v2/info');
-      if (DBG0) console.log(`[getServerInfo] Fetching server info from '${server}' ++++`)
+      if (DBG0) console.log(SEP, `[getServerInfo] Fetching server info from '${server}' ++++\n`, r, SEP)
+      if (r && r.maxMessageSetSize)
+        Snackabra.MAX_MESSAGE_SET_SIZE = r.maxMessageSetSize
       return r
     } catch (e) {
       if (DBG0) console.warn(`[getServerInfo] Could not access server '${server}'`)
       return undefined
     }
+  }
+
+  /*
+   * Will cause 'debugger' to be called when the specified shard is ever fetched,
+   * facilitating debugging.
+   */
+  static traceShard(id: string){
+    Snackabra.shardBreakpoints.add(id)
   }
 
   /** Returns the storage API */

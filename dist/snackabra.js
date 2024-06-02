@@ -239,6 +239,323 @@ export async function stringify_SBObjectHandle(h) {
     h.verification = await h.verification;
     return validate_SBObjectHandle(h);
 }
+const _SEP_ = '='.repeat(76);
+const _SEP = '\n' + _SEP_;
+const SEP_ = _SEP_ + '\n';
+export class HistoryTreeNode {
+    root;
+    isLeaf;
+    children = [];
+    value = undefined;
+    from = undefined;
+    to = undefined;
+    isFull = false;
+    frozenHeight = undefined;
+    frozenChunkId = undefined;
+    constructor(root, isLeaf = false) {
+        this.root = root;
+        this.isLeaf = isLeaf;
+    }
+    async insert(value, from, to = from) {
+        if (DBG2)
+            console.log(SEP_, `Inserting value ${value} at this point (leaf, full, children count):\n`, this.isLeaf, this.isFull, this.value, this.children.length);
+        if (this.isFull || this.value !== undefined)
+            throw new Error("Should not be inserting here");
+        if (this.isLeaf) {
+            const newLeaf = new HistoryTreeNode(this.root);
+            newLeaf.value = value;
+            newLeaf.from = from;
+            newLeaf.to = to;
+            if (!this.from || from < this.from)
+                this.from = from;
+            if (!this.to || to > this.to)
+                this.to = to;
+            newLeaf.isFull = true;
+            this.children.push(newLeaf);
+            if (this.children.length === this.root.branchFactor) {
+                this.isFull = true;
+                this.frozenHeight = this.nodeHeight();
+                this.frozenChunkId = await this.root.freeze({ type: 'leaf', valuesArray: this.children.map(child => child.value) });
+                this.children = [];
+            }
+            return true;
+        }
+        if (this.children.length === 0 || this.children[this.children.length - 1].isFull) {
+            if (this.children.length === this.root.branchFactor)
+                throw new Error("Internal Error (L100)");
+            const newNode = new HistoryTreeNode(this.root, true);
+            await newNode.insert(value, from, to);
+            this.children.push(newNode);
+            if (!this.from || from < this.from)
+                this.from = from;
+            if (!this.to || to > this.to)
+                this.to = to;
+            return true;
+        }
+        await this.children[this.children.length - 1].insert(value, from, to);
+        this.from = from < this.from ? from : this.from;
+        this.to = to > this.to ? to : this.to;
+        if (this.children[this.children.length - 1].isFull && this.children.length === this.root.branchFactor) {
+            let i = 0;
+            while (this.children[i].nodeHeight() === this.children[i + 1].nodeHeight()) {
+                if (++i === this.children.length - 1) {
+                    this.isFull = true;
+                    this.frozenHeight = this.nodeHeight();
+                    this.frozenChunkId = await this.root.freeze({ type: 'node', frozenChunkIdArray: this.children.map(child => child.frozenChunkId) });
+                    this.children = [];
+                    return true;
+                }
+            }
+            const newChild = new HistoryTreeNode(this.root);
+            newChild.children = this.children.splice(i + 1);
+            newChild.from = newChild.children[0].from;
+            newChild.to = newChild.children[newChild.children.length - 1].to;
+            this.children.push(newChild);
+            return true;
+        }
+        return true;
+    }
+    nodeHeight() {
+        if (this.frozenHeight !== undefined)
+            return this.frozenHeight;
+        if (this.value !== undefined)
+            return 0;
+        return 1 + Math.max(...this.children.map(child => child.nodeHeight()));
+    }
+    async traverse(callback, reverse = false) {
+        if (!reverse)
+            await callback(this);
+        var children = this.children;
+        if (this.frozenChunkId !== undefined) {
+            const frozen = await this.root.deFrost(this.frozenChunkId);
+            if (frozen.type === 'leaf') {
+                children = frozen.valuesArray.map(value => {
+                    const node = new HistoryTreeNode(this.root, true);
+                    node.value = value;
+                    return node;
+                });
+            }
+            else if (frozen.type === 'node') {
+                children = frozen.frozenChunkIdArray.map(chunkId => {
+                    const node = new HistoryTreeNode(this.root);
+                    node.frozenChunkId = chunkId;
+                    return node;
+                });
+            }
+            else {
+                console.error("Frozen type error, contents of frozen:\n", frozen);
+                throw new Error("Unknown frozen type");
+            }
+        }
+        if (!reverse)
+            for (const child of children)
+                await child.traverse(callback, reverse);
+        else
+            for (let i = children.length - 1; i >= 0; i--)
+                await children[i].traverse(callback, reverse);
+        if (reverse)
+            await callback(this);
+    }
+    async _callbackValue(node, _nodeCallback) {
+        if (node.value !== undefined)
+            if (_nodeCallback !== undefined)
+                await _nodeCallback(node.value);
+            else if (DBG0)
+                console.log(node.value);
+    }
+    async traverseValues(callback, reverse = false) {
+        return this.traverse(async (node) => await this._callbackValue(node, callback), reverse);
+    }
+    export() {
+        let retVal = { from: this.from, to: this.to };
+        if (this.frozenChunkId !== undefined) {
+            retVal = { ...retVal, frozenChunkId: this.frozenChunkId, frozenHeight: this.frozenHeight };
+        }
+        else if (this.value) {
+            retVal = { ...retVal, value: this.value };
+        }
+        else {
+            if (this.frozenHeight !== undefined)
+                throw new Error("Should not have a frozen height here");
+            retVal = { ...retVal, isFull: this.isFull, children: this.children.map(child => child.export()) };
+        }
+        return retVal;
+    }
+    static import(root, data) {
+        const node = new HistoryTreeNode(root);
+        node.from = data.from;
+        node.to = data.to;
+        if (data.frozenChunkId !== undefined) {
+            node.frozenChunkId = data.frozenChunkId;
+            node.frozenHeight = data.frozenHeight;
+            node.isFull = true;
+        }
+        else if (data.value !== undefined) {
+            node.isLeaf = true;
+            node.isFull = true;
+            node.value = data.value;
+        }
+        else {
+            node.isFull = data.isFull;
+            node.children = data.children.map((child) => HistoryTreeNode.import(root, child));
+        }
+        return node;
+    }
+}
+export class HistoryTree {
+    branchFactor;
+    root = new HistoryTreeNode(this);
+    constructor(branchFactor, data) {
+        this.branchFactor = branchFactor;
+        if (data)
+            this.root = HistoryTreeNode.import(this, data);
+    }
+    async insertValue(value, from, to) {
+        if (this.root.isFull) {
+            const newRoot = new HistoryTreeNode(this);
+            newRoot.from = this.root.from;
+            newRoot.to = this.root.to;
+            newRoot.children.push(this.root);
+            this.root = newRoot;
+        }
+        return this.root.insert(value, from, to);
+    }
+    async traverse(callback, reverse = false) {
+        return this.root.traverse(callback, reverse);
+    }
+    async traverseValues(callback, reverse = false) {
+        return this.root.traverseValues(callback, reverse);
+    }
+    export() {
+        if (this.root)
+            return this.root.export();
+        else
+            return {};
+    }
+}
+export class DeepHistory extends HistoryTree {
+    SB;
+    budget;
+    static MESSAGE_HISTORY_BRANCH_FACTOR = 4;
+    static MAX_MESSAGE_SET_SIZE = 7;
+    static MAX_MESSAGE_HISTORY_SHARD_SIZE = (4 * 1024 * 1024) - (2 * 32 * 1024);
+    top = new Map();
+    topSize = 0;
+    constructor(data, SB, budget) {
+        super(DeepHistory.MESSAGE_HISTORY_BRANCH_FACTOR, data);
+        this.SB = SB;
+        this.budget = budget;
+    }
+    async storeData(data) {
+        if (!this.budget || !this.SB)
+            throw new Error("Budget required to freeze data (this DeepHistory is operating in read-only mode)");
+        if (DBG2) {
+            const b = assemblePayload(data);
+            console.log("(packaged size will be) [storeData] asked to store buffer size", b.byteLength, "bytes");
+        }
+        const h = await this.SB.storage.storeData(data, this.budget);
+        const x = await stringify_SBObjectHandle(h);
+        return {
+            id: x.id,
+            key: x.key,
+            verification: x.verification
+        };
+    }
+    async fetchData(handle) {
+        if (!this.SB)
+            throw new Error("SB required to fetch data");
+        const b = await this.SB.storage.fetchData(handle);
+        return b.payload;
+    }
+    async freeze(data) {
+        if (DBG0)
+            console.log("*** Freezing data, packaged size will be:", assemblePayload(data).byteLength);
+        return this.storeData(data);
+    }
+    async deFrost(handle) {
+        return this.fetchData(handle);
+    }
+    async insert(msg) {
+        const id = msg._id;
+        const msgPayload = assemblePayload(msg);
+        if (!msgPayload)
+            throw new Error("Failed to assemble payload");
+        this.top.set(id, msgPayload);
+        this.topSize += msgPayload.byteLength;
+        if (this.top.size >= DeepHistory.MAX_MESSAGE_SET_SIZE
+            || this.topSize >= DeepHistory.MAX_MESSAGE_HISTORY_SHARD_SIZE) {
+            if (DBG2)
+                console.log(`Top now has ${this.top.size} messages, and ${this.topSize} bytes of content, overflowing ...`);
+            if (DBG2)
+                console.log(`(packaged size will be) contains ${this.top.size} messages, and ${this.topSize} bytes of content`);
+            const [from, to] = Channel.getLexicalExtremes(this.top);
+            const newEntry = {
+                version: '20240601.0',
+                channelId: '<channelId>',
+                ownerPublicKey: '<ownerPublicKey>',
+                created: Date.now(),
+                from: from,
+                to: to,
+                count: this.top.size,
+                size: this.topSize,
+                shard: await this.storeData(this.top)
+            };
+            this.top.clear();
+            this.topSize = 0;
+            if (DBG2)
+                console.log(SEP, "Local (KV etc) overflowed, inserting new entry:\n", newEntry, _SEP);
+            await this.insertValue(newEntry, from, to);
+        }
+    }
+    printTop(reverse) {
+        if (!(this.top instanceof Map))
+            throw new Error("Expected a map (in this.top)");
+        const keys = Array.from(this.top.keys());
+        keys.sort();
+        if (reverse)
+            keys.reverse();
+        keys.forEach(key => {
+            const value = this.top.get(key);
+            if (value) {
+                const msg = extractPayload(value).payload;
+                console.log(msg._id, ' - ', msg.unencryptedContents);
+            }
+        });
+    }
+    async traverseValues(callback, reverse = false) {
+        if (callback)
+            throw new Error("Not implemented, we hard code the callback");
+        console.log(SEP, `Traversing the tree ${reverse ? 'reverse' : 'in order'} :`, _SEP);
+        if (reverse)
+            this.printTop(true);
+        await this.traverse(async (node) => {
+            if (node.value) {
+                const messages = await this.fetchData(node.value.shard);
+                if (!(messages instanceof Map))
+                    throw new Error("Expected a map");
+                if (DBG2)
+                    console.log(SEP, "We are looking at:\n", node.value, SEP, messages, SEP, messages.size, SEP);
+                const keys = Array.from(messages.keys());
+                keys.sort();
+                if (reverse)
+                    keys.reverse();
+                for (const key of keys) {
+                    const value = messages.get(key);
+                    if (value) {
+                        const msg = extractPayload(value).payload;
+                        if (DBG2)
+                            console.log(msg._id, ' - ', msg.unencryptedContents);
+                        else
+                            console.log(msg._id, ` - '${msg.unencryptedContents.msg}' and ${msg.unencryptedContents.body.byteLength} bytes`);
+                    }
+                }
+            }
+        }, reverse);
+        if (!reverse)
+            this.printTop(false);
+        console.log(SEP);
+    }
+}
 export class MessageBus {
     bus = {};
     #select(event) {
@@ -446,6 +763,12 @@ export function getRandomValues(buffer) {
         }
         return buffer;
     }
+}
+export function generateRandomString(length = 16) {
+    const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const alphanumeric = letters + "0123456789";
+    return Array.from({ length }, (_, i) => i === 0 ? letters.charAt(Math.floor(Math.random() * letters.length)) :
+        alphanumeric.charAt(Math.floor(Math.random() * alphanumeric.length))).join('');
 }
 async function SBFetch(input, init) {
     const controller = new AbortController();
@@ -2167,8 +2490,8 @@ class Channel extends SBChannelKeys {
                     console.log("getMessageKeys\n", keys);
                 if (!keys || keys.size === 0)
                     console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?");
-                if (keys.size > 600)
-                    console.warn(SEP, "[Channel.getMessageKeys] Warning: more than 600 messages requested (will soon need 'deep history' support)", SEP);
+                if (keys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
+                    console.warn(SEP, `[Channel.getMessageKeys] Warning: ${keys.size} keys returned, that's over the ${Snackabra.MAX_MESSAGE_SET_SIZE} limit - you will NOT be able to request this set directly.`, SEP);
                 resolve({ keys, historyShard });
             }
             catch (e) {
@@ -2184,8 +2507,8 @@ class Channel extends SBChannelKeys {
             console.log("[getRawMessageMap] called with messageKeys:", messageKeys);
         if (messageKeys.size === 0)
             throw new SBError("[getRawMessageMap] no message keys provided");
-        if (messageKeys.size > 100)
-            throw new SBError("[getRawMessageMap] too many messages requested at once (max 100)");
+        if (messageKeys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
+            throw new SBError(`[getRawMessageMap] too many messages requested at once (max ${Snackabra.MAX_MESSAGE_SET_SIZE})`);
         return new Promise(async (resolve, _reject) => {
             await this.channelReady;
             _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)");
@@ -2197,8 +2520,8 @@ class Channel extends SBChannelKeys {
         });
     }
     getMessageMap(messageKeys) {
-        if (messageKeys.size > 100)
-            throw new SBError("[getMessageMap] too many message keys provided (max 100)");
+        if (messageKeys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
+            throw new SBError(`[getMessageMap] too many message keys provided (max ${Snackabra.MAX_MESSAGE_SET_SIZE})`);
         if (DBG)
             console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys);
         if (messageKeys.size === 0)
@@ -2217,14 +2540,6 @@ class Channel extends SBChannelKeys {
                 }
             }
             resolve(await this.extractMessageMap(messages));
-        });
-    }
-    getHistory() {
-        return new Promise(async (resolve, _reject) => {
-            await this.channelReady;
-            _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)");
-            const response = await this.callApi('/getHistory');
-            resolve(response);
         });
     }
     setPage(options) {
@@ -2338,10 +2653,13 @@ class Channel extends SBChannelKeys {
         return new Date(ts).toISOString();
     }
     static getLexicalExtremes(set) {
-        if (set.size === 0)
+        if (!(set instanceof Set || set instanceof Array || set instanceof Map))
+            throw new SBError("[getLexicalExtremes] Paramater must be a Set, Array, or Map");
+        const arr = set instanceof Array ? set : Array.from(set.keys());
+        if (arr.length === 0)
             return [];
-        let min, max = min = set.values().next().value;
-        for (const value of set) {
+        let [min, max] = [arr[0], arr[0]];
+        for (const value of arr) {
             if (value < min)
                 min = value;
             if (value > max)
@@ -3106,8 +3424,11 @@ export class StorageApi {
         return arrayBufferToBase62(id);
     }
     static async paceUploads() {
+        if (DBG)
+            console.log("+++++ [paceUploads] called, backlog is:", _b.#uploadBacklog);
         while (_b.#uploadBacklog > 8) {
-            console.log("+++++ [paceUploads] waiting for server, backlog is:", _b.#uploadBacklog);
+            if (DBG)
+                console.log("+++++ [paceUploads] waiting for server, backlog is:", _b.#uploadBacklog);
             await new Promise((resolve) => setTimeout(resolve, 50));
         }
     }
@@ -3156,7 +3477,8 @@ export class StorageApi {
                     data: encryptedData
                 })
             };
-            console.log("5555 5555 [storeData] storeQuery:", SEP, storeQuery, SEP);
+            if (DBG2)
+                console.log("5555 5555 [storeData] storeQuery:", SEP, storeQuery, SEP);
             const result = await SBApiFetch(storeQuery, init);
             const r = {
                 [SB_OBJECT_HANDLE_SYMBOL]: true,
@@ -3221,6 +3543,9 @@ export class StorageApi {
         const h = validate_SBObjectHandle(handle);
         if (DBG)
             console.log("fetchData(), handle:", h);
+        if (Snackabra.shardBreakpoints.has(h.id)) {
+            debugger;
+        }
         const verification = await h.verification;
         const server1 = h.storageServer ? h.storageServer : null;
         const server2 = 'http://localhost:3841';
@@ -3310,7 +3635,8 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240517.0";
+    static version = "3.20240601.0";
+    static MAX_MESSAGE_SET_SIZE = 512;
     static knownShards = new Map();
     #channelServer;
     #storage;
@@ -3323,6 +3649,7 @@ class Snackabra extends SBEventTarget {
     static onlineStatus = 'unknown';
     static defaultChannelServer = 'https://c3.384.dev';
     eventTarget = new SBEventTarget();
+    static shardBreakpoints = new Set();
     constructor(channelServer, options) {
         super();
         _sb_assert(typeof channelServer === 'string', '[Snackabra] Takes channel server URL as parameter');
@@ -3520,7 +3847,9 @@ class Snackabra extends SBEventTarget {
         try {
             const r = await SBApiFetch(server + '/api/v2/info');
             if (DBG0)
-                console.log(`[getServerInfo] Fetching server info from '${server}' ++++`);
+                console.log(SEP, `[getServerInfo] Fetching server info from '${server}' ++++\n`, r, SEP);
+            if (r && r.maxMessageSetSize)
+                Snackabra.MAX_MESSAGE_SET_SIZE = r.maxMessageSetSize;
             return r;
         }
         catch (e) {
@@ -3528,6 +3857,9 @@ class Snackabra extends SBEventTarget {
                 console.warn(`[getServerInfo] Could not access server '${server}'`);
             return undefined;
         }
+    }
+    static traceShard(id) {
+        Snackabra.shardBreakpoints.add(id);
     }
     get storage() { return this.#storage; }
     async getStorageServer() {

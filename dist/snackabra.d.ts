@@ -125,27 +125,68 @@ export type SBUserId = SB384Hash;
 export type SBChannelId = SB384Hash;
 export type SBUserPublicKey = string;
 export type SBUserPrivateKey = string;
+export interface Freezable<T1, T2> {
+    type: 'leaf' | 'node';
+    valuesArray?: T1[];
+    frozenChunkIdArray?: T2[];
+}
+export declare class HistoryTreeNode<ValueType, FrozenIdType, IndexType> {
+    private root;
+    isLeaf: boolean;
+    children: HistoryTreeNode<ValueType, FrozenIdType, IndexType>[];
+    value: ValueType | undefined;
+    from: IndexType | undefined;
+    to: IndexType | undefined;
+    isFull: boolean;
+    frozenHeight: number | undefined;
+    frozenChunkId: FrozenIdType | undefined;
+    constructor(root: HistoryTree<ValueType, FrozenIdType, IndexType>, isLeaf?: boolean);
+    insert(value: ValueType, from: IndexType, to?: IndexType): Promise<boolean>;
+    nodeHeight(): number;
+    traverse(callback: (node: HistoryTreeNode<ValueType, FrozenIdType, IndexType>) => Promise<void>, reverse?: boolean): Promise<void>;
+    _callbackValue(node: HistoryTreeNode<ValueType, FrozenIdType, IndexType>, _nodeCallback?: (value: ValueType) => Promise<void>): Promise<void>;
+    traverseValues(callback?: (value: ValueType) => Promise<void>, reverse?: boolean): Promise<void>;
+    export(): any;
+    static import<ValueType, FrozenType, IndexType>(root: HistoryTree<ValueType, FrozenType, IndexType>, data: any): HistoryTreeNode<ValueType, FrozenType, IndexType>;
+}
+export declare abstract class HistoryTree<ValueType, FrozenType, IndexType> {
+    branchFactor: number;
+    root: HistoryTreeNode<ValueType, FrozenType, IndexType>;
+    abstract freeze(data: Freezable<ValueType, FrozenType>): Promise<FrozenType>;
+    abstract deFrost(data: FrozenType): Promise<Freezable<ValueType, FrozenType>>;
+    constructor(branchFactor: number, data?: any);
+    insertValue(value: ValueType, from: IndexType, to: IndexType): Promise<boolean>;
+    traverse(callback: (node: HistoryTreeNode<ValueType, FrozenType, IndexType>) => Promise<void>, reverse?: boolean): Promise<void>;
+    traverseValues(callback?: (value: ValueType) => Promise<void>, reverse?: boolean): Promise<void>;
+    export(): any;
+}
 export interface MessageHistory {
-    type: 'entry' | 'directory';
-    version: '20240228001';
+    version: '20240601.0';
     channelId: SBChannelId;
     ownerPublicKey: SBUserPublicKey;
     created: number;
-    channelServer?: string;
     from: string;
     to: string;
     count: number;
+    size: number;
+    shard: SBObjectHandle;
 }
-export interface MessageHistoryEntry extends MessageHistory {
-    type: 'entry';
-    messages: Map<string, ArrayBuffer>;
-}
-export interface MessageHistoryDirectory extends MessageHistory {
-    type: 'directory';
-    depth: number;
-    lastModified: number;
-    shards?: Map<string, SBObjectHandle>;
-    subdirectories?: Map<string, MessageHistoryDirectory>;
+export declare class DeepHistory extends HistoryTree<MessageHistory, SBObjectHandle, string> {
+    private SB?;
+    private budget?;
+    static MESSAGE_HISTORY_BRANCH_FACTOR: number;
+    static MAX_MESSAGE_SET_SIZE: number;
+    static MAX_MESSAGE_HISTORY_SHARD_SIZE: number;
+    top: Map<string, ArrayBuffer>;
+    topSize: number;
+    constructor(data?: any, SB?: Snackabra | undefined, budget?: Channel | undefined);
+    private storeData;
+    private fetchData;
+    freeze(data: Freezable<MessageHistory, SBObjectHandle>): Promise<SBObjectHandle>;
+    deFrost(handle: SBObjectHandle): Promise<Freezable<MessageHistory, SBObjectHandle>>;
+    insert(msg: ChannelMessage): Promise<void>;
+    printTop(reverse: boolean): void;
+    traverseValues(callback?: (value: MessageHistory) => void, reverse?: boolean): Promise<void>;
 }
 export declare class MessageBus {
     #private;
@@ -175,6 +216,7 @@ export declare function jsonParseWrapper(str: string | null, loc?: string, reviv
 export declare function jsonOrString(str: string | null): any;
 export declare function compareBuffers(a: Uint8Array | ArrayBuffer | null, b: Uint8Array | ArrayBuffer | null): boolean;
 export declare function getRandomValues(buffer: Uint8Array): Uint8Array;
+export declare function generateRandomString(length?: number): string;
 export declare function SBApiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<any>;
 export declare const base64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 declare function arrayBufferToBase64url(buffer: ArrayBuffer | Uint8Array): string;
@@ -303,7 +345,7 @@ export interface MessageOptions {
     sendString?: boolean;
     retries?: number;
 }
-interface EnqueuedMessage {
+export interface EnqueuedMessage {
     msg: ChannelMessage;
     resolve: (value: any) => any;
     reject: (reason: any) => any;
@@ -344,7 +386,6 @@ declare class Channel extends SBChannelKeys {
     }>;
     getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
     getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>>;
-    getHistory(): Promise<MessageHistoryDirectory>;
     setPage(options: {
         page: any;
         prefix?: number;
@@ -372,7 +413,7 @@ declare class Channel extends SBChannelKeys {
     static HIGHEST_TIMESTAMP: string;
     static timestampToBase4String(tsNum: number): string;
     static base4stringToDate(tsStr: string): string;
-    static getLexicalExtremes<T extends number | string>(set: Set<T>): [T, T] | [];
+    static getLexicalExtremes<T extends number | string>(set: Set<T> | Array<T> | Map<T, any>): [T, T] | [];
     static messageKeySetToPrefix: (keys: Set<string>) => string;
     static timestampLongestPrefix: (s1: string, s2: string) => string;
     static timestampRegex: RegExp;
@@ -433,6 +474,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 declare class Snackabra extends SBEventTarget {
     #private;
     static version: string;
+    static MAX_MESSAGE_SET_SIZE: number;
     static knownShards: Map<string, SBObjectHandle>;
     static lastTimeStamp: number;
     static activeFetches: Map<symbol, AbortController>;
@@ -441,6 +483,7 @@ declare class Snackabra extends SBEventTarget {
     static onlineStatus: ServerOnlineStatus;
     static defaultChannelServer: string;
     eventTarget: SBEventTarget;
+    static shardBreakpoints: Set<string>;
     constructor(channelServer: string, options?: {
         DEBUG?: boolean;
         DEBUG2?: boolean;
@@ -462,6 +505,7 @@ declare class Snackabra extends SBEventTarget {
     connect(handleOrKey: SBChannelHandle | SBUserPrivateKey, onMessage: (m: Message | string) => void): ChannelSocket;
     static closeAll(): Promise<void>;
     static getServerInfo(server?: string): Promise<SBServerInfo | undefined>;
+    static traceShard(id: string): void;
     get storage(): StorageApi;
     getStorageServer(): Promise<string>;
     get crypto(): SBCrypto;
