@@ -921,22 +921,21 @@ export class DeepHistory extends HistoryTree<MessageHistory, SBObjectHandle, str
      per second, but we have POC channel server code that can handle >1M).
 
   */
-  // public static MESSAGE_HISTORY_BRANCH_FACTOR = 32; // production value
-  public static MESSAGE_HISTORY_BRANCH_FACTOR = 4; // testing value
+  public static MESSAGE_HISTORY_BRANCH_FACTOR = 32; // production value
+  // public static MESSAGE_HISTORY_BRANCH_FACTOR = 4; // testing value
 
-  // public static MAX_MESSAGE_SET_SIZE = 512; // production value
-  public static MAX_MESSAGE_SET_SIZE = 7; // testing value
+  public static MAX_MESSAGE_SET_SIZE = 512; // production value
+  // public static MAX_MESSAGE_SET_SIZE = 7; // testing value
 
   // this is specific to DH; we take a cue from SBFile max chunks which are
   // currently 4 MiB, and current channel server message maximum is 32 KiB. 
   public static MAX_MESSAGE_HISTORY_SHARD_SIZE = (4 * 1024 * 1024) - (2 * 32 * 1024)
 
-  // top is 'working memory', when feeding items (eg messages) into the tree
-  top: Map<string, ArrayBuffer> = new Map()
-  topSize = 0; // size in bytes of messages in 'top'
+  private SB: Snackabra; // i think this is the only full-self-referential use of SB in SB?
 
-  constructor(data?: any, private SB?: Snackabra, private budget?: Channel) {
+  constructor(data: any, private channel: Channel, private budget?: Channel) {
       super(DeepHistory.MESSAGE_HISTORY_BRANCH_FACTOR, data);
+      this.SB = new Snackabra(this.channel.channelServer)
   }
 
   // wrapper for the storage API; returnes cleaned-up / compacted handle
@@ -957,18 +956,14 @@ export class DeepHistory extends HistoryTree<MessageHistory, SBObjectHandle, str
 
   // wrapper for the storage API; returns the final payload (extracted)
   private async fetchData(handle: SBObjectHandle): Promise<any> {
-      // return SB.storage.fetchData(handle).then(h => extractPayload(h.payload).payload)
       if (!this.SB) throw new Error("SB required to fetch data")
       const b = await this.SB.storage.fetchData(handle)
-      // const p = extractPayload(b.payload)
-      // if (!p) throw new Error("Failed to extract payload")
-      // return p.payload
       return b.payload
   }
 
   // provides abstract interface for the Tree class
   async freeze(data: Freezable<MessageHistory, SBObjectHandle>): Promise<SBObjectHandle> {
-      if (DBG0) 
+      if (DBG2) 
           console.log("*** Freezing data, packaged size will be:", assemblePayload(data)!.byteLength)
       return this.storeData(data)
   }
@@ -977,58 +972,14 @@ export class DeepHistory extends HistoryTree<MessageHistory, SBObjectHandle, str
       return this.fetchData(handle) as Promise<Freezable<MessageHistory, SBObjectHandle>>
   }
 
-  async insert(msg: ChannelMessage): Promise<void> {
-      const id = msg._id!
-      const msgPayload = assemblePayload(msg); if (!msgPayload) throw new Error("Failed to assemble payload")
-      this.top.set(id, msgPayload)
-      this.topSize += msgPayload.byteLength
-      if (
-          // note: we need '>=' so we can ingest an older tree, and pick it back up
-             this.top.size >= DeepHistory.MAX_MESSAGE_SET_SIZE
-          || this.topSize >= DeepHistory.MAX_MESSAGE_HISTORY_SHARD_SIZE
-      ) {
-          if (DBG2) console.log(`Top now has ${this.top.size} messages, and ${this.topSize} bytes of content, overflowing ...`)
-          if (DBG2) console.log(`(packaged size will be) contains ${this.top.size} messages, and ${this.topSize} bytes of content`)
-          const [from, to] = Channel.getLexicalExtremes(this.top)
-          const newEntry: MessageHistory = {
-              version: '20240601.0',
-              channelId: '<channelId>',
-              ownerPublicKey: '<ownerPublicKey>',
-              created: Date.now(),
-              from: from!,
-              to: to!,
-              count: this.top.size,
-              // messages: new Map(this.top)
-              size: this.topSize,
-              shard: await this.storeData(this.top)
-          }
-          this.top.clear(); this.topSize = 0;
-          if (DBG2) console.log(SEP, "Local (KV etc) overflowed, inserting new entry:\n", newEntry, _SEP)
-          await this.insertValue(newEntry, from!, to!)
-      }
-  }
-  printTop(reverse: boolean) {
-      if (!(this.top instanceof Map)) throw new Error("Expected a map (in this.top)")
-      const keys = Array.from(this.top.keys())
-      keys.sort()
-      if (reverse) keys.reverse()
-      keys.forEach(key => {
-          const value = this.top.get(key)
-          if (value) {
-              const msg = extractPayload(value).payload as ChannelMessage
-              console.log(msg._id, ' - ', msg.unencryptedContents)
-          }
-      });
-  }
-  async traverseValues(callback?: (value: MessageHistory) => void, reverse = false): Promise<void> {
-      if (callback) throw new Error("Not implemented, we hard code the callback")
-      console.log(SEP, `Traversing the tree ${reverse ? 'reverse' : 'in order'} :`, _SEP)
-      if (reverse) this.printTop(true)
+  async traverseMessages(callback?: (value: Message) => Promise<void>, reverse = false): Promise<void> {
+      if (DBG2) console.log(SEP, `Traversing the tree ${reverse ? 'reverse' : 'in order'} :`, _SEP)
+      if (!this.channel) throw new Error("Channel required to traverse messages")
       await this.traverse(async node => {
           // const messages = node.value?.messages
           // console.log(SEP, "NODE and node value:\n", node, SEP, node.value, SEP)
           if (node.value) {
-              const messages = await this.fetchData(node.value.shard) as Map<string, ArrayBuffer>
+              const messages = await this.fetchData(node.value.shard) as Map<string, ChannelMessage>
               if (!(messages instanceof Map)) throw new Error("Expected a map")
               if (DBG2) console.log(SEP, "We are looking at:\n", node.value, SEP, messages, SEP, messages.size, SEP)
               const keys = Array.from(messages.keys())
@@ -1038,14 +989,14 @@ export class DeepHistory extends HistoryTree<MessageHistory, SBObjectHandle, str
               for (const key of keys) {
                   const value = messages.get(key)
                   if (value) {
-                      const msg = extractPayload(value).payload as ChannelMessage
-                      if (DBG2) console.log(msg._id, ' - ', msg.unencryptedContents)
-                      else console.log(msg._id, ` - '${msg.unencryptedContents.msg}' and ${msg.unencryptedContents.body.byteLength} bytes`)
+                    const msg = await this.channel.extractMessage(value)
+                    if (msg)
+                      if (callback) await callback(msg)
+                      else console.log(msg)
                   }
               }
           }
       }, reverse);
-      if (!reverse) this.printTop(false)
       console.log(SEP)
   }
   
@@ -4234,16 +4185,23 @@ class Channel extends SBChannelKeys {
     });
   }
 
-  // /**
-  //  * Returns map of message keys from the server corresponding to the request.
-  //  */
-  // async getHistory(): Promise<MessageHistoryDirectory> {
-  //   await this.channelReady
-  //   _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)")
-  //   const h = await this.callApi('/getHistory') as MessageHistoryDirectory
-  //   console.log("getHistory result:\n", h)
-  //   return h
-  // }
+  /**
+   * Returns a DeepHistory object corresponding to the channel. Note:
+   * this will (live) instantiate this object at the time of calling
+   * this function. The returned object is not kept in 'sync' with the
+   * server in any manner. This allows calling traverse and similar
+   * operations on it, repeatedly. Calling this function multiple times
+   * is, in fact, not a lot of overhead, given the nature of the history
+   * tree structure (eg it's mostly immutable).
+   */
+  async getHistory(): Promise<DeepHistory> {
+    await this.channelReady
+    _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)")
+    const data = await this.callApi('/getHistory') // as MessageHistoryDirectory
+    // console.log("getHistory result:\n", h)
+    const h = new DeepHistory(data, this)
+    return h
+  }
 
   // @Ready async send(msg: any, options?: MessageOptions): Promise<string> {
   //   _sb_assert(!(msg instanceof SBMessage), "[Channel.send] msg is already an SBMessage")
@@ -5815,7 +5773,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends SBEventTarget {
-  public static version = "3.20240601.0"
+  public static version = "3.20240601.1"
 
   // maximum number of messages to fetch in one go. the server might have a
   // different opinion, in which case this will be adjusted

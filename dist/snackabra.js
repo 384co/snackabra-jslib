@@ -434,17 +434,17 @@ export class HistoryTree {
     }
 }
 export class DeepHistory extends HistoryTree {
-    SB;
+    channel;
     budget;
-    static MESSAGE_HISTORY_BRANCH_FACTOR = 4;
-    static MAX_MESSAGE_SET_SIZE = 7;
+    static MESSAGE_HISTORY_BRANCH_FACTOR = 32;
+    static MAX_MESSAGE_SET_SIZE = 512;
     static MAX_MESSAGE_HISTORY_SHARD_SIZE = (4 * 1024 * 1024) - (2 * 32 * 1024);
-    top = new Map();
-    topSize = 0;
-    constructor(data, SB, budget) {
+    SB;
+    constructor(data, channel, budget) {
         super(DeepHistory.MESSAGE_HISTORY_BRANCH_FACTOR, data);
-        this.SB = SB;
+        this.channel = channel;
         this.budget = budget;
+        this.SB = new Snackabra(this.channel.channelServer);
     }
     async storeData(data) {
         if (!this.budget || !this.SB)
@@ -468,66 +468,18 @@ export class DeepHistory extends HistoryTree {
         return b.payload;
     }
     async freeze(data) {
-        if (DBG0)
+        if (DBG2)
             console.log("*** Freezing data, packaged size will be:", assemblePayload(data).byteLength);
         return this.storeData(data);
     }
     async deFrost(handle) {
         return this.fetchData(handle);
     }
-    async insert(msg) {
-        const id = msg._id;
-        const msgPayload = assemblePayload(msg);
-        if (!msgPayload)
-            throw new Error("Failed to assemble payload");
-        this.top.set(id, msgPayload);
-        this.topSize += msgPayload.byteLength;
-        if (this.top.size >= DeepHistory.MAX_MESSAGE_SET_SIZE
-            || this.topSize >= DeepHistory.MAX_MESSAGE_HISTORY_SHARD_SIZE) {
-            if (DBG2)
-                console.log(`Top now has ${this.top.size} messages, and ${this.topSize} bytes of content, overflowing ...`);
-            if (DBG2)
-                console.log(`(packaged size will be) contains ${this.top.size} messages, and ${this.topSize} bytes of content`);
-            const [from, to] = Channel.getLexicalExtremes(this.top);
-            const newEntry = {
-                version: '20240601.0',
-                channelId: '<channelId>',
-                ownerPublicKey: '<ownerPublicKey>',
-                created: Date.now(),
-                from: from,
-                to: to,
-                count: this.top.size,
-                size: this.topSize,
-                shard: await this.storeData(this.top)
-            };
-            this.top.clear();
-            this.topSize = 0;
-            if (DBG2)
-                console.log(SEP, "Local (KV etc) overflowed, inserting new entry:\n", newEntry, _SEP);
-            await this.insertValue(newEntry, from, to);
-        }
-    }
-    printTop(reverse) {
-        if (!(this.top instanceof Map))
-            throw new Error("Expected a map (in this.top)");
-        const keys = Array.from(this.top.keys());
-        keys.sort();
-        if (reverse)
-            keys.reverse();
-        keys.forEach(key => {
-            const value = this.top.get(key);
-            if (value) {
-                const msg = extractPayload(value).payload;
-                console.log(msg._id, ' - ', msg.unencryptedContents);
-            }
-        });
-    }
-    async traverseValues(callback, reverse = false) {
-        if (callback)
-            throw new Error("Not implemented, we hard code the callback");
-        console.log(SEP, `Traversing the tree ${reverse ? 'reverse' : 'in order'} :`, _SEP);
-        if (reverse)
-            this.printTop(true);
+    async traverseMessages(callback, reverse = false) {
+        if (DBG2)
+            console.log(SEP, `Traversing the tree ${reverse ? 'reverse' : 'in order'} :`, _SEP);
+        if (!this.channel)
+            throw new Error("Channel required to traverse messages");
         await this.traverse(async (node) => {
             if (node.value) {
                 const messages = await this.fetchData(node.value.shard);
@@ -542,17 +494,16 @@ export class DeepHistory extends HistoryTree {
                 for (const key of keys) {
                     const value = messages.get(key);
                     if (value) {
-                        const msg = extractPayload(value).payload;
-                        if (DBG2)
-                            console.log(msg._id, ' - ', msg.unencryptedContents);
-                        else
-                            console.log(msg._id, ` - '${msg.unencryptedContents.msg}' and ${msg.unencryptedContents.body.byteLength} bytes`);
+                        const msg = await this.channel.extractMessage(value);
+                        if (msg)
+                            if (callback)
+                                await callback(msg);
+                            else
+                                console.log(msg);
                     }
                 }
             }
         }, reverse);
-        if (!reverse)
-            this.printTop(false);
         console.log(SEP);
     }
 }
@@ -2542,6 +2493,13 @@ class Channel extends SBChannelKeys {
             resolve(await this.extractMessageMap(messages));
         });
     }
+    async getHistory() {
+        await this.channelReady;
+        _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)");
+        const data = await this.callApi('/getHistory');
+        const h = new DeepHistory(data, this);
+        return h;
+    }
     setPage(options) {
         var { page, prefix, type } = options;
         _sb_assert(page, "Channel.setPage: no page (contents) provided");
@@ -3635,7 +3593,7 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240601.0";
+    static version = "3.20240601.1";
     static MAX_MESSAGE_SET_SIZE = 512;
     static knownShards = new Map();
     #channelServer;

@@ -172,21 +172,18 @@ export interface MessageHistory {
     shard: SBObjectHandle;
 }
 export declare class DeepHistory extends HistoryTree<MessageHistory, SBObjectHandle, string> {
-    private SB?;
+    private channel;
     private budget?;
     static MESSAGE_HISTORY_BRANCH_FACTOR: number;
     static MAX_MESSAGE_SET_SIZE: number;
     static MAX_MESSAGE_HISTORY_SHARD_SIZE: number;
-    top: Map<string, ArrayBuffer>;
-    topSize: number;
-    constructor(data?: any, SB?: Snackabra | undefined, budget?: Channel | undefined);
+    private SB;
+    constructor(data: any, channel: Channel, budget?: Channel | undefined);
     private storeData;
     private fetchData;
     freeze(data: Freezable<MessageHistory, SBObjectHandle>): Promise<SBObjectHandle>;
     deFrost(handle: SBObjectHandle): Promise<Freezable<MessageHistory, SBObjectHandle>>;
-    insert(msg: ChannelMessage): Promise<void>;
-    printTop(reverse: boolean): void;
-    traverseValues(callback?: (value: MessageHistory) => void, reverse?: boolean): Promise<void>;
+    traverseMessages(callback?: (value: Message) => Promise<void>, reverse?: boolean): Promise<void>;
 }
 export declare class MessageBus {
     #private;
@@ -386,6 +383,7 @@ declare class Channel extends SBChannelKeys {
     }>;
     getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
     getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>>;
+    getHistory(): Promise<DeepHistory>;
     setPage(options: {
         page: any;
         prefix?: number;
