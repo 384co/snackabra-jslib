@@ -187,6 +187,7 @@ if (typeof DBG2 === 'undefined')
 var DBG0 = false;
 if (DBG0)
     console.log("++++ Setting DBG0 to TRUE ++++");
+var DBG1 = false;
 function setDebugLevel(_dbg1, _dbg2) {
 }
 export const msgTtlToSeconds = [0, -1, -1, 60, 300, 1800, 14400, 129600, 864000, -1, -1, -1, -1, -1, Infinity];
@@ -241,190 +242,306 @@ export async function stringify_SBObjectHandle(h) {
 }
 const _SEP_ = '='.repeat(76);
 const _SEP = '\n' + _SEP_;
-const SEP_ = _SEP_ + '\n';
+const TEST_WITH_SMALL_BRANCHING = false;
+if (TEST_WITH_SMALL_BRANCHING && !(DBG0 || DBG1))
+    throw new Error("TEST_WITH_SMALL_BRANCHING is set, but DBG0 or DBG1 is not set");
 export class HistoryTreeNode {
-    root;
     isLeaf;
-    children = [];
-    value = undefined;
+    childrenNodes = [];
+    childrenValues = [];
     from = undefined;
     to = undefined;
+    count = 0;
     isFull = false;
-    frozenHeight = undefined;
+    height = 1;
     frozenChunkId = undefined;
-    constructor(root, isLeaf = false) {
-        this.root = root;
+    constructor(isLeaf = false) {
         this.isLeaf = isLeaf;
     }
-    async insert(value, from, to = from) {
-        if (DBG2)
-            console.log(SEP_, `Inserting value ${value} at this point (leaf, full, children count):\n`, this.isLeaf, this.isFull, this.value, this.children.length);
-        if (this.isFull || this.value !== undefined)
+    async insertTreeNodeValue(root, value) {
+        if (this.isFull)
             throw new Error("Should not be inserting here");
+        const { count, from, to } = value;
+        this.count += count;
+        if (isNil(this.from) !== isNil(this.to))
+            throw new Error("Internal Error (L70)");
+        if (isNil(this.from) || isNil(this.to)) {
+            this.from = from;
+            this.to = to;
+        }
+        else if (to > this.to) {
+            this.to = to;
+        }
+        else
+            throw new Error("Internal Error (L76)");
         if (this.isLeaf) {
-            const newLeaf = new HistoryTreeNode(this.root);
-            newLeaf.value = value;
-            newLeaf.from = from;
-            newLeaf.to = to;
-            if (!this.from || from < this.from)
-                this.from = from;
-            if (!this.to || to > this.to)
-                this.to = to;
-            newLeaf.isFull = true;
-            this.children.push(newLeaf);
-            if (this.children.length === this.root.branchFactor) {
+            if (DBG0)
+                console.log("We are a leaf, ergo we insert the value as a child");
+            if (DBG1)
+                console.log(value);
+            this.childrenValues.push(value);
+            if (this.childrenValues.length === root.branchFactor) {
+                if (DBG0)
+                    console.log("... that was the last value child we have room for, so, we freeze ('leaf')");
                 this.isFull = true;
-                this.frozenHeight = this.nodeHeight();
-                this.frozenChunkId = await this.root.freeze({ type: 'leaf', valuesArray: this.children.map(child => child.value) });
-                this.children = [];
+                const x = this.export();
+                this.frozenChunkId = await root.freeze(x);
+                this.childrenValues.length = 0;
+                if (DBG1)
+                    console.log(SEP, "How 'we' look like after freezing:\n", this, SEP);
             }
-            return true;
+            if (DBG2)
+                console.log("... done, result:\n", this);
         }
-        if (this.children.length === 0 || this.children[this.children.length - 1].isFull) {
-            if (this.children.length === this.root.branchFactor)
+        else if (this.childrenNodes.length === 0 || this.childrenNodes[this.childrenNodes.length - 1].isFull) {
+            if (DBG0)
+                console.log("We either have no children, or they're all full");
+            if (this.childrenNodes.length === root.branchFactor)
                 throw new Error("Internal Error (L100)");
-            const newNode = new HistoryTreeNode(this.root, true);
-            await newNode.insert(value, from, to);
-            this.children.push(newNode);
-            if (!this.from || from < this.from)
-                this.from = from;
-            if (!this.to || to > this.to)
-                this.to = to;
-            return true;
+            const newNode = new HistoryTreeNode(true);
+            await newNode.insertTreeNodeValue(root, value);
+            this.childrenNodes.push(newNode);
         }
-        await this.children[this.children.length - 1].insert(value, from, to);
-        this.from = from < this.from ? from : this.from;
-        this.to = to > this.to ? to : this.to;
-        if (this.children[this.children.length - 1].isFull && this.children.length === this.root.branchFactor) {
-            let i = 0;
-            while (this.children[i].nodeHeight() === this.children[i + 1].nodeHeight()) {
-                if (++i === this.children.length - 1) {
+        else {
+            if (DBG0)
+                console.log("We have children, and the last one is not full, pick last on our list and insert");
+            await this.childrenNodes[this.childrenNodes.length - 1].insertTreeNodeValue(root, value);
+            if (this.childrenNodes[this.childrenNodes.length - 1].isFull && this.childrenNodes.length === root.branchFactor) {
+                if (DBG0)
+                    console.log("That filled up our last child, and we have a full set of children ...");
+                let allEqual = true;
+                let i = 0;
+                for (i = 0; i < this.childrenNodes.length - 1; i++)
+                    if (this.childrenNodes[i].height !== this.childrenNodes[i + 1].height) {
+                        allEqual = false;
+                        break;
+                    }
+                if (allEqual) {
+                    if (DBG0)
+                        console.log("... and they are all the same height, thus, we freeze ('node')");
+                    if (DBG1)
+                        console.log("... here is what we look like before freezing:\n", this);
                     this.isFull = true;
-                    this.frozenHeight = this.nodeHeight();
-                    this.frozenChunkId = await this.root.freeze({ type: 'node', frozenChunkIdArray: this.children.map(child => child.frozenChunkId) });
-                    this.children = [];
-                    return true;
+                    this.frozenChunkId = await root.freeze(this.export());
+                    this.childrenNodes.length = 0;
+                }
+                else {
+                    if (DBG0)
+                        console.log("... but they are not all the same height, so the 'right' side are shiftedn 'down'");
+                    const newChild = new HistoryTreeNode();
+                    newChild.childrenNodes = this.childrenNodes.splice(i + 1);
+                    newChild.count = newChild.childrenNodes.map(child => child.count).reduce((acc, val) => acc + val, 0);
+                    const newChildHeight = newChild.childrenNodes.map(child => child.height).reduce((acc, val) => Math.max(acc, val), 0) + 1;
+                    newChild.height = newChildHeight;
+                    newChild.from = newChild.childrenNodes[0].from;
+                    newChild.to = newChild.childrenNodes[newChild.childrenNodes.length - 1].to;
+                    this.childrenNodes.push(newChild);
                 }
             }
-            const newChild = new HistoryTreeNode(this.root);
-            newChild.children = this.children.splice(i + 1);
-            newChild.from = newChild.children[0].from;
-            newChild.to = newChild.children[newChild.children.length - 1].to;
-            this.children.push(newChild);
-            return true;
         }
-        return true;
     }
-    nodeHeight() {
-        if (this.frozenHeight !== undefined)
-            return this.frozenHeight;
-        if (this.value !== undefined)
-            return 0;
-        return 1 + Math.max(...this.children.map(child => child.nodeHeight()));
-    }
-    async traverse(callback, reverse = false) {
+    async traverse(root, callback, reverse = false) {
         if (!reverse)
             await callback(this);
-        var children = this.children;
-        if (this.frozenChunkId !== undefined) {
-            const frozen = await this.root.deFrost(this.frozenChunkId);
-            if (frozen.type === 'leaf') {
-                children = frozen.valuesArray.map(value => {
-                    const node = new HistoryTreeNode(this.root, true);
-                    node.value = value;
-                    return node;
-                });
-            }
-            else if (frozen.type === 'node') {
-                children = frozen.frozenChunkIdArray.map(chunkId => {
-                    const node = new HistoryTreeNode(this.root);
-                    node.frozenChunkId = chunkId;
-                    return node;
-                });
-            }
-            else {
-                console.error("Frozen type error, contents of frozen:\n", frozen);
-                throw new Error("Unknown frozen type");
-            }
+        if (!isNil(this.frozenChunkId)) {
+            await HistoryTreeNode.import(await root.deFrost(this.frozenChunkId)).traverse(root, callback, reverse);
         }
-        if (!reverse)
-            for (const child of children)
-                await child.traverse(callback, reverse);
-        else
-            for (let i = children.length - 1; i >= 0; i--)
-                await children[i].traverse(callback, reverse);
+        else {
+            if (!reverse)
+                for (const child of this.childrenNodes)
+                    await child.traverse(root, callback, reverse);
+            else
+                for (let i = this.childrenNodes.length - 1; i >= 0; i--)
+                    await this.childrenNodes[i].traverse(root, callback, reverse);
+        }
         if (reverse)
             await callback(this);
     }
-    async _callbackValue(node, _nodeCallback) {
-        if (node.value !== undefined)
-            if (_nodeCallback !== undefined)
-                await _nodeCallback(node.value);
-            else if (DBG0)
-                console.log(node.value);
+    async validate(root, valueSize = 1) {
+        function heightError(height, count) {
+            if (isNil(count) || count <= 1)
+                return false;
+            const actualCount = count / valueSize;
+            const exponent = Math.log(actualCount) / Math.log(root.branchFactor);
+            const result = (Math.abs(exponent - height) > (1 + 1e-10));
+            if (result)
+                console.log(SEP, "Height error found.\nheight =", height, ", count =", count, ", actualCount =", actualCount, ", exponent =", exponent, ", Math.floor(exponent) =", Math.floor(exponent), ", branch =", root.branchFactor, ", branch ** height =", root.branchFactor ** height, SEP);
+            return result;
+        }
+        let errorList = "";
+        if (isNil(this.from) !== isNil(this.to))
+            errorList += "[1]";
+        if ((this.childrenValues.length > 0) && (this.childrenNodes.length > 0))
+            errorList += "[2]";
+        if (this.childrenValues.length !== 0 || this.childrenNodes.length !== 0) {
+            if (isNil(this.from))
+                errorList += "[3]";
+            if (this.count === 0)
+                errorList += "[4]";
+        }
+        if (this.childrenValues.length > 0) {
+            const childrenCount = this.childrenValues.map(child => child.count).reduce((acc, val) => acc + val, 0);
+            if (this.count !== childrenCount)
+                errorList += "[5]";
+            if (this.height !== 1)
+                errorList += "[6]";
+        }
+        if (this.childrenNodes.length > 0) {
+            if (this.childrenNodes.map(child => child.height).some(height => isNil(height) || height === 0))
+                errorList += "[7]";
+            const maxChildHeight = this.childrenNodes.map(child => child.height).reduce((acc, val) => Math.max(acc, val), 0);
+            if (this.height !== maxChildHeight + 1)
+                errorList += "[8]";
+        }
+        if (!isNil(this.frozenChunkId)) {
+            if (this.childrenValues.length > 0)
+                errorList += "[9]";
+            if (this.childrenNodes.length > 0)
+                errorList += "[10]";
+        }
+        if (this.count === (root.branchFactor ** this.height)) {
+            if (this.childrenValues.length > 0)
+                errorList += "[11]";
+            if (this.childrenNodes.length > 0)
+                errorList += "[12]";
+            if (isNil(this.frozenChunkId))
+                errorList += "[13]";
+            if (!this.isFull)
+                errorList += "[14]";
+        }
+        if (heightError(this.height, this.count))
+            errorList += "[15]";
+        if (this.childrenNodes.length >= 2) {
+            for (let i = 0; i < this.childrenNodes.length - 1; i++) {
+                if (isNil(this.childrenNodes[i].to) || isNil(this.childrenNodes[i + 1].to))
+                    errorList += "[16]";
+                if (isNil(this.childrenNodes[i].from) || isNil(this.childrenNodes[i + 1].from))
+                    errorList += "[17]";
+                if (this.childrenNodes[i].to >= this.childrenNodes[i + 1].from)
+                    errorList += "[18]";
+            }
+        }
+        if (errorList !== "") {
+            console.error(SEP, "Validation failed: " + errorList, SEP);
+            if (DBG0)
+                console.log(this, SEP);
+            throw new Error("Validation failed: " + errorList);
+        }
+        if (this.childrenNodes.length > 0) {
+            for (const child of this.childrenNodes)
+                await child.validate(root, valueSize);
+        }
     }
-    async traverseValues(callback, reverse = false) {
-        return this.traverse(async (node) => await this._callbackValue(node, callback), reverse);
+    async _callbackValues(node, _nodeCallback, reverse = false) {
+        if (node.childrenValues.length > 0) {
+            const valuesArray = reverse ? node.childrenValues.slice().reverse() : node.childrenValues;
+            for (const value of valuesArray) {
+                if (!isNil(_nodeCallback)) {
+                    await _nodeCallback(value);
+                }
+                else {
+                    if (DBG0)
+                        console.log(value);
+                }
+            }
+        }
+    }
+    async traverseValues(root, callback, reverse = false) {
+        return this.traverse(root, async (node) => await this._callbackValues(node, callback, reverse), reverse);
     }
     export() {
-        let retVal = { from: this.from, to: this.to };
-        if (this.frozenChunkId !== undefined) {
-            retVal = { ...retVal, frozenChunkId: this.frozenChunkId, frozenHeight: this.frozenHeight };
+        let retVal = { from: this.from, to: this.to, count: this.count, height: this.height };
+        if (this.isFull)
+            retVal.isFull = true;
+        if (!isNil(this.frozenChunkId)) {
+            retVal = { ...retVal, frozenChunkId: this.frozenChunkId };
         }
-        else if (this.value) {
-            retVal = { ...retVal, value: this.value };
+        else if (this.childrenValues.length > 0) {
+            retVal = { ...retVal, isLeaf: true, children: this.childrenValues };
         }
-        else {
-            if (this.frozenHeight !== undefined)
-                throw new Error("Should not have a frozen height here");
-            retVal = { ...retVal, isFull: this.isFull, children: this.children.map(child => child.export()) };
-        }
+        else if (this.childrenNodes.length > 0)
+            retVal = {
+                ...retVal, children: this.childrenNodes.map(child => child.export())
+            };
         return retVal;
     }
-    static import(root, data) {
-        const node = new HistoryTreeNode(root);
+    static import(data) {
+        if (DBG1)
+            console.log("importing data:", data);
+        const node = new HistoryTreeNode(data.isLeaf);
         node.from = data.from;
         node.to = data.to;
-        if (data.frozenChunkId !== undefined) {
+        node.count = data.count;
+        node.height = data.height;
+        if (!isNil(data.frozenChunkId)) {
             node.frozenChunkId = data.frozenChunkId;
-            node.frozenHeight = data.frozenHeight;
             node.isFull = true;
         }
-        else if (data.value !== undefined) {
-            node.isLeaf = true;
-            node.isFull = true;
-            node.value = data.value;
+        else if (data.isLeaf) {
+            node.isFull = data.isFull;
+            node.childrenValues = data.children;
         }
         else {
             node.isFull = data.isFull;
-            node.children = data.children.map((child) => HistoryTreeNode.import(root, child));
+            if (data.children && data.children.length > 0)
+                node.childrenNodes = data.children.map((child) => HistoryTreeNode.import(child));
         }
         return node;
     }
 }
+function isNil(value) {
+    return value == null;
+}
 export class HistoryTree {
     branchFactor;
-    root = new HistoryTreeNode(this);
+    root = new HistoryTreeNode(true);
+    insertOrValidateLock = false;
     constructor(branchFactor, data) {
         this.branchFactor = branchFactor;
+        if (DBG2)
+            console.log("branchFactor", branchFactor, "data", data);
         if (data)
-            this.root = HistoryTreeNode.import(this, data);
+            this.root = HistoryTreeNode.import(data);
     }
-    async insertValue(value, from, to) {
+    async insertTreeNodeValue(value) {
+        if (this.insertOrValidateLock)
+            throw new Error("Insertion or validation already in progress (these operations are not parallelized, are you missing an 'await'?)");
+        this.insertOrValidateLock = true;
+        const { count, from, to } = value;
+        if (DBG1)
+            console.log("inserting value:", value, "count:", count, "from:", from, "to:", to);
+        if (!isNil(this.root.to) && from <= this.root.to)
+            throw new Error(`Insertion 'from' index ('${from}') must be greater than the highest 'to' value in the tree (currently '${this.root.to}')`);
         if (this.root.isFull) {
-            const newRoot = new HistoryTreeNode(this);
+            if (DBG0)
+                console.log("ROOT is full, we need to create a new root, push current root to first child");
+            const newRoot = new HistoryTreeNode();
             newRoot.from = this.root.from;
             newRoot.to = this.root.to;
-            newRoot.children.push(this.root);
+            newRoot.count = this.root.count;
+            newRoot.height = this.root.height + 1;
+            newRoot.childrenNodes.push(this.root);
             this.root = newRoot;
         }
-        return this.root.insert(value, from, to);
+        if (DBG1)
+            console.log("... inserting value from root on down");
+        await this.root.insertTreeNodeValue(this, value);
+        this.insertOrValidateLock = false;
     }
     async traverse(callback, reverse = false) {
-        return this.root.traverse(callback, reverse);
+        return this.root.traverse(this, callback, reverse);
     }
     async traverseValues(callback, reverse = false) {
-        return this.root.traverseValues(callback, reverse);
+        return this.root.traverseValues(this, callback, reverse);
+    }
+    async validate(valueSize) {
+        if (this.insertOrValidateLock)
+            throw new Error("Validation or insertion already in progress (these operations are not parallelized, are you missing an 'await'?)");
+        this.insertOrValidateLock = true;
+        if (isNil(this.root))
+            throw new Error("Root missing (Internal Error)");
+        await this.root.validate(this, valueSize);
+        this.insertOrValidateLock = false;
     }
     export() {
         if (this.root)
@@ -434,32 +551,52 @@ export class HistoryTree {
     }
 }
 export class DeepHistory extends HistoryTree {
-    channel;
-    budget;
-    static MESSAGE_HISTORY_BRANCH_FACTOR = 32;
-    static MAX_MESSAGE_SET_SIZE = 512;
+    branchFactor;
     static MAX_MESSAGE_HISTORY_SHARD_SIZE = (4 * 1024 * 1024) - (2 * 32 * 1024);
+    constructor(branchFactor, data) {
+        super(branchFactor, data);
+        this.branchFactor = branchFactor;
+    }
+    async freeze(data) {
+        if (DBG1)
+            console.log("freezing data:", data);
+        const f = await this.storeData(data);
+        if (DBG1)
+            console.log("... frozen data identifier:", f);
+        return f;
+    }
+    async deFrost(handle) {
+        if (DBG1)
+            console.log("deFrosting handle:", handle);
+        const data = await this.fetchData(handle);
+        if (DBG1)
+            console.log("... deFrosted results:\n", data);
+        return data;
+    }
+}
+export class ServerDeepHistory extends DeepHistory {
+    static MESSAGE_HISTORY_BRANCH_FACTOR = TEST_WITH_SMALL_BRANCHING ? 3 : 32;
+    static MAX_MESSAGE_SET_SIZE = TEST_WITH_SMALL_BRANCHING ? 5 : 512;
+    constructor(data) {
+        super(ServerDeepHistory.MESSAGE_HISTORY_BRANCH_FACTOR, data);
+    }
+    async insert(data) {
+        await this.insertTreeNodeValue(data);
+    }
+    async fetchData(_handle) {
+        throw new Error("[ServerDeepHistory] should not be fetching data (server-side is write-only)");
+    }
+}
+export class ClientDeepHistory extends DeepHistory {
+    channel;
     SB;
-    constructor(data, channel, budget) {
-        super(DeepHistory.MESSAGE_HISTORY_BRANCH_FACTOR, data);
+    constructor(data, channel) {
+        super(ServerDeepHistory.MESSAGE_HISTORY_BRANCH_FACTOR, data);
         this.channel = channel;
-        this.budget = budget;
         this.SB = new Snackabra(this.channel.channelServer);
     }
-    async storeData(data) {
-        if (!this.budget || !this.SB)
-            throw new Error("Budget required to freeze data (this DeepHistory is operating in read-only mode)");
-        if (DBG2) {
-            const b = assemblePayload(data);
-            console.log("(packaged size will be) [storeData] asked to store buffer size", b.byteLength, "bytes");
-        }
-        const h = await this.SB.storage.storeData(data, this.budget);
-        const x = await stringify_SBObjectHandle(h);
-        return {
-            id: x.id,
-            key: x.key,
-            verification: x.verification
-        };
+    async storeData(_data) {
+        throw new Error("[ClientDeepHistory] should not be storing data (client-side is read-only)");
     }
     async fetchData(handle) {
         if (!this.SB)
@@ -467,26 +604,17 @@ export class DeepHistory extends HistoryTree {
         const b = await this.SB.storage.fetchData(handle);
         return b.payload;
     }
-    async freeze(data) {
-        if (DBG2)
-            console.log("*** Freezing data, packaged size will be:", assemblePayload(data).byteLength);
-        return this.storeData(data);
-    }
-    async deFrost(handle) {
-        return this.fetchData(handle);
-    }
     async traverseMessages(callback, reverse = false) {
         if (DBG2)
             console.log(SEP, `Traversing the tree ${reverse ? 'reverse' : 'in order'} :`, _SEP);
-        if (!this.channel)
-            throw new Error("Channel required to traverse messages");
-        await this.traverse(async (node) => {
-            if (node.value) {
-                const messages = await this.fetchData(node.value.shard);
+        await this.traverseValues(async (t) => {
+            const node = t;
+            if (node.shard) {
+                const messages = await this.fetchData(node.shard);
                 if (!(messages instanceof Map))
                     throw new Error("Expected a map");
                 if (DBG2)
-                    console.log(SEP, "We are looking at:\n", node.value, SEP, messages, SEP, messages.size, SEP);
+                    console.log(SEP, "We are looking at:\n", node.shard, SEP, messages, SEP, messages.size, SEP);
                 const keys = Array.from(messages.keys());
                 keys.sort();
                 if (reverse)
@@ -504,7 +632,11 @@ export class DeepHistory extends HistoryTree {
                 }
             }
         }, reverse);
-        console.log(SEP);
+        if (DBG2)
+            console.log(SEP);
+    }
+    async validate() {
+        await super.validate(ServerDeepHistory.MAX_MESSAGE_SET_SIZE);
     }
 }
 export class MessageBus {
@@ -2497,7 +2629,8 @@ class Channel extends SBChannelKeys {
         await this.channelReady;
         _sb_assert(this.channelId, "Channel.getHistory: no channel ID (?)");
         const data = await this.callApi('/getHistory');
-        const h = new DeepHistory(data, this);
+        console.log(SEP, "getHistory result:\n", JSON.stringify(data, null, 2), SEP);
+        const h = new ClientDeepHistory(data, this);
         return h;
     }
     setPage(options) {
@@ -3593,7 +3726,7 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240601.1";
+    static version = "3.20240602.0";
     static MAX_MESSAGE_SET_SIZE = 512;
     static knownShards = new Map();
     #channelServer;

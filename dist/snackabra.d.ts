@@ -125,65 +125,76 @@ export type SBUserId = SB384Hash;
 export type SBChannelId = SB384Hash;
 export type SBUserPublicKey = string;
 export type SBUserPrivateKey = string;
-export interface Freezable<T1, T2> {
-    type: 'leaf' | 'node';
-    valuesArray?: T1[];
-    frozenChunkIdArray?: T2[];
-}
-export declare class HistoryTreeNode<ValueType, FrozenIdType, IndexType> {
-    private root;
-    isLeaf: boolean;
-    children: HistoryTreeNode<ValueType, FrozenIdType, IndexType>[];
-    value: ValueType | undefined;
-    from: IndexType | undefined;
-    to: IndexType | undefined;
-    isFull: boolean;
-    frozenHeight: number | undefined;
-    frozenChunkId: FrozenIdType | undefined;
-    constructor(root: HistoryTree<ValueType, FrozenIdType, IndexType>, isLeaf?: boolean);
-    insert(value: ValueType, from: IndexType, to?: IndexType): Promise<boolean>;
-    nodeHeight(): number;
-    traverse(callback: (node: HistoryTreeNode<ValueType, FrozenIdType, IndexType>) => Promise<void>, reverse?: boolean): Promise<void>;
-    _callbackValue(node: HistoryTreeNode<ValueType, FrozenIdType, IndexType>, _nodeCallback?: (value: ValueType) => Promise<void>): Promise<void>;
-    traverseValues(callback?: (value: ValueType) => Promise<void>, reverse?: boolean): Promise<void>;
-    export(): any;
-    static import<ValueType, FrozenType, IndexType>(root: HistoryTree<ValueType, FrozenType, IndexType>, data: any): HistoryTreeNode<ValueType, FrozenType, IndexType>;
-}
-export declare abstract class HistoryTree<ValueType, FrozenType, IndexType> {
-    branchFactor: number;
-    root: HistoryTreeNode<ValueType, FrozenType, IndexType>;
-    abstract freeze(data: Freezable<ValueType, FrozenType>): Promise<FrozenType>;
-    abstract deFrost(data: FrozenType): Promise<Freezable<ValueType, FrozenType>>;
-    constructor(branchFactor: number, data?: any);
-    insertValue(value: ValueType, from: IndexType, to: IndexType): Promise<boolean>;
-    traverse(callback: (node: HistoryTreeNode<ValueType, FrozenType, IndexType>) => Promise<void>, reverse?: boolean): Promise<void>;
-    traverseValues(callback?: (value: ValueType) => Promise<void>, reverse?: boolean): Promise<void>;
-    export(): any;
-}
-export interface MessageHistory {
-    version: '20240601.0';
-    channelId: SBChannelId;
-    ownerPublicKey: SBUserPublicKey;
-    created: number;
+export interface TreeNodeValueType {
+    type: 'messageHistory';
     from: string;
     to: string;
     count: number;
-    size: number;
+}
+export declare class HistoryTreeNode<FrozenType> {
+    isLeaf: boolean;
+    childrenNodes: HistoryTreeNode<FrozenType>[];
+    childrenValues: TreeNodeValueType[];
+    from: string | undefined;
+    to: string | undefined;
+    count: number;
+    isFull: boolean;
+    height: number;
+    frozenChunkId: FrozenType | undefined;
+    constructor(isLeaf?: boolean);
+    insertTreeNodeValue(root: HistoryTree<FrozenType>, value: TreeNodeValueType): Promise<void>;
+    traverse(root: HistoryTree<FrozenType>, callback: (node: HistoryTreeNode<FrozenType>) => Promise<void>, reverse?: boolean): Promise<void>;
+    validate(root: HistoryTree<FrozenType>, valueSize?: number): Promise<void>;
+    _callbackValues(node: HistoryTreeNode<FrozenType>, _nodeCallback?: (value: TreeNodeValueType) => Promise<void>, reverse?: boolean): Promise<void>;
+    traverseValues(root: HistoryTree<FrozenType>, callback?: (value: TreeNodeValueType) => Promise<void>, reverse?: boolean): Promise<void>;
+    export(): any;
+    static import<FrozenType>(data: any): HistoryTreeNode<FrozenType>;
+}
+export declare abstract class HistoryTree<FrozenType> {
+    branchFactor: number;
+    root: HistoryTreeNode<FrozenType>;
+    abstract freeze(data: HistoryTreeNode<FrozenType>): Promise<FrozenType>;
+    abstract deFrost(data: FrozenType): Promise<HistoryTreeNode<FrozenType>>;
+    private insertOrValidateLock;
+    constructor(branchFactor: number, data?: any);
+    insertTreeNodeValue(value: TreeNodeValueType): Promise<void>;
+    traverse(callback: (node: HistoryTreeNode<FrozenType>) => Promise<void>, reverse?: boolean): Promise<void>;
+    traverseValues(callback?: (value: TreeNodeValueType) => Promise<void>, reverse?: boolean): Promise<void>;
+    validate(valueSize?: number): Promise<void>;
+    export(): any;
+}
+export interface MessageHistory extends TreeNodeValueType {
+    version: '20240603.0';
+    channelId: SBChannelId;
+    ownerPublicKey: SBUserPublicKey;
+    created: number;
+    size?: number;
     shard: SBObjectHandle;
 }
-export declare class DeepHistory extends HistoryTree<MessageHistory, SBObjectHandle, string> {
-    private channel;
-    private budget?;
+export declare abstract class DeepHistory<FrozenType> extends HistoryTree<FrozenType> {
+    branchFactor: number;
+    abstract storeData(data: any): Promise<FrozenType>;
+    abstract fetchData(handle: FrozenType): Promise<any>;
+    static MAX_MESSAGE_HISTORY_SHARD_SIZE: number;
+    constructor(branchFactor: number, data?: any);
+    freeze(data: HistoryTreeNode<FrozenType>): Promise<FrozenType>;
+    deFrost(handle: FrozenType): Promise<any>;
+}
+export declare abstract class ServerDeepHistory extends DeepHistory<SBObjectHandle> {
     static MESSAGE_HISTORY_BRANCH_FACTOR: number;
     static MAX_MESSAGE_SET_SIZE: number;
-    static MAX_MESSAGE_HISTORY_SHARD_SIZE: number;
+    constructor(data: any);
+    insert(data: MessageHistory): Promise<void>;
+    fetchData(_handle: SBObjectHandle): Promise<any>;
+}
+export declare class ClientDeepHistory extends DeepHistory<SBObjectHandle> {
+    private channel;
     private SB;
-    constructor(data: any, channel: Channel, budget?: Channel | undefined);
-    private storeData;
-    private fetchData;
-    freeze(data: Freezable<MessageHistory, SBObjectHandle>): Promise<SBObjectHandle>;
-    deFrost(handle: SBObjectHandle): Promise<Freezable<MessageHistory, SBObjectHandle>>;
+    constructor(data: any, channel: Channel);
+    storeData(_data: any): Promise<SBObjectHandle>;
+    fetchData(handle: SBObjectHandle): Promise<any>;
     traverseMessages(callback?: (value: Message) => Promise<void>, reverse?: boolean): Promise<void>;
+    validate(): Promise<void>;
 }
 export declare class MessageBus {
     #private;
@@ -383,7 +394,7 @@ declare class Channel extends SBChannelKeys {
     }>;
     getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>>;
     getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>>;
-    getHistory(): Promise<DeepHistory>;
+    getHistory(): Promise<ClientDeepHistory>;
     setPage(options: {
         page: any;
         prefix?: number;
