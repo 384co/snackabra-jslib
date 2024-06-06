@@ -194,6 +194,7 @@ export declare class ClientDeepHistory extends DeepHistory<SBObjectHandle> {
     storeData(_data: any): Promise<SBObjectHandle>;
     fetchData(handle: SBObjectHandle): Promise<any>;
     traverseMessages(callback?: (value: Message) => Promise<void>, reverse?: boolean): Promise<void>;
+    traverseMessagesEncrypted(callback: (id: string, value: ChannelMessage) => Promise<void>): Promise<void>;
     validate(): Promise<void>;
 }
 export declare class MessageBus {
@@ -483,6 +484,7 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 declare class Snackabra extends SBEventTarget {
     #private;
     static version: string;
+    static MAX_MESSAGE_REQUEST_SIZE: number;
     static MAX_MESSAGE_SET_SIZE: number;
     static knownShards: Map<string, SBObjectHandle>;
     static lastTimeStamp: number;

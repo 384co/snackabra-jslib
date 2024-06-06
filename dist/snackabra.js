@@ -635,6 +635,18 @@ export class ClientDeepHistory extends DeepHistory {
         if (DBG2)
             console.log(SEP);
     }
+    async traverseMessagesEncrypted(callback) {
+        await this.traverseValues(async (t) => {
+            const node = t;
+            if (node.shard) {
+                const messages = await this.fetchData(node.shard);
+                if (!(messages instanceof Map))
+                    throw new Error("Expected a map");
+                for (const [key, value] of messages)
+                    await callback(key, value);
+            }
+        });
+    }
     async validate() {
         await super.validate(ServerDeepHistory.MAX_MESSAGE_SET_SIZE);
     }
@@ -2573,8 +2585,6 @@ class Channel extends SBChannelKeys {
                     console.log("getMessageKeys\n", keys);
                 if (!keys || keys.size === 0)
                     console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?");
-                if (keys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
-                    console.warn(SEP, `[Channel.getMessageKeys] Warning: ${keys.size} keys returned, that's over the ${Snackabra.MAX_MESSAGE_SET_SIZE} limit - you will NOT be able to request this set directly.`, SEP);
                 resolve({ keys, historyShard });
             }
             catch (e) {
@@ -2590,8 +2600,8 @@ class Channel extends SBChannelKeys {
             console.log("[getRawMessageMap] called with messageKeys:", messageKeys);
         if (messageKeys.size === 0)
             throw new SBError("[getRawMessageMap] no message keys provided");
-        if (messageKeys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
-            throw new SBError(`[getRawMessageMap] too many messages requested at once (max ${Snackabra.MAX_MESSAGE_SET_SIZE})`);
+        if (messageKeys.size > (Snackabra.MAX_MESSAGE_REQUEST_SIZE))
+            throw new SBError(`[getRawMessageMap] too many messages requested at once (max ${Snackabra.MAX_MESSAGE_REQUEST_SIZE}, ${messageKeys.size} requested)`);
         return new Promise(async (resolve, _reject) => {
             await this.channelReady;
             _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)");
@@ -2603,8 +2613,8 @@ class Channel extends SBChannelKeys {
         });
     }
     getMessageMap(messageKeys) {
-        if (messageKeys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
-            throw new SBError(`[getMessageMap] too many message keys provided (max ${Snackabra.MAX_MESSAGE_SET_SIZE})`);
+        if (messageKeys.size > Snackabra.MAX_MESSAGE_REQUEST_SIZE)
+            throw new SBError(`[getMessageMap] too many message keys provided (max ${Snackabra.MAX_MESSAGE_REQUEST_SIZE}, ${messageKeys.size} provided)`);
         if (DBG)
             console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys);
         if (messageKeys.size === 0)
@@ -3726,8 +3736,9 @@ export class SBEventTarget {
     }
 }
 class Snackabra extends SBEventTarget {
-    static version = "3.20240602.0";
-    static MAX_MESSAGE_SET_SIZE = 512;
+    static version = "3.20240605.6";
+    static MAX_MESSAGE_REQUEST_SIZE = 128;
+    static MAX_MESSAGE_SET_SIZE = ServerDeepHistory.MAX_MESSAGE_SET_SIZE;
     static knownShards = new Map();
     #channelServer;
     #storage;
@@ -3939,8 +3950,8 @@ class Snackabra extends SBEventTarget {
             const r = await SBApiFetch(server + '/api/v2/info');
             if (DBG0)
                 console.log(SEP, `[getServerInfo] Fetching server info from '${server}' ++++\n`, r, SEP);
-            if (r && r.maxMessageSetSize)
-                Snackabra.MAX_MESSAGE_SET_SIZE = r.maxMessageSetSize;
+            if (r && r.maxMessageRequestSize)
+                Snackabra.MAX_MESSAGE_REQUEST_SIZE = r.maxMessageRequestSize;
             return r;
         }
         catch (e) {

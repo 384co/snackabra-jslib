@@ -1146,6 +1146,22 @@ export class ClientDeepHistory extends DeepHistory<SBObjectHandle> {
     }, reverse);
     if (DBG2) console.log(SEP)
   }
+
+  // specialized version, non-reversed traversal, requesting raw messages
+  // (eg to top up a local cache for example)
+  async traverseMessagesEncrypted(callback: (id: string, value: ChannelMessage) => Promise<void>): Promise<void> {
+    await this.traverseValues(async t => {
+      const node = t as MessageHistory // specialized TreeNodeValueType
+      if (node.shard) {
+        const messages = await this.fetchData(node.shard) as Map<string, ChannelMessage>
+        if (!(messages instanceof Map)) throw new Error("Expected a map")
+          // perform callback for raw messages, remember (key, value)
+        for (const [key, value] of messages)
+          await callback(key, value)
+      }
+    });
+  }
+
   async validate(): Promise<void> {
     await super.validate(ServerDeepHistory.MAX_MESSAGE_SET_SIZE);
   }
@@ -3989,8 +4005,10 @@ class Channel extends SBChannelKeys {
         if (DBG) console.log("getMessageKeys\n", keys)
         if (!keys || keys.size === 0)
           console.warn("[Channel.getMessageKeys] Warning: no messages (empty/null response); not an error but perhaps unexpected?")
-        if (keys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
-          console.warn(SEP, `[Channel.getMessageKeys] Warning: ${keys.size} keys returned, that's over the ${Snackabra.MAX_MESSAGE_SET_SIZE} limit - you will NOT be able to request this set directly.`, SEP)
+        // update: we now allow 512 'keys' handled at a time, but only 128 '(key,value)' pairs eg contents;
+        // so this warning doesn't quite make sense (since things like ChannelStream maximize requests)
+        // if (keys.size > (Snackabra.MAX_MESSAGE_REQUEST_SIZE + 8)) // update to transition to DeepHistory
+        //   console.warn(SEP, `[Channel.getMessageKeys] Warning: ${keys.size} keys returned, that's over the ${Snackabra.MAX_MESSAGE_SET_SIZE} limit - you will NOT be able to request this set directly.`, SEP)
         resolve({ keys, historyShard })
       } catch (e) {
         const msg = `[Channel.getMessageKeys] Error in getting message keys (offline?) ('${e}')`
@@ -4004,8 +4022,8 @@ class Channel extends SBChannelKeys {
   getRawMessageMap(messageKeys: Set<string>): Promise<Map<string, ArrayBuffer>> {
     if (DBG) console.log("[getRawMessageMap] called with messageKeys:", messageKeys)
     if (messageKeys.size === 0) throw new SBError("[getRawMessageMap] no message keys provided")
-    if (messageKeys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
-      throw new SBError(`[getRawMessageMap] too many messages requested at once (max ${Snackabra.MAX_MESSAGE_SET_SIZE})`)
+    if (messageKeys.size > (Snackabra.MAX_MESSAGE_REQUEST_SIZE))
+      throw new SBError(`[getRawMessageMap] too many messages requested at once (max ${Snackabra.MAX_MESSAGE_REQUEST_SIZE}, ${messageKeys.size} requested)`)
     return new Promise(async (resolve, _reject) => {
       await this.channelReady
       _sb_assert(this.channelId, "[getRawMessageMap] no channel ID (?)")
@@ -4020,8 +4038,8 @@ class Channel extends SBChannelKeys {
    * Main function for getting a chunk of messages from the server.
    */
   getMessageMap(messageKeys: Set<string>): Promise<Map<string, Message>> {
-    if (messageKeys.size > Snackabra.MAX_MESSAGE_SET_SIZE)
-      throw new SBError(`[getMessageMap] too many message keys provided (max ${Snackabra.MAX_MESSAGE_SET_SIZE})`)
+    if (messageKeys.size > Snackabra.MAX_MESSAGE_REQUEST_SIZE)
+      throw new SBError(`[getMessageMap] too many message keys provided (max ${Snackabra.MAX_MESSAGE_REQUEST_SIZE}, ${messageKeys.size} provided)`)
     if (DBG) console.log("Channel.getDecryptedMessages() called with messageKeys:", messageKeys)
     if (messageKeys.size === 0) throw new SBError("[getMessageMap] no message keys provided")
     return new Promise(async (resolve, _reject) => {
@@ -5628,11 +5646,15 @@ type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
   * a specific service binding for a web worker.
  */
 class Snackabra extends SBEventTarget {
-  public static version = "3.20240602.0"
+  public static version = "3.20240605.6"
 
-  // maximum number of messages to fetch in one go. the server might have a
-  // different opinion, in which case this will be adjusted
-  public static MAX_MESSAGE_SET_SIZE = 512
+  // max number of messages (with body) that can be requested at once; note that
+  // this is calibrated with the server, which might think differently
+  public static MAX_MESSAGE_REQUEST_SIZE = 128
+  
+  // max number of message *keys* that can be requested at once;
+  // this is also the core DeepHistory sharding size
+  public static MAX_MESSAGE_SET_SIZE = ServerDeepHistory.MAX_MESSAGE_SET_SIZE
 
   // these are known shards that we've seen and know the handle for; this is
   // global. hashed on decrypted (but not extracted) contents.
@@ -5950,8 +5972,8 @@ class Snackabra extends SBEventTarget {
     try {
       const r = await SBApiFetch(server + '/api/v2/info');
       if (DBG0) console.log(SEP, `[getServerInfo] Fetching server info from '${server}' ++++\n`, r, SEP)
-      if (r && r.maxMessageSetSize)
-        Snackabra.MAX_MESSAGE_SET_SIZE = r.maxMessageSetSize
+      if (r && r.maxMessageRequestSize)
+        Snackabra.MAX_MESSAGE_REQUEST_SIZE = r.maxMessageRequestSize
       return r
     } catch (e) {
       if (DBG0) console.warn(`[getServerInfo] Could not access server '${server}'`)
