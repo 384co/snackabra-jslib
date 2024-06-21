@@ -5211,28 +5211,35 @@ export class StorageApi {
   }
 
   /**
-   * Pads object up to closest permitted size boundaries;
-   * currently that means a minimum of 4KB and a maximum of
-   * of 1 MB, after which it rounds up to closest MB.
+   * Pads object up to closest permitted size boundaries,
+   * taking into account meta data overhead of the padding itself.
+   * 
+   * Currently, this means minimum size of 4 KiB, after which
+   * we round up to closest power of 2, doing so up to 1 MiB,
+   * after which we round up to the next MiB boundary.
    */
   static padBuf(buf: ArrayBuffer) {
     const dataSize = buf.byteLength; let _target
+
+    const MIN_SIZE = 4096;    // 4 KiB
+    const MAX_SIZE = 1048576; // 1 MiB
+    const OVERHEAD = 4;       // Size of Uint32
+
     // pick the size to be rounding up to
-    if ((dataSize + 4) < 4096) _target = 4096 // smallest size
-    else if ((dataSize + 4) < 1048576) _target = 2 ** Math.ceil(Math.log2(dataSize + 4)) // in between
-    else _target = (Math.ceil((dataSize + 4) / 1048576)) * 1048576 // largest size
+    if ((dataSize + OVERHEAD) < MIN_SIZE) _target = MIN_SIZE // smallest size
+    else if ((dataSize + OVERHEAD) < MAX_SIZE) _target = 2 ** Math.ceil(Math.log2(dataSize + OVERHEAD)) // in between
+    else _target = (Math.ceil((dataSize + OVERHEAD) / MAX_SIZE)) * MAX_SIZE // largest size
     // append the padding buffer
     let finalArray = _appendBuffers([buf, (new Uint8Array(_target - dataSize)).buffer]);
     // set the (original) size in the last 4 bytes
-    (new DataView(finalArray)).setUint32(_target - 4, dataSize)
-    if (DBG2) console.log("padBuf bytes:", finalArray.slice(-4));
+    (new DataView(finalArray)).setUint32(_target - OVERHEAD, dataSize)
+    if (DBG2) console.log("padBuf bytes:", finalArray.slice(-OVERHEAD));
     return finalArray
   }
 
+
   /**
-   * The actual size of the object is encoded in the
-   * last 4 bytes of the buffer. This function removes
-   * all the padding and returns the actual object.
+   * Reverse of padBuf(). Note that actual size is in the last 4 bytes.
    */
   /** @private */
   #unpadData(data_buffer: ArrayBuffer): ArrayBuffer {
@@ -5240,12 +5247,12 @@ export class StorageApi {
     var _size = new DataView(tail).getUint32(0)
     const _little_endian = new DataView(tail).getUint32(0, true)
     if (_little_endian < _size) {
+      // a bit of a hack, some code writes the size in little endian
       if (DBG2) console.warn("#unpadData - size of shard encoded as little endian (fixed upon read)")
       _size = _little_endian
     }
     if (DBG2) {
       console.log(`#unpadData - size of object is ${_size}`)
-      // console.log(tail)
     }
     return data_buffer.slice(0, _size);
   }
@@ -5283,6 +5290,7 @@ export class StorageApi {
       SEP, encryptedData,
       SEP
     )
+    // todo: yes we end up doing a bit more copying of data then needed
     const id = await crypto.subtle.digest('SHA-256',
       _appendBuffers([
         iv,
