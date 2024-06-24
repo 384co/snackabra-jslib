@@ -261,7 +261,7 @@ export function validate_ChannelApiBody(body: any): ChannelApiBody {
  * Note that channel server doesn't need userPublicKey on every channel message
  * since it's provided on websocket setup.
  *
- * Complete channel "_id" is channelId + '_' + subChannel + '_' +
+ * Complete channel "\_id" is channelId + '\_' + subChannel + '\_' +
  * timestampPrefix This allows (prefix) searches within time spans on a per
  * channel (and if applicable, subchannel) basis. Special subchannel 'blank'
  * (represented as '____') is the default channel and generally the only one
@@ -297,28 +297,44 @@ export interface ChannelMessage {
   [SB_CHANNEL_MESSAGE_SYMBOL]?: boolean,
 
   // the following is minimum when *sending*. see also stripChannelMessage()
-  f?: SBUserId, // 'from': public (hash) of sender, matches publicKey of sender, verified by channel server
-  c?: ArrayBuffer | string, // encrypted contents, or an unencrypted 'string message' if 'stringMessage' is true
-  iv?: Uint8Array, // nonce, always present whether needed by protocol or not (12 bytes)
-  salt?: ArrayBuffer, // salt, always present whether needed by protocol or not (16 bytes)
-  s?: ArrayBuffer, // signature
-  ts?: number, // timestamp at point of encryption, by client, verified along with encrypt/decrypt
-  cs?: string, // channel server, if present, clarifies where message was processed
+
+  /** 'from': public (hash) of sender, matches publicKey of sender, verified by channel server */
+  f?: SBUserId, 
+  /** encrypted contents, or an unencrypted 'string message' if 'stringMessage' is true */
+  c?: ArrayBuffer | string, 
+  /** nonce, always present whether needed by protocol or not (12 bytes) */
+  iv?: Uint8Array, 
+  /** salt, always present whether needed by protocol or not (16 bytes) */
+  salt?: ArrayBuffer, 
+  /** sender signature */
+  s?: ArrayBuffer,
+  /** timestamp at point of encryption, by client, verified along with encrypt/decrypt */
+  ts?: number, 
+  /** channel server, if present, clarifies where message was processed */
+  cs?: string, 
 
   // the remainder are either optional (with default values), internally used,
   // server provided, or can be reconstructed
-  channelId?: SBChannelId, // channelId base62 x 43
-  i2?: string, // subchannel; default is '____', can be any 4xbase62; only owner can read/write subchannels
-  sts?: number, //  timestamp from server
-  timestampPrefix?: string, // string/base4 encoding of timestamp (see timestampToBase4String)
-  _id?: string, // channelId + '_' + subChannel + '_' + timestampPrefix
-  p?: string; // if present, hash of previous message from this sender
 
-  // whatever is being sent; should (must) be stripped when sent. when
-  // encrypted, this is packaged as payload first (signing is done on the
-  // payload version)
+  /** (optional) channelId base62 x 43 */
+  channelId?: SBChannelId, 
+  /** (optional) subchannel; default is '____', can be any 4xbase62; only owner can read/write subchannels */
+  i2?: string, 
+  /**  timestamp from server */
+  sts?: number,
+  /** string/base4 encoding of timestamp (see timestampToBase4String) */
+  timestampPrefix?: string, 
+  /** channelId + '\_' + subChannel + '\_' + timestampPrefix */
+  _id?: string, 
+  /** if present, hash of previous message from this sender */
+  p?: string;
+
+  /** whatever is being sent; should (must) be stripped when sent. when
+      encrypted, this is packaged as payload first (signing is done on the
+      payload version) */
   unencryptedContents?: any,
-  stringMessage?: boolean, // internal, if true then do not package ('string' message)
+  /** internal, if true then do not package ('string' message) */
+  stringMessage?: boolean,
 
   ready?: boolean, // if present, signals other side is ready to receive messages (rest of message ignored)
   error?: string, // if present, signals error (and rest of message ignored)
@@ -327,6 +343,9 @@ export interface ChannelMessage {
   protocol?: SBProtocol, // protocol to be used for message
 }
 
+/**
+ * Validates 'ChannelMessage', throws if there's an issue.
+ */
 export function validate_ChannelMessage(body: ChannelMessage): ChannelMessage {
   if (!body) throw new SBError(`invalid ChannelMessage (null or undefined)`)
   else if (body[SB_CHANNEL_MESSAGE_SYMBOL]) return body as ChannelMessage
@@ -538,6 +557,7 @@ export interface ShardInfo {
  *
  * - version is a single character string that indicates the version of the
  *   object handle. '1' and '2' are legacy, '3' is current.
+ * 
  * - key is a 43 character base62
  *
  * - verification is a random (server specific) string that is used to verify
@@ -1677,8 +1697,10 @@ function base64ToArrayBuffer(s: string): Uint8Array {
  * We use a dictionary of (A-Za-z0-9) and chunks of 32 bytes.
  * 
  * We use this for all 'external' encodings of keys, ids, etc.
+ * 
+ * See `arrayBufferToBase62` and `base62ToArrayBuffer` for the
+ * actual encoding and decoding functions.
  */
-
 export type Base62Encoded = string & { _brand?: 'Base62Encoded' };
 
 export const base62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -2962,7 +2984,7 @@ class SB384 {
    * for any class or object that uses SB384 as it's root.
    * 
    * This is deterministic. Typical use case is to translate a user id
-   * into a {@link ChannelId} (eg the channel that any user id is inherently
+   * into a {@link SBChannelId} (eg the channel that any user id is inherently
    * the owner of).
    * 
    * The hash is base62 encoding of the SHA-384 hash of the public key.
@@ -2978,7 +3000,7 @@ class SB384 {
   // convenience getter
   @Memoize @Ready get userId(): SB384Hash { return this.hash }
 
-  /** {@link ChannelID} that corresponds to this, if it's an owner */
+  /** {@link SBChannelId} that corresponds to this, if it's an owner */
   @Memoize @Ready get ownerChannelId() {
     // error even though there's a #hash, since we know it needs to be private
     // ... update, hm, actually this is still used as "whatif" for non-owner
@@ -5622,7 +5644,7 @@ export interface SBServerInfo {
   jslibVersion?: string,
 }
 
-type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
+export type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 
 /**
   * Main class. It corresponds to a single channel server. Most apps

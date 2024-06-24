@@ -3468,16 +3468,19 @@ export class StorageApi {
     static padBuf(buf) {
         const dataSize = buf.byteLength;
         let _target;
-        if ((dataSize + 4) < 4096)
-            _target = 4096;
-        else if ((dataSize + 4) < 1048576)
-            _target = 2 ** Math.ceil(Math.log2(dataSize + 4));
+        const MIN_SIZE = 4096;
+        const MAX_SIZE = 1048576;
+        const OVERHEAD = 4;
+        if ((dataSize + OVERHEAD) < MIN_SIZE)
+            _target = MIN_SIZE;
+        else if ((dataSize + OVERHEAD) < MAX_SIZE)
+            _target = 2 ** Math.ceil(Math.log2(dataSize + OVERHEAD));
         else
-            _target = (Math.ceil((dataSize + 4) / 1048576)) * 1048576;
+            _target = (Math.ceil((dataSize + OVERHEAD) / MAX_SIZE)) * MAX_SIZE;
         let finalArray = _appendBuffers([buf, (new Uint8Array(_target - dataSize)).buffer]);
-        (new DataView(finalArray)).setUint32(_target - 4, dataSize);
+        (new DataView(finalArray)).setUint32(_target - OVERHEAD, dataSize);
         if (DBG2)
-            console.log("padBuf bytes:", finalArray.slice(-4));
+            console.log("padBuf bytes:", finalArray.slice(-OVERHEAD));
         return finalArray;
     }
     #unpadData(data_buffer) {

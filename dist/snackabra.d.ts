@@ -480,7 +480,7 @@ export interface SBServerInfo {
     storageServer: string;
     jslibVersion?: string;
 }
-type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
+export type ServerOnlineStatus = 'online' | 'offline' | 'unknown';
 declare class Snackabra extends SBEventTarget {
     #private;
     static version: string;
