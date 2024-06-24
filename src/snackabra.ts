@@ -1700,8 +1700,18 @@ for (let X = 1; X <= N; X++) {
 }
 const maxChunk = M.get(N)!; // max encoded (string) chunk implied by 'N'
 
-/** Converts any array buffer to base62. */
-function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string {
+/**
+ * Testing function.
+ */
+export function fooBar() {
+  console.log("fooBar")
+}
+
+/**
+ * Converts any array buffer to base62.
+ * @public
+ * */
+export function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string {
   function _arrayBufferToBase62(buffer: Uint8Array, c: number): string {
     let result = '', n = 0n;
     for (const byte of buffer)
@@ -2774,7 +2784,7 @@ function decompressP384(xBase64: string, signY: number) {
   *   public key, shorter format (256 bits, 43 x base62), cannot be used to
   *   reconstruct key, used to identify users (and channels)
   *
-  * - userPublicKey(): encodes core public key info ('x' and 'y' fields), as a
+  * - {@link SB384.userPublicKey}: encodes core public key info ('x' and 'y' fields), as a
   *   base62 string (with a unique prefix). This is 'wire' format as well as
   *   human-readable. 
   *
@@ -2820,9 +2830,13 @@ class SB384 {
    * As a fundamental object, SB384 can be initialized from a number starting points:
    * 
    * - No key provided: a new key pair is generated
+   * 
    * - A CryptoKey object: a key pair is generated from the CryptoKey
-   * - A JsonWebKey object: a key pair is generated from the JsonWebKey
+   * 
+   * - A JsonWebKey object: a key pair is generated from the provided JsonWebKey
+   * 
    * - A SBUserPublicKey object: a key pair is generated from the SBUserPublicKey
+   * 
    * - A SBUserPrivateKey object: a key pair is generated from the SBUserPrivateKey
    * 
    * The 'forcePrivate' parameter is used to force the object to be private; if
@@ -6021,27 +6035,26 @@ export {
   Snackabra,
   arrayBufferToBase64url,
   base64ToArrayBuffer,
-  arrayBufferToBase62,
   base62ToArrayBuffer,
   setDebugLevel,
 };
 
-export var SB = {
-  Snackabra: Snackabra,
-  // SBMessage: SBMessage,
-  Channel: Channel,
-  SBCrypto: SBCrypto,
-  SB384: SB384,
-  arrayBufferToBase64url: arrayBufferToBase64url,
-  base64ToArrayBuffer: base64ToArrayBuffer,
-  arrayBufferToBase62: arrayBufferToBase62,
-  base62ToArrayBuffer: base62ToArrayBuffer,
-  sbCrypto: sbCrypto,
-  setDebugLevel: setDebugLevel,
-};
+// export var SB = {
+//   Snackabra: Snackabra,
+//   // SBMessage: SBMessage,
+//   Channel: Channel,
+//   SBCrypto: SBCrypto,
+//   SB384: SB384,
+//   arrayBufferToBase64url: arrayBufferToBase64url,
+//   base64ToArrayBuffer: base64ToArrayBuffer,
+//   arrayBufferToBase62: arrayBufferToBase62,
+//   base62ToArrayBuffer: base62ToArrayBuffer,
+//   sbCrypto: sbCrypto,
+//   setDebugLevel: setDebugLevel,
+// };
 
-if (!(globalThis as any).SB)
-  (globalThis as any).SB = SB;
+// if (!(globalThis as any).SB)
+//   (globalThis as any).SB = SB;
 
 console.warn(`==== SNACKABRA jslib (re)loaded, version '${Snackabra.version}' ====`);
 
