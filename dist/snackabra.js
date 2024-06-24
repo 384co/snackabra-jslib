@@ -1061,7 +1061,10 @@ for (let X = 1; X <= N; X++) {
     invM.set(Y, X);
 }
 const maxChunk = M.get(N);
-function arrayBufferToBase62(buffer) {
+export function fooBar() {
+    console.log("fooBar");
+}
+export function arrayBufferToBase62(buffer) {
     function _arrayBufferToBase62(buffer, c) {
         let result = '', n = 0n;
         for (const byte of buffer)
@@ -3979,20 +3982,6 @@ __decorate([
 __decorate([
     Memoize
 ], Snackabra.prototype, "getStorageServer", null);
-export { SB384, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, setDebugLevel, };
-export var SB = {
-    Snackabra: Snackabra,
-    Channel: Channel,
-    SBCrypto: SBCrypto,
-    SB384: SB384,
-    arrayBufferToBase64url: arrayBufferToBase64url,
-    base64ToArrayBuffer: base64ToArrayBuffer,
-    arrayBufferToBase62: arrayBufferToBase62,
-    base62ToArrayBuffer: base62ToArrayBuffer,
-    sbCrypto: sbCrypto,
-    setDebugLevel: setDebugLevel,
-};
-if (!globalThis.SB)
-    globalThis.SB = SB;
+export { SB384, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, base62ToArrayBuffer, setDebugLevel, };
 console.warn(`==== SNACKABRA jslib (re)loaded, version '${Snackabra.version}' ====`);
 //# sourceMappingURL=snackabra.js.map

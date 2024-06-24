@@ -237,7 +237,8 @@ export declare const base62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 export declare const b62regex: RegExp;
 export declare const base62regex: RegExp;
 export declare function isBase62Encoded(value: string | Base62Encoded): value is Base62Encoded;
-declare function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string;
+export declare function fooBar(): void;
+export declare function arrayBufferToBase62(buffer: ArrayBuffer | Uint8Array): string;
 declare function base62ToArrayBuffer(s: string): ArrayBuffer;
 export declare function base62ToBase64(s: Base62Encoded): string;
 export declare function base64ToBase62(s: string): Base62Encoded;
@@ -522,17 +523,5 @@ declare class Snackabra extends SBEventTarget {
     get crypto(): SBCrypto;
     get version(): string;
 }
-export { SB384, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, arrayBufferToBase62, base62ToArrayBuffer, setDebugLevel, };
-export declare var SB: {
-    Snackabra: typeof Snackabra;
-    Channel: typeof Channel;
-    SBCrypto: typeof SBCrypto;
-    SB384: typeof SB384;
-    arrayBufferToBase64url: typeof arrayBufferToBase64url;
-    base64ToArrayBuffer: typeof base64ToArrayBuffer;
-    arrayBufferToBase62: typeof arrayBufferToBase62;
-    base62ToArrayBuffer: typeof base62ToArrayBuffer;
-    sbCrypto: SBCrypto;
-    setDebugLevel: typeof setDebugLevel;
-};
+export { SB384, Channel, ChannelSocket, Snackabra, arrayBufferToBase64url, base64ToArrayBuffer, base62ToArrayBuffer, setDebugLevel, };
 //# sourceMappingURL=snackabra.d.ts.map
